@@ -371,18 +371,32 @@ def proxy_ts():
     }
 
     try:
-        # Nota: stream=False per scaricare l'intero segmento e poterlo mettere in cache
-        response = requests.get(ts_url, headers=headers, stream=False, allow_redirects=True, timeout=(10, 30))
+        # Usa stream=True per non scaricare l'intero contenuto in memoria subito.
+        # Questo permette di iniziare a inviare i dati al client non appena arrivano, riducendo la latenza.
+        response = requests.get(ts_url, headers=headers, stream=True, allow_redirects=True, timeout=(10, 30))
         response.raise_for_status()
-        
-        ts_content = response.content
-        
-        # Salva il contenuto del segmento nella cache
-        if ts_content:
-            TS_CACHE[ts_url] = ts_content
-        
-        return Response(ts_content, content_type="video/mp2t")
-    
+
+        # Definiamo un generatore per inviare i dati in streaming al client
+        # e contemporaneamente costruire il contenuto per la cache.
+        def generate_and_cache():
+            content_parts = []
+            try:
+                # Itera sui chunk della risposta
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk: # Filtra i keep-alive chunk
+                        content_parts.append(chunk)
+                        yield chunk
+            finally:
+                # Una volta che lo streaming al client è completo (o interrotto),
+                # uniamo i pezzi e salviamo il segmento completo nella cache.
+                ts_content = b"".join(content_parts)
+                if ts_content:
+                    TS_CACHE[ts_url] = ts_content
+                    app.logger.info(f"Segmento TS cachato ({len(ts_content)} bytes) per: {ts_url}")
+
+        # Restituisce una risposta in streaming, che usa il nostro generatore.
+        return Response(generate_and_cache(), content_type="video/mp2t")
+
     except requests.RequestException as e:
         return f"Errore durante il download del segmento TS: {str(e)}", 500
 
