@@ -250,10 +250,23 @@ Crea un file `.env` nella directory principale del progetto per configurare faci
 # HTTPS_PROXY="http://user:pass@host:port,http://host:port"
 ```
 
-🔐 Proxy Consigliato (Huggingface Supporta solo HTTP)
-🌍 https://proxysocks5.com/
-➡️ HTTP / SOCKS5 Dedicated
-⚠️UTILIZZA IL CODICE NZO66 COME CODICE COUPON PRIMA DEL PAGAMENTO PER OTTENERE 10% DI SCONTO⚠️
+---
+
+## 🔐 Proxy Consigliato per Streaming
+
+### 🌍 [proxysocks5.com](https://proxysocks5.com/) — HTTP & SOCKS5 Dedicati
+
+> ⚠️ **Importante:** HuggingFace supporta solo proxy **HTTP**  
+> ✅ Ideale per: Streaming, scraping, AI requests, automazioni
+
+---
+
+🎁 **Usa il codice coupon:** `NZO66`  
+💸 **Ottieni il 10% di sconto prima del pagamento!**
+
+---
+
+🔧 Affidabile, veloce, anonimo — Perfetto per chi cerca stabilità nei proxy dedicati.
 
 ---
 
