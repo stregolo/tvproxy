@@ -40,7 +40,7 @@ Un server proxy leggero e dockerizzato basato su **Flask** e **Requests**, proge
     *   Per maggiori dettagli, consulta la sezione Configurazione Proxy.
 6.  Clicca su **Create Web Service**.
 
-### 🤗 Deploy su HuggingFace
+### 🤗 Deploy su HuggingFace (NON SUPPORTA I PROXY SOCKS5)
 
 1.  Crea un nuovo **Space**.
 2.  Scegli un nome, seleziona **Docker** come SDK e lascia la visibilità su **Public**.
