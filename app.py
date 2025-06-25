@@ -66,6 +66,8 @@ def get_random_proxy():
     chosen_proxy = random.choice(PROXY_LIST)
     return {'http': chosen_proxy, 'https': chosen_proxy}
 
+setup_proxies()
+
 # --- Configurazione Cache ---
 M3U8_CACHE = TTLCache(maxsize=200, ttl=5)
 TS_CACHE = LRUCache(maxsize=1000)
@@ -111,6 +113,8 @@ def get_daddylive_base_url():
     DADDYLIVE_BASE_URL = "https://daddylive.sx/"
     print(f"Using fallback DaddyLive URL: {DADDYLIVE_BASE_URL}")
     return DADDYLIVE_BASE_URL
+
+get_daddylive_base_url()  # Fetch on startup
 
 def detect_m3u_type(content):
     """Rileva se è un M3U (lista IPTV) o un M3U8 (flusso HLS)"""
@@ -698,8 +702,6 @@ def index():
     return f"Proxy ONLINE"
 
 if __name__ == '__main__':
-    setup_proxies()
-    get_daddylive_base_url()  # Fetch on startup
     # Usa la porta 7860 di default, ma permetti di sovrascriverla con la variabile d'ambiente PORT
     port = int(os.environ.get("PORT", 7860))
     print(f"Proxy ONLINE - In ascolto su porta {port}")
