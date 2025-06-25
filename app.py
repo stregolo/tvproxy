@@ -79,10 +79,24 @@ def setup_proxies():
     else:
         print("Nessun proxy (SOCKS5, HTTP, HTTPS) configurato.")
 
-def get_random_proxy():
-    """Seleziona un proxy casuale dalla lista e lo formatta per la libreria requests."""
+def get_proxy_for_url(url):
+    """
+    Seleziona un proxy casuale dalla lista, ma lo salta per i domini GitHub.
+    Restituisce il dizionario proxy formattato per la libreria requests, o None.
+    """
     if not PROXY_LIST:
         return None
+
+    # Controlla se l'URL è un dominio GitHub per saltare il proxy
+    try:
+        parsed_url = urlparse(url)
+        if 'github.com' in parsed_url.netloc:
+            print(f"Richiesta a GitHub rilevata ({url}), il proxy verrà saltato.")
+            return None
+    except Exception:
+        # In caso di URL non valido, procedi comunque (potrebbe essere un frammento)
+        pass
+
     chosen_proxy = random.choice(PROXY_LIST)
     return {'http': chosen_proxy, 'https': chosen_proxy}
 
@@ -109,10 +123,11 @@ def get_daddylive_base_url():
 
     try:
         print("Fetching dynamic DaddyLive base URL from GitHub...")
+        github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
         response = requests.get(
-            'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml',
+            github_url,
             timeout=REQUEST_TIMEOUT,
-            proxies=get_random_proxy(),
+            proxies=get_proxy_for_url(github_url),
             verify=VERIFY_SSL
         )
         response.raise_for_status()
@@ -249,10 +264,11 @@ def resolve_m3u8_link(url, headers=None):
     try:
         # Ottieni URL base dinamico
         print("Ottengo URL base dinamico...")
+        github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
         main_url_req = requests.get(
-            'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml',
+            github_url,
             timeout=REQUEST_TIMEOUT,
-            proxies=get_random_proxy(),
+            proxies=get_proxy_for_url(github_url),
             verify=VERIFY_SSL
         )
         main_url_req.raise_for_status()
@@ -279,7 +295,7 @@ def resolve_m3u8_link(url, headers=None):
 
         # PASSO 1: Richiesta alla pagina stream per cercare Player 2
         print(f"Passo 1: Richiesta a {stream_url}")
-        response = requests.get(stream_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_random_proxy(), verify=VERIFY_SSL)
+        response = requests.get(stream_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(stream_url), verify=VERIFY_SSL)
         response.raise_for_status()
 
         # Cerca link Player 2 (metodo esatto da addon.py)
@@ -300,7 +316,7 @@ def resolve_m3u8_link(url, headers=None):
         final_headers_for_resolving['Origin'] = url2
 
         print(f"Passo 3: Richiesta a Player 2: {url2}")
-        response = requests.get(url2, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_random_proxy(), verify=VERIFY_SSL)
+        response = requests.get(url2, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(url2), verify=VERIFY_SSL)
         response.raise_for_status()
 
         # PASSO 3: Cerca iframe nella risposta Player 2
@@ -314,7 +330,7 @@ def resolve_m3u8_link(url, headers=None):
 
         # PASSO 4: Accedi all'iframe
         print(f"Passo 5: Richiesta iframe: {iframe_url}")
-        response = requests.get(iframe_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_random_proxy(), verify=VERIFY_SSL)
+        response = requests.get(iframe_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(iframe_url), verify=VERIFY_SSL)
         response.raise_for_status()
 
         iframe_content = response.text
@@ -350,7 +366,7 @@ def resolve_m3u8_link(url, headers=None):
         auth_url = f'{auth_host}{auth_php}?channel_id={channel_key}&ts={auth_ts}&rnd={auth_rnd}&sig={auth_sig}'
         print(f"Passo 6: Autenticazione: {auth_url}")
 
-        auth_response = requests.get(auth_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_random_proxy(), verify=VERIFY_SSL)
+        auth_response = requests.get(auth_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(auth_url), verify=VERIFY_SSL)
         auth_response.raise_for_status()
 
         # PASSO 7: Estrai host e server lookup
@@ -361,7 +377,7 @@ def resolve_m3u8_link(url, headers=None):
         server_lookup_url = f"https://{urlparse(iframe_url).netloc}{server_lookup}{channel_key}"
         print(f"Passo 7: Server lookup: {server_lookup_url}")
 
-        lookup_response = requests.get(server_lookup_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_random_proxy(), verify=VERIFY_SSL)
+        lookup_response = requests.get(server_lookup_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(server_lookup_url), verify=VERIFY_SSL)
         lookup_response.raise_for_status()
         server_data = lookup_response.json()
         server_key = server_data['server_key']
@@ -460,7 +476,7 @@ def proxy_m3u():
         print(f"Fetching M3U8 content from clean URL: {resolved_url}")
         print(f"Using headers: {current_headers_for_proxy}")
 
-        m3u_response = requests.get(resolved_url, headers=current_headers_for_proxy, allow_redirects=True, timeout=REQUEST_TIMEOUT, proxies=get_random_proxy(), verify=VERIFY_SSL)
+        m3u_response = requests.get(resolved_url, headers=current_headers_for_proxy, allow_redirects=True, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(resolved_url), verify=VERIFY_SSL)
         m3u_response.raise_for_status()
 
         m3u_content = m3u_response.text
@@ -567,7 +583,7 @@ def proxy_ts():
     }
 
     try:
-        response = requests.get(ts_url, headers=headers, stream=True, allow_redirects=True, timeout=REQUEST_TIMEOUT, proxies=get_random_proxy(), verify=VERIFY_SSL)
+        response = requests.get(ts_url, headers=headers, stream=True, allow_redirects=True, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(ts_url), verify=VERIFY_SSL)
         response.raise_for_status()
 
         # Definiamo un generatore per inviare i dati in streaming al client
@@ -601,7 +617,8 @@ def proxy():
 
     try:
         server_ip = request.host
-        response = requests.get(m3u_url, timeout=REQUEST_TIMEOUT, proxies=get_random_proxy(), verify=VERIFY_SSL)
+        proxy_for_request = get_proxy_for_url(m3u_url)
+        response = requests.get(m3u_url, timeout=REQUEST_TIMEOUT, proxies=proxy_for_request, verify=VERIFY_SSL)
         response.raise_for_status()
         m3u_content = response.text
         
@@ -685,6 +702,8 @@ def proxy():
         return Response(modified_content, content_type="application/vnd.apple.mpegurl", headers={'Content-Disposition': f'attachment; filename="{original_filename}"'})
         
     except requests.RequestException as e:
+        proxy_used = proxy_for_request['http'] if proxy_for_request else "Nessuno"
+        print(f"ERRORE: Fallito il download di '{m3u_url}' usando il proxy '{proxy_used}'. Dettagli: {e}")
         return f"Errore durante il download della lista M3U: {str(e)}", 500
     except Exception as e:
         return f"Errore generico: {str(e)}", 500
@@ -709,7 +728,7 @@ def proxy_key():
     }
 
     try:
-        response = requests.get(key_url, headers=headers, allow_redirects=True, timeout=REQUEST_TIMEOUT, proxies=get_random_proxy(), verify=VERIFY_SSL)
+        response = requests.get(key_url, headers=headers, allow_redirects=True, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(key_url), verify=VERIFY_SSL)
         response.raise_for_status()
         key_content = response.content
 
