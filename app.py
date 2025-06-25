@@ -7,10 +7,64 @@ import json
 import base64
 from urllib.parse import quote_plus
 import os
+import random
 import time
 from cachetools import TTLCache, LRUCache
+from dotenv import load_dotenv
 
 app = Flask(__name__)
+
+load_dotenv()
+
+# --- Configurazione Generale ---
+# Permette di disabilitare la verifica dei certificati SSL.
+# Impostare la variabile d'ambiente VERIFY_SSL a "False" o "0" per disabilitare.
+# ATTENZIONE: Disabilitare la verifica SSL può esporre a rischi di sicurezza (es. attacchi man-in-the-middle).
+# Usare questa opzione solo se si è consapevoli dei rischi o se è necessario per operare dietro un proxy con ispezione SSL.
+VERIFY_SSL = os.environ.get('VERIFY_SSL', 'false').lower() not in ('false', '0', 'no')
+if not VERIFY_SSL:
+    print("ATTENZIONE: La verifica del certificato SSL è DISABILITATA. Questo potrebbe esporre a rischi di sicurezza.")
+    # Sopprime gli avvisi di richiesta non sicura solo se la verifica è disabilitata
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# --- Configurazione Proxy SOCKS5 ---
+PROXY_LIST = []
+
+def setup_proxies():
+    """Carica la lista di proxy SOCKS5 dalla variabile d'ambiente."""
+    global PROXY_LIST
+    proxy_list_str = os.environ.get('SOCKS5_PROXY')
+    if proxy_list_str:
+        raw_proxy_list = [p.strip() for p in proxy_list_str.split(',') if p.strip()]
+
+        if not raw_proxy_list:
+            print("Nessun proxy SOCKS5 valido trovato nella variabile d'ambiente.")
+            PROXY_LIST = []
+            return
+
+        print(f"Trovati {len(raw_proxy_list)} proxy SOCKS5. Verranno usati a rotazione per ogni richiesta.")
+        for proxy in raw_proxy_list:
+            # Riconosce e converte automaticamente a socks5h per la risoluzione DNS remota
+            final_proxy_url = proxy
+            if proxy.startswith('socks5://'):
+                final_proxy_url = 'socks5h' + proxy[len('socks5'):]
+                print(f"Proxy convertito per garantire la risoluzione DNS remota.")
+            elif not proxy.startswith('socks5h://'):
+                print(f"ATTENZIONE: L'URL del proxy  non è un formato SOCKS5 valido (es. socks5:// o socks5h://). Potrebbe non funzionare.")
+            PROXY_LIST.append(final_proxy_url)
+
+        print("Assicurati di aver installato la dipendenza necessaria: 'pip install PySocks'")
+    else:
+        PROXY_LIST = []
+        print("Nessun proxy SOCKS5 configurato.")
+
+def get_random_proxy():
+    """Seleziona un proxy casuale dalla lista e lo formatta per la libreria requests."""
+    if not PROXY_LIST:
+        return None
+    chosen_proxy = random.choice(PROXY_LIST)
+    return {'http': chosen_proxy, 'https': chosen_proxy}
 
 # --- Configurazione Cache ---
 M3U8_CACHE = TTLCache(maxsize=200, ttl=5)
@@ -35,7 +89,9 @@ def get_daddylive_base_url():
         print("Fetching dynamic DaddyLive base URL from GitHub...")
         response = requests.get(
             'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml',
-            timeout=5
+            timeout=15,
+            proxies=get_random_proxy(),
+            verify=VERIFY_SSL
         )
         response.raise_for_status()
         content = response.text
@@ -171,7 +227,9 @@ def resolve_m3u8_link(url, headers=None):
         print("Ottengo URL base dinamico...")
         main_url_req = requests.get(
             'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml',
-            timeout=5
+            timeout=15,
+            proxies=get_random_proxy(),
+            verify=VERIFY_SSL
         )
         main_url_req.raise_for_status()
         main_url = main_url_req.text
@@ -197,7 +255,7 @@ def resolve_m3u8_link(url, headers=None):
 
         # PASSO 1: Richiesta alla pagina stream per cercare Player 2
         print(f"Passo 1: Richiesta a {stream_url}")
-        response = requests.get(stream_url, headers=final_headers_for_resolving, timeout=10)
+        response = requests.get(stream_url, headers=final_headers_for_resolving, timeout=10, proxies=get_random_proxy(), verify=VERIFY_SSL)
         response.raise_for_status()
 
         # Cerca link Player 2 (metodo esatto da addon.py)
@@ -218,7 +276,7 @@ def resolve_m3u8_link(url, headers=None):
         final_headers_for_resolving['Origin'] = url2
 
         print(f"Passo 3: Richiesta a Player 2: {url2}")
-        response = requests.get(url2, headers=final_headers_for_resolving, timeout=10)
+        response = requests.get(url2, headers=final_headers_for_resolving, timeout=10, proxies=get_random_proxy(), verify=VERIFY_SSL)
         response.raise_for_status()
 
         # PASSO 3: Cerca iframe nella risposta Player 2
@@ -232,7 +290,7 @@ def resolve_m3u8_link(url, headers=None):
 
         # PASSO 4: Accedi all'iframe
         print(f"Passo 5: Richiesta iframe: {iframe_url}")
-        response = requests.get(iframe_url, headers=final_headers_for_resolving, timeout=10)
+        response = requests.get(iframe_url, headers=final_headers_for_resolving, timeout=10, proxies=get_random_proxy(), verify=VERIFY_SSL)
         response.raise_for_status()
 
         iframe_content = response.text
@@ -268,7 +326,7 @@ def resolve_m3u8_link(url, headers=None):
         auth_url = f'{auth_host}{auth_php}?channel_id={channel_key}&ts={auth_ts}&rnd={auth_rnd}&sig={auth_sig}'
         print(f"Passo 6: Autenticazione: {auth_url}")
 
-        auth_response = requests.get(auth_url, headers=final_headers_for_resolving, timeout=10)
+        auth_response = requests.get(auth_url, headers=final_headers_for_resolving, timeout=10, proxies=get_random_proxy(), verify=VERIFY_SSL)
         auth_response.raise_for_status()
 
         # PASSO 7: Estrai host e server lookup
@@ -279,7 +337,7 @@ def resolve_m3u8_link(url, headers=None):
         server_lookup_url = f"https://{urlparse(iframe_url).netloc}{server_lookup}{channel_key}"
         print(f"Passo 7: Server lookup: {server_lookup_url}")
 
-        lookup_response = requests.get(server_lookup_url, headers=final_headers_for_resolving, timeout=10)
+        lookup_response = requests.get(server_lookup_url, headers=final_headers_for_resolving, timeout=10, proxies=get_random_proxy(), verify=VERIFY_SSL)
         lookup_response.raise_for_status()
         server_data = lookup_response.json()
         server_key = server_data['server_key']
@@ -373,7 +431,7 @@ def proxy_m3u():
         print(f"Fetching M3U8 content from clean URL: {resolved_url}")
         print(f"Using headers: {current_headers_for_proxy}")
 
-        m3u_response = requests.get(resolved_url, headers=current_headers_for_proxy, allow_redirects=True, timeout=5)
+        m3u_response = requests.get(resolved_url, headers=current_headers_for_proxy, allow_redirects=True, timeout=15, proxies=get_random_proxy(), verify=VERIFY_SSL)
         m3u_response.raise_for_status()
 
         m3u_content = m3u_response.text
@@ -480,7 +538,7 @@ def proxy_ts():
     }
 
     try:
-        response = requests.get(ts_url, headers=headers, stream=True, allow_redirects=True, timeout=15)
+        response = requests.get(ts_url, headers=headers, stream=True, allow_redirects=True, timeout=15, proxies=get_random_proxy(), verify=VERIFY_SSL)
         response.raise_for_status()
 
         # Definiamo un generatore per inviare i dati in streaming al client
@@ -514,7 +572,7 @@ def proxy():
 
     try:
         server_ip = request.host
-        response = requests.get(m3u_url, timeout=(10, 30))
+        response = requests.get(m3u_url, timeout=(10, 30), proxies=get_random_proxy(), verify=VERIFY_SSL)
         response.raise_for_status()
         m3u_content = response.text
         
@@ -622,7 +680,7 @@ def proxy_key():
     }
 
     try:
-        response = requests.get(key_url, headers=headers, allow_redirects=True, timeout=15)
+        response = requests.get(key_url, headers=headers, allow_redirects=True, timeout=15, proxies=get_random_proxy(), verify=VERIFY_SSL)
         response.raise_for_status()
         key_content = response.content
 
@@ -640,7 +698,8 @@ def index():
     return f"Proxy ONLINE"
 
 if __name__ == '__main__':
-    get_daddylive_base_url() # Fetch on startup
+    setup_proxies()
+    get_daddylive_base_url()  # Fetch on startup
     # Usa la porta 7860 di default, ma permetti di sovrascriverla con la variabile d'ambiente PORT
     port = int(os.environ.get("PORT", 7860))
     print(f"Proxy ONLINE - In ascolto su porta {port}")
