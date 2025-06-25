@@ -2,38 +2,59 @@ from flask import Flask, request, Response
 import requests
 from urllib.parse import urlparse, urljoin, quote, unquote
 import re
+import traceback
 import json
+import base64
+from urllib.parse import quote_plus
 import os
-from dotenv import load_dotenv
+import time
 from cachetools import TTLCache, LRUCache
-
-load_dotenv()  # Carica le variabili dal file .env
 
 app = Flask(__name__)
 
 # --- Configurazione Cache ---
-# Cache per le playlist M3U8. TTL di 5 secondi per garantire l'aggiornamento dei live stream.
 M3U8_CACHE = TTLCache(maxsize=200, ttl=5)
-# Cache per i segmenti TS. LRU (Least Recently Used) per mantenere i segmenti più richiesti.
-TS_CACHE = LRUCache(maxsize=1000)  # Mantiene in memoria i 1000 segmenti usati più di recente
-# Cache per le chiavi di decriptazione.
+TS_CACHE = LRUCache(maxsize=1000)
 KEY_CACHE = LRUCache(maxsize=200)
 
-DADDY_PHP_DOMAINS_MATCH = [
-    "new.newkso.ru/wind/",
-    "new.newkso.ru/ddy6/",
-    "new.newkso.ru/zeko/",
-    "new.newkso.ru/nfs/",
-    "new.newkso.ru/dokko1/",
-]
+# --- Dynamic DaddyLive URL Fetcher ---
+DADDYLIVE_BASE_URL = None
+LAST_FETCH_TIME = 0
+FETCH_INTERVAL = 3600  # 1 hour in seconds
 
-DADDY_PHP_SITES_URLS = [
-    "https://new.newkso.ru/wind/",
-    "https://new.newkso.ru/ddy6/",
-    "https://new.newkso.ru/zeko/",
-    "https://new.newkso.ru/nfs/",
-    "https://new.newkso.ru/dokko1/",
-]
+def get_daddylive_base_url():
+    """Fetches and caches the dynamic base URL for DaddyLive."""
+    global DADDYLIVE_BASE_URL, LAST_FETCH_TIME
+    current_time = time.time()
+    
+    # Return cached URL if it's not expired
+    if DADDYLIVE_BASE_URL and (current_time - LAST_FETCH_TIME < FETCH_INTERVAL):
+        return DADDYLIVE_BASE_URL
+
+    try:
+        print("Fetching dynamic DaddyLive base URL from GitHub...")
+        response = requests.get(
+            'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml',
+            timeout=5
+        )
+        response.raise_for_status()
+        content = response.text
+        match = re.search(r'src\s*=\s*"([^"]*)"', content)
+        if match:
+            base_url = match.group(1)
+            if not base_url.endswith('/'):
+                base_url += '/'
+            DADDYLIVE_BASE_URL = base_url
+            LAST_FETCH_TIME = current_time
+            print(f"Dynamic DaddyLive base URL updated to: {DADDYLIVE_BASE_URL}")
+            return DADDYLIVE_BASE_URL
+    except requests.RequestException as e:
+        print(f"Error fetching dynamic DaddyLive URL: {e}. Using fallback.")
+    
+    # Fallback in case of any error
+    DADDYLIVE_BASE_URL = "https://daddylive.sx/"
+    print(f"Using fallback DaddyLive URL: {DADDYLIVE_BASE_URL}")
+    return DADDYLIVE_BASE_URL
 
 def detect_m3u_type(content):
     """Rileva se è un M3U (lista IPTV) o un M3U8 (flusso HLS)"""
@@ -50,35 +71,75 @@ def replace_key_uri(line, headers_query):
         return line.replace(key_url, proxied_key_url)
     return line
 
+def extract_channel_id(url):
+    """Estrae l'ID del canale da vari formati URL"""
+
+    # Pattern per /premium.../mono.m3u8
+    match_premium = re.search(r'/premium(\d+)/mono\.m3u8$', url)
+    if match_premium:
+        return match_premium.group(1)
+
+    # Pattern unificato per /watch/, /stream/, /cast/, /player/
+    # Esempio: /watch/stream-12345.php
+    match_player = re.search(r'/(?:watch|stream|cast|player)/stream-(\d+)\.php', url)
+    if match_player:
+        return match_player.group(1)
+
+    return None
+
+def process_daddylive_url(url):
+    """Converte URL vecchi in formati compatibili con DaddyLive 2025"""
+    daddy_base_url = get_daddylive_base_url()
+    daddy_domain = urlparse(daddy_base_url).netloc
+
+    # Converti premium URLs in formato watch
+    match_premium = re.search(r'/premium(\d+)/mono\.m3u8$', url)
+    if match_premium:
+        channel_id = match_premium.group(1)
+        new_url = f"{daddy_base_url}watch/stream-{channel_id}.php"
+        print(f"URL processato da {url} a {new_url}")
+        return new_url
+
+    # Se è già un URL DaddyLive moderno (con watch, stream, cast, player), usalo direttamente
+    if daddy_domain in url and any(p in url for p in ['/watch/', '/stream/', '/cast/', '/player/']):
+        return url
+
+    # Se contiene solo numeri, crea URL watch
+    if url.isdigit():
+        return f"{daddy_base_url}watch/stream-{url}.php"
+
+    return url
+
 def resolve_m3u8_link(url, headers=None):
     """
-    Risolve un URL M3U8 supportando header e proxy per newkso.ru e daddy_php_sites.
+    Risolve URL DaddyLive. Se l'URL non è per DaddyLive,
+    pulisce semplicemente gli header incorporati e lo restituisce.
     """
     if not url:
-        app.logger.error("URL non fornito.")
+        print("Errore: URL non fornito.")
         return {"resolved_url": None, "headers": {}}
 
-    app.logger.info(f"Tentativo di risoluzione URL: {url}")
-
-    # Inizializza gli header di default
-    current_headers = headers if headers else {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36'
-    }
+    # Fa una copia degli header per evitare di modificare l'originale
+    current_headers = headers.copy() if headers else {}
     
+    # Estrazione header incorporati nell'URL
     clean_url = url
     extracted_headers = {}
-
-    # Estrazione header da URL
     if '&h_' in url or '%26h_' in url:
-        app.logger.info("Rilevati parametri header nell'URL - Estrazione in corso...")
-        if '%26h_' in url:
-            if 'vavoo.to' in url.lower():
-                url = url.replace('%26', '&')
-            else:
-                url = unquote(unquote(url))
-        url_parts = url.split('&h_', 1)
+        print("Rilevati parametri header nell'URL - Estrazione in corso...")
+        temp_url = url
+        # Gestione speciale per vavoo che a volte usa %26 invece di &
+        if 'vavoo.to' in temp_url.lower() and '%26' in temp_url:
+             temp_url = temp_url.replace('%26', '&')
+        
+        # Gestione generica per URL con doppio encoding
+        if '%26h_' in temp_url:
+            temp_url = unquote(unquote(temp_url))
+
+        url_parts = temp_url.split('&h_', 1)
         clean_url = url_parts[0]
         header_params = '&h_' + url_parts[1]
+        
         for param in header_params.split('&'):
             if param.startswith('h_'):
                 try:
@@ -88,86 +149,362 @@ def resolve_m3u8_link(url, headers=None):
                         value = unquote(key_value[1])
                         extracted_headers[key] = value
                 except Exception as e:
-                    app.logger.error(f"Errore nell'estrazione dell'header {param}: {e}")
-        current_headers.update(extracted_headers)
-    else:
-        app.logger.info("URL pulito rilevato - Nessuna estrazione header necessaria")
+                    print(f"Errore nell'estrazione dell'header {param}: {e}")
 
-    # Gestione .php Daddy
-    if clean_url.endswith('.php'):
-        app.logger.info(f"Rilevato URL .php {clean_url}")
-        channel_id_match = re.search(r'stream-(\d+)\.php', clean_url)
-        if channel_id_match:
-            channel_id = channel_id_match.group(1)
-            app.logger.info(f"Channel ID estratto: {channel_id}")
+    # --- Inizia la logica di risoluzione specifica per DaddyLive ---
+    print(f"Tentativo di risoluzione URL (DaddyLive): {clean_url}")
 
-            newkso_headers_for_php_resolution = {
-                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
-                'Referer': 'https://forcedtoplay.xyz/',
-                'Origin': 'https://forcedtoplay.xyz/'
-            }
+    daddy_base_url = get_daddylive_base_url()
+    daddy_origin = urlparse(daddy_base_url).scheme + "://" + urlparse(daddy_base_url).netloc
 
-            # Tennis Channels
-            if channel_id.startswith("15") and len(channel_id) == 4:
-                tennis_suffix = channel_id[2:]
-                folder_name = f"wikiten{tennis_suffix}"
-                test_url = f"https://new.newkso.ru/wikihz/{folder_name}/mono.m3u8"
-                app.logger.info(f"Tentativo canale Tennis: {test_url}")
-                try:
-                    response = requests.head(test_url, headers=newkso_headers_for_php_resolution, 
-                                           timeout=5, allow_redirects=True)
-                    if response.status_code == 200:
-                        app.logger.info(f"Stream Tennis trovato: {test_url}")
-                        return {"resolved_url": test_url, "headers": newkso_headers_for_php_resolution}
-                except requests.RequestException as e:
-                    app.logger.warning(f"Errore HEAD per Tennis stream {test_url}: {e}")
-            
-            # Daddy Channels
-            else:
-                folder_name = f"premium{channel_id}"
-                for site in DADDY_PHP_SITES_URLS:
-                    test_url = f"{site}{folder_name}/mono.m3u8"
-                    app.logger.info(f"Tentativo canale Daddy: {test_url}")
-                    try:
-                        response = requests.head(test_url, headers=newkso_headers_for_php_resolution, 
-                                               timeout=5, allow_redirects=True)
-                        if response.status_code == 200:
-                            app.logger.info(f"Stream Daddy trovato: {test_url}")
-                            return {"resolved_url": test_url, "headers": newkso_headers_for_php_resolution}
-                    except requests.RequestException as e:
-                        app.logger.warning(f"Errore HEAD per Daddy stream {test_url}: {e}")
+    # Header specifici per la risoluzione DaddyLive
+    daddylive_headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
+        'Referer': daddy_base_url,
+        'Origin': daddy_origin
+    }
+    # Uniamo gli header: quelli di daddylive hanno la precedenza per la risoluzione
+    final_headers_for_resolving = {**current_headers, **daddylive_headers}
 
-    # Fallback: richiesta normale
     try:
-        with requests.Session() as session:
-            app.logger.info(f"Passo 1: Richiesta a {clean_url}")
-            response = session.get(clean_url, headers=current_headers, 
-                                 allow_redirects=True, timeout=(10, 20))
-            response.raise_for_status()
-            initial_response_text = response.text
-            final_url_after_redirects = response.url
-            app.logger.info(f"Passo 1 completato. URL finale dopo redirect: {final_url_after_redirects}")
+        # Ottieni URL base dinamico
+        print("Ottengo URL base dinamico...")
+        main_url_req = requests.get(
+            'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml',
+            timeout=5
+        )
+        main_url_req.raise_for_status()
+        main_url = main_url_req.text
+        baseurl = re.findall('src = "([^"]*)', main_url)[0]
+        print(f"URL base ottenuto: {baseurl}")
 
-            if initial_response_text and initial_response_text.strip().startswith('#EXTM3U'):
-                app.logger.info("Trovato file M3U8 diretto.")
-                return {
-                    "resolved_url": final_url_after_redirects,
-                    "headers": current_headers
-                }
-            else:
-                app.logger.info("La risposta iniziale non era un M3U8 diretto.")
-                return {
-                    "resolved_url": clean_url,
-                    "headers": current_headers
-                }
+        # Estrai ID del canale dall'URL pulito
+        channel_id = extract_channel_id(clean_url)
+        if not channel_id:
+            print(f"Impossibile estrarre ID canale da {clean_url}")
+            # Fallback: restituisce l'URL pulito
+            return {"resolved_url": clean_url, "headers": current_headers}
+
+        print(f"ID canale estratto: {channel_id}")
+
+        # Costruisci URL del stream (identico a addon.py)
+        stream_url = f"{baseurl}stream/stream-{channel_id}.php"
+        print(f"URL stream costruito: {stream_url}")
+
+        # Aggiorna header con baseurl corretto
+        final_headers_for_resolving['Referer'] = baseurl + '/'
+        final_headers_for_resolving['Origin'] = baseurl
+
+        # PASSO 1: Richiesta alla pagina stream per cercare Player 2
+        print(f"Passo 1: Richiesta a {stream_url}")
+        response = requests.get(stream_url, headers=final_headers_for_resolving, timeout=10)
+        response.raise_for_status()
+
+        # Cerca link Player 2 (metodo esatto da addon.py)
+        iframes = re.findall(r'<a[^>]*href="([^"]+)"[^>]*>\s*<button[^>]*>\s*Player\s*2\s*<\/button>', response.text)
+        if not iframes:
+            print("Nessun link Player 2 trovato")
+            return {"resolved_url": clean_url, "headers": current_headers}
+
+        print(f"Passo 2: Trovato link Player 2: {iframes[0]}")
+
+        # PASSO 2: Segui il link Player 2
+        url2 = iframes[0]
+        url2 = baseurl + url2
+        url2 = url2.replace('//cast', '/cast')  # Fix da addon.py
+
+        # Aggiorna header
+        final_headers_for_resolving['Referer'] = url2
+        final_headers_for_resolving['Origin'] = url2
+
+        print(f"Passo 3: Richiesta a Player 2: {url2}")
+        response = requests.get(url2, headers=final_headers_for_resolving, timeout=10)
+        response.raise_for_status()
+
+        # PASSO 3: Cerca iframe nella risposta Player 2
+        iframes = re.findall(r'iframe src="([^"]*)', response.text)
+        if not iframes:
+            print("Nessun iframe trovato nella pagina Player 2")
+            return {"resolved_url": clean_url, "headers": current_headers}
+
+        iframe_url = iframes[0]
+        print(f"Passo 4: Trovato iframe: {iframe_url}")
+
+        # PASSO 4: Accedi all'iframe
+        print(f"Passo 5: Richiesta iframe: {iframe_url}")
+        response = requests.get(iframe_url, headers=final_headers_for_resolving, timeout=10)
+        response.raise_for_status()
+
+        iframe_content = response.text
+
+        # PASSO 5: Estrai parametri dall'iframe (metodo esatto addon.py)
+        try:
+            channel_key = re.findall(r'(?s) channelKey = \"([^"]*)', iframe_content)[0]
+
+            # Estrai e decodifica parametri base64
+            auth_ts_b64 = re.findall(r'(?s)c = atob\("([^"]*)', iframe_content)[0]
+            auth_ts = base64.b64decode(auth_ts_b64).decode('utf-8')
+
+            auth_rnd_b64 = re.findall(r'(?s)d = atob\("([^"]*)', iframe_content)[0]
+            auth_rnd = base64.b64decode(auth_rnd_b64).decode('utf-8')
+
+            auth_sig_b64 = re.findall(r'(?s)e = atob\("([^"]*)', iframe_content)[0]
+            auth_sig = base64.b64decode(auth_sig_b64).decode('utf-8')
+            auth_sig = quote_plus(auth_sig)
+
+            auth_host_b64 = re.findall(r'(?s)a = atob\("([^"]*)', iframe_content)[0]
+            auth_host = base64.b64decode(auth_host_b64).decode('utf-8')
+
+            auth_php_b64 = re.findall(r'(?s)b = atob\("([^"]*)', iframe_content)[0]
+            auth_php = base64.b64decode(auth_php_b64).decode('utf-8')
+
+            print(f"Parametri estratti: channel_key={channel_key}")
+
+        except (IndexError, Exception) as e:
+            print(f"Errore estrazione parametri: {e}")
+            return {"resolved_url": clean_url, "headers": current_headers}
+
+        # PASSO 6: Richiesta di autenticazione
+        auth_url = f'{auth_host}{auth_php}?channel_id={channel_key}&ts={auth_ts}&rnd={auth_rnd}&sig={auth_sig}'
+        print(f"Passo 6: Autenticazione: {auth_url}")
+
+        auth_response = requests.get(auth_url, headers=final_headers_for_resolving, timeout=10)
+        auth_response.raise_for_status()
+
+        # PASSO 7: Estrai host e server lookup
+        host = re.findall('(?s)m3u8 =.*?:.*?:.*?".*?".*?"([^"]*)', iframe_content)[0]
+        server_lookup = re.findall(r'n fetchWithRetry\(\s*\'([^\']*)', iframe_content)[0]
+
+        # PASSO 8: Server lookup per ottenere server_key
+        server_lookup_url = f"https://{urlparse(iframe_url).netloc}{server_lookup}{channel_key}"
+        print(f"Passo 7: Server lookup: {server_lookup_url}")
+
+        lookup_response = requests.get(server_lookup_url, headers=final_headers_for_resolving, timeout=10)
+        lookup_response.raise_for_status()
+        server_data = lookup_response.json()
+        server_key = server_data['server_key']
+
+        print(f"Server key ottenuto: {server_key}")
+
+        # PASSO 9: Costruisci URL M3U8 finale SENZA parametri proxy
+        referer_raw = f'https://{urlparse(iframe_url).netloc}'
+
+        # URL base M3U8 PULITO (senza parametri proxy)
+        clean_m3u8_url = f'https://{server_key}{host}{server_key}/{channel_key}/mono.m3u8'
+
+        print(f"URL M3U8 pulito costruito: {clean_m3u8_url}")
+
+        # Header corretti per il fetch
+        final_headers_for_fetch = {
+            'User-Agent': final_headers_for_resolving.get('User-Agent'),
+            'Referer': referer_raw,
+            'Origin': referer_raw
+        }
+
+        return {
+            "resolved_url": clean_m3u8_url,  # URL PULITO senza parametri proxy
+            "headers": final_headers_for_fetch # Header corretti
+        }
+
+    except Exception as e:
+        print(f"Errore durante la risoluzione: {e}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        # Fallback: restituisce l'URL pulito originale
+        return {"resolved_url": clean_url, "headers": current_headers}
+
+@app.route('/proxy/m3u')
+def proxy_m3u():
+    """Proxy per file M3U e M3U8 con supporto DaddyLive 2025 e caching"""
+    m3u_url = request.args.get('url', '').strip()
+    if not m3u_url:
+        return "Errore: Parametro 'url' mancante", 400
+
+    # Crea una chiave univoca per la cache basata sull'URL e sugli header
+    cache_key_headers = "&".join(sorted([f"{k}={v}" for k, v in request.args.items() if k.lower().startswith("h_")]))
+    cache_key = f"{m3u_url}|{cache_key_headers}"
+
+    # Controlla se la risposta è già in cache
+    if cache_key in M3U8_CACHE:
+        print(f"Cache HIT per M3U8: {m3u_url}")
+        cached_response = M3U8_CACHE[cache_key]
+        return Response(cached_response, content_type="application/vnd.apple.mpegurl")
+    print(f"Cache MISS per M3U8: {m3u_url}")
+
+    daddy_base_url = get_daddylive_base_url()
+    daddy_origin = urlparse(daddy_base_url).scheme + "://" + urlparse(daddy_base_url).netloc
+
+    # Header di default aggiornati per DaddyLive 2025
+    default_headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+        "Referer": daddy_base_url,
+        "Origin": daddy_origin
+    }
+
+    # Estrai gli header dalla richiesta, sovrascrivendo i default
+    request_headers = {
+        unquote(key[2:]).replace("_", "-"): unquote(value).strip()
+        for key, value in request.args.items()
+        if key.lower().startswith("h_")
+    }
+
+    headers = {**default_headers, **request_headers}
+
+    # Processa URL con nuova logica DaddyLive 2025
+    processed_url = process_daddylive_url(m3u_url)
+
+    try:
+        print(f"Chiamata a resolve_m3u8_link per URL processato: {processed_url}")
+        result = resolve_m3u8_link(processed_url, headers)
+        if not result["resolved_url"]:
+            return "Errore: Impossibile risolvere l'URL in un M3U8 valido.", 500
+
+        resolved_url = result["resolved_url"]
+        current_headers_for_proxy = result["headers"]
+
+        print(f"Risoluzione completata. URL M3U8 finale: {resolved_url}")
+
+        # CORREZIONE: Verifica che sia un M3U8 valido (senza parametri proxy)
+        if not resolved_url.endswith('.m3u8'):
+            print(f"URL risolto non è un M3U8: {resolved_url}")
+            return "Errore: Impossibile ottenere un M3U8 valido dal canale", 500
+
+        # Fetchare il contenuto M3U8 effettivo dall'URL pulito
+        print(f"Fetching M3U8 content from clean URL: {resolved_url}")
+        print(f"Using headers: {current_headers_for_proxy}")
+
+        m3u_response = requests.get(resolved_url, headers=current_headers_for_proxy, allow_redirects=True, timeout=5)
+        m3u_response.raise_for_status()
+
+        m3u_content = m3u_response.text
+        final_url = m3u_response.url
+
+        # Processa il contenuto M3U8
+        file_type = detect_m3u_type(m3u_content)
+        if file_type == "m3u":
+            return Response(m3u_content, content_type="application/vnd.apple.mpegurl")
+
+        # Processa contenuto M3U8
+        parsed_url = urlparse(final_url)
+        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path.rsplit('/', 1)[0]}/"
+
+        # Prepara la query degli header per segmenti/chiavi proxati
+        headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in current_headers_for_proxy.items()])
+
+        modified_m3u8 = []
+        for line in m3u_content.splitlines():
+            line = line.strip()
+            if line.startswith("#EXT-X-KEY") and 'URI="' in line:
+                line = replace_key_uri(line, headers_query)
+            elif line and not line.startswith("#"):
+                segment_url = urljoin(base_url, line)
+                line = f"/proxy/ts?url={quote(segment_url)}&{headers_query}"
+            modified_m3u8.append(line)
+
+        modified_m3u8_content = "\n".join(modified_m3u8)
+
+        # Salva il contenuto modificato nella cache prima di restituirlo
+        M3U8_CACHE[cache_key] = modified_m3u8_content
+
+        return Response(modified_m3u8_content, content_type="application/vnd.apple.mpegurl")
 
     except requests.RequestException as e:
-        app.logger.error(f"Errore durante la richiesta HTTP iniziale: {e}")
-        return {"resolved_url": clean_url, "headers": current_headers}
+        print(f"Errore durante il download o la risoluzione del file: {str(e)}")
+        return f"Errore durante il download o la risoluzione del file M3U/M3U8: {str(e)}", 500
     except Exception as e:
-        app.logger.error(f"Errore generico durante la risoluzione: {e}")
-        return {"resolved_url": clean_url, "headers": current_headers}
+        print(f"Errore generico nella funzione proxy_m3u: {str(e)}")
+        return f"Errore generico durante l'elaborazione: {str(e)}", 500
 
+
+@app.route('/proxy/resolve')
+def proxy_resolve():
+    """Proxy per risolvere e restituire un URL M3U8 con metodo DaddyLive 2025"""
+    url = request.args.get('url', '').strip()
+    if not url:
+        return "Errore: Parametro 'url' mancante", 400
+
+    daddy_base_url = get_daddylive_base_url()
+    daddy_origin = urlparse(daddy_base_url).scheme + "://" + urlparse(daddy_base_url).netloc
+
+    # AGGIUNTA: Header di default identici a /proxy/m3u
+    default_headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+        "Referer": daddy_base_url,
+        "Origin": daddy_origin
+    }
+
+    # Estrai gli header dalla richiesta, sovrascrivendo i default
+    request_headers = {
+        unquote(key[2:]).replace("_", "-"): unquote(value).strip()
+        for key, value in request.args.items()
+        if key.lower().startswith("h_")
+    }
+
+    headers = {**default_headers, **request_headers}
+
+    try:
+        processed_url = process_daddylive_url(url)
+        result = resolve_m3u8_link(processed_url, headers)
+        if not result["resolved_url"]:
+            return "Errore: Impossibile risolvere l'URL", 500
+
+        headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in result["headers"].items()])
+        return Response(
+            f"#EXTM3U\n"
+            f"#EXTINF:-1,Canale Risolto\n"
+            f"/proxy/m3u?url={quote(result['resolved_url'])}&{headers_query}",
+            content_type="application/vnd.apple.mpegurl"
+        )
+
+    except Exception as e:
+        return f"Errore durante la risoluzione dell'URL: {str(e)}", 500
+
+
+@app.route('/proxy/ts')
+def proxy_ts():
+    """Proxy per segmenti .TS con headers personalizzati e caching"""
+    ts_url = request.args.get('url', '').strip()
+    if not ts_url:
+        return "Errore: Parametro 'url' mancante", 400
+
+    # Controlla se il segmento è in cache
+    if ts_url in TS_CACHE:
+        print(f"Cache HIT per TS: {ts_url}")
+        return Response(TS_CACHE[ts_url], content_type="video/mp2t")
+    print(f"Cache MISS per TS: {ts_url}")
+
+    headers = {
+        unquote(key[2:]).replace("_", "-"): unquote(value).strip()
+        for key, value in request.args.items()
+        if key.lower().startswith("h_")
+    }
+
+    try:
+        response = requests.get(ts_url, headers=headers, stream=True, allow_redirects=True, timeout=15)
+        response.raise_for_status()
+
+        # Definiamo un generatore per inviare i dati in streaming al client
+        # e contemporaneamente costruire il contenuto per la cache.
+        def generate_and_cache():
+            content_parts = []
+            try:
+                # Itera sui chunk della risposta
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk: # Filtra i keep-alive chunk
+                        content_parts.append(chunk)
+                        yield chunk
+            finally:
+                # Una volta che lo streaming al client è completo, salviamo il segmento nella cache.
+                ts_content = b"".join(content_parts)
+                if ts_content:
+                    TS_CACHE[ts_url] = ts_content
+                    print(f"Segmento TS cachato ({len(ts_content)} bytes) per: {ts_url}")
+
+        return Response(generate_and_cache(), content_type="video/mp2t")
+
+    except requests.RequestException as e:
+        return f"Errore durante il download del segmento TS: {str(e)}", 500
+        
 @app.route('/proxy')
 def proxy():
     """Proxy per liste M3U che aggiunge automaticamente /proxy/m3u?url= con IP prima dei link"""
@@ -196,7 +533,7 @@ def proxy():
                         encoded_value = quote(quote(str(value)))
                         current_stream_headers_params.append(f"h_{encoded_key}={encoded_value}")
                 except Exception as e:
-                    app.logger.error(f"Errore nel parsing di #EXTHTTP '{line}': {e}")
+                    print(f"ERROR: Errore nel parsing di #EXTHTTP '{line}': {e}")
                 modified_lines.append(line)
             
             elif line.startswith('#EXTVLCOPT:'):
@@ -225,7 +562,7 @@ def proxy():
                                     header_key = header_name.strip()
                                     value = header_val.strip()
                                 else:
-                                    app.logger.warning(f"Malformed http-header option in EXTVLCOPT: {opt_pair}")
+                                    print(f"WARNING: Malformed http-header option in EXTVLCOPT: {opt_pair}")
                                     continue # Skip malformed header
                             
                             if header_key:
@@ -234,7 +571,7 @@ def proxy():
                                 current_stream_headers_params.append(f"h_{encoded_key}={encoded_value}")
                             
                 except Exception as e:
-                    app.logger.error(f"Errore nel parsing di #EXTVLCOPT '{line}': {e}")
+                    print(f"ERROR: Errore nel parsing di #EXTVLCOPT '{line}': {e}")
                 modified_lines.append(line) # Keep the original EXTVLCOPT line in the output
             elif line and not line.startswith('#'):
                 if 'pluto.tv' in line.lower():
@@ -265,154 +602,18 @@ def proxy():
     except Exception as e:
         return f"Errore generico: {str(e)}", 500
 
-@app.route('/proxy/m3u')
-def proxy_m3u():
-    """Proxy per file M3U e M3U8 con supporto per proxy e caching."""
-    m3u_url = request.args.get('url', '').strip()
-    if not m3u_url:
-        return "Errore: Parametro 'url' mancante", 400
-
-    # Crea una chiave univoca per la cache basata sull'URL e sugli header specifici
-    # Questo assicura che richieste con header diversi non usino la stessa cache
-    cache_key_headers = "&".join(sorted([f"{k}={v}" for k, v in request.args.items() if k.lower().startswith("h_")]))
-    cache_key = f"{m3u_url}|{cache_key_headers}"
-
-    # Controlla se la risposta è già in cache
-    if cache_key in M3U8_CACHE:
-        app.logger.info(f"Cache HIT per M3U8: {m3u_url}")
-        cached_response = M3U8_CACHE[cache_key]
-        return Response(cached_response, content_type="application/vnd.apple.mpegurl; charset=utf-8")
-    
-    app.logger.info(f"Cache MISS per M3U8: {m3u_url}")
-
-    default_headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/33.0 Mobile/15E148 Safari/605.1.15",
-        "Referer": "https://vavoo.to/",
-        "Origin": "https://vavoo.to"
-    }
-
-    request_headers = {
-        unquote(key[2:]).replace("_", "-"): unquote(value).strip()
-        for key, value in request.args.items()
-        if key.lower().startswith("h_")
-    }
-    
-    headers = {**default_headers, **request_headers}
-
-    processed_url = m3u_url
-
-    try:
-        result = resolve_m3u8_link(processed_url, headers)
-
-        if not result["resolved_url"]:
-            return "Errore: Impossibile risolvere l'URL in un M3U8 valido.", 500
-
-        resolved_url = result["resolved_url"]
-        current_headers_for_proxy = result["headers"]
-
-        m3u_response = requests.get(resolved_url, headers=current_headers_for_proxy, 
-                                   allow_redirects=True, timeout=(10, 20))
-        m3u_response.raise_for_status()
-        m3u_response.encoding = m3u_response.apparent_encoding or 'utf-8'
-        m3u_content = m3u_response.text
-        final_url = m3u_response.url
-
-        file_type = detect_m3u_type(m3u_content)
-
-        if file_type == "m3u":
-            return Response(m3u_content, content_type="application/vnd.apple.mpegurl; charset=utf-8")
-
-        parsed_url = urlparse(final_url)
-        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path.rsplit('/', 1)[0]}/"
-
-        headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in current_headers_for_proxy.items()])
-
-        modified_m3u8 = []
-        for line in m3u_content.splitlines():
-            line = line.strip()
-            if line.startswith("#EXT-X-KEY") and 'URI="' in line:
-                line = replace_key_uri(line, headers_query)
-            elif line and not line.startswith("#"):
-                segment_url = urljoin(base_url, line)
-                line = f"/proxy/ts?url={quote(segment_url)}&{headers_query}"
-            modified_m3u8.append(line)
-
-        modified_m3u8_content = "\n".join(modified_m3u8)
-        
-        # Salva il contenuto modificato nella cache prima di restituirlo
-        M3U8_CACHE[cache_key] = modified_m3u8_content
-        
-        return Response(modified_m3u8_content, content_type="application/vnd.apple.mpegurl; charset=utf-8")
-
-    except requests.RequestException as e:
-        return f"Errore durante il download o la risoluzione del file: {str(e)}", 500
-    except Exception as e:
-        return f"Errore generico nella funzione proxy_m3u: {str(e)}", 500
-
-@app.route('/proxy/ts')
-def proxy_ts():
-    """Proxy per segmenti .TS con caching, headers personalizzati e supporto proxy."""
-    ts_url = request.args.get('url', '').strip()
-    if not ts_url:
-        return "Errore: Parametro 'url' mancante", 400
-
-    # Controlla se il segmento è in cache
-    if ts_url in TS_CACHE:
-        app.logger.info(f"Cache HIT per TS: {ts_url}")
-        # Restituisce il contenuto direttamente dalla cache
-        return Response(TS_CACHE[ts_url], content_type="video/mp2t")
-
-    app.logger.info(f"Cache MISS per TS: {ts_url}")
-
-    headers = {
-        unquote(key[2:]).replace("_", "-"): unquote(value).strip()
-        for key, value in request.args.items()
-        if key.lower().startswith("h_")
-    }
-
-    try:
-        # Usa stream=True per non scaricare l'intero contenuto in memoria subito.
-        # Questo permette di iniziare a inviare i dati al client non appena arrivano, riducendo la latenza.
-        response = requests.get(ts_url, headers=headers, stream=True, allow_redirects=True, timeout=(10, 30))
-        response.raise_for_status()
-
-        # Definiamo un generatore per inviare i dati in streaming al client
-        # e contemporaneamente costruire il contenuto per la cache.
-        def generate_and_cache():
-            content_parts = []
-            try:
-                # Itera sui chunk della risposta
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk: # Filtra i keep-alive chunk
-                        content_parts.append(chunk)
-                        yield chunk
-            finally:
-                # Una volta che lo streaming al client è completo (o interrotto),
-                # uniamo i pezzi e salviamo il segmento completo nella cache.
-                ts_content = b"".join(content_parts)
-                if ts_content:
-                    TS_CACHE[ts_url] = ts_content
-                    app.logger.info(f"Segmento TS cachato ({len(ts_content)} bytes) per: {ts_url}")
-
-        # Restituisce una risposta in streaming, che usa il nostro generatore.
-        return Response(generate_and_cache(), content_type="video/mp2t")
-
-    except requests.RequestException as e:
-        return f"Errore durante il download del segmento TS: {str(e)}", 500
-
 @app.route('/proxy/key')
 def proxy_key():
-    """Proxy per la chiave AES-128 con caching, header personalizzati e supporto proxy."""
+    """Proxy per la chiave AES-128 con headers personalizzati e caching"""
     key_url = request.args.get('url', '').strip()
     if not key_url:
         return "Errore: Parametro 'url' mancante per la chiave", 400
 
     # Controlla se la chiave è in cache
     if key_url in KEY_CACHE:
-        app.logger.info(f"Cache HIT per KEY: {key_url}")
+        print(f"Cache HIT per KEY: {key_url}")
         return Response(KEY_CACHE[key_url], content_type="application/octet-stream")
-
-    app.logger.info(f"Cache MISS per KEY: {key_url}")
+    print(f"Cache MISS per KEY: {key_url}")
 
     headers = {
         unquote(key[2:]).replace("_", "-"): unquote(value).strip()
@@ -421,24 +622,24 @@ def proxy_key():
     }
 
     try:
-        response = requests.get(key_url, headers=headers, 
-                              allow_redirects=True, timeout=(10, 20))
+        response = requests.get(key_url, headers=headers, allow_redirects=True, timeout=15)
         response.raise_for_status()
-        
         key_content = response.content
-        
+
         # Salva la chiave nella cache
         KEY_CACHE[key_url] = key_content
-        
         return Response(key_content, content_type="application/octet-stream")
-    
+
     except requests.RequestException as e:
-        return f"Errore durante il download della chiave: {str(e)}", 500
+        return f"Errore durante il download della chiave AES-128: {str(e)}", 500
 
 @app.route('/')
 def index():
     """Pagina principale che mostra un messaggio di benvenuto"""
-    return "Proxy started!"
+    base_url = get_daddylive_base_url()
+    return f"Proxy ONLINE"
 
 if __name__ == '__main__':
+    get_daddylive_base_url() # Fetch on startup
+    print(f"Proxy ONLINE")
     app.run(host="0.0.0.0", port=7860, debug=False)
