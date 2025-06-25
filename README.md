@@ -80,8 +80,6 @@ Un server proxy leggero e dockerizzato basato su **Flask** e **Requests**, proge
         ```bash
         docker run -d -p 7860:7860 -e SOCKS5_PROXY="socks5://proxy1,socks5://proxy2" --name tvproxy tvproxy
         ```
-        > ℹ️ Per configurare altri proxy (Vavoo, Generale), aggiungi altre variabili `-e`. Consulta la sezione di configurazione.
-
 ### 🐧 Termux (Dispositivi Android)
 
 1.  **Installa i pacchetti necessari:**
@@ -138,7 +136,6 @@ Un server proxy leggero e dockerizzato basato su **Flask** e **Requests**, proge
     ```
     **Contenuto del file `.env`:**
     ```dotenv
-    # Proxy per newkso.ru e siti correlati
     SOCKS5_PROXY="socks5://proxy1:1080,socks5://user:pass@proxy2:1080"
     ```
 
@@ -194,13 +191,6 @@ L'uso dei proxy è **completamente opzionale**. Dovresti configurarli solo se ri
 
 Lo script supporta una configurazione flessibile tramite variabili d'ambiente o un file `.env` (per uso locale).
 
-### Logica di Priorità
-
-Il proxy viene selezionato con la seguente priorità:
-1.  **Proxy Specifico per Dominio:** Se l'URL corrisponde a un dominio con un proxy dedicato (es. `newkso.ru`, `vavoo.to`), viene usato quel proxy.
-2.  **Proxy Generale:** Se non corrisponde a nessun dominio specifico e un proxy generale è configurato, viene usato quest'ultimo.
-3.  **Nessun Proxy:** Se nessuna delle condizioni sopra è soddisfatta, la richiesta viene effettuata direttamente.
-
 ### Variabili d'Ambiente
 
 | Variabile            | Descrizione                                                                                              | Esempio                                                    |
@@ -213,7 +203,6 @@ Il proxy viene selezionato con la seguente priorità:
 Crea un file `.env` nella directory principale del progetto per configurare facilmente i proxy durante lo sviluppo locale.
 
 ```dotenv
-# Proxy per newkso.ru (con verifica SSL disabilitata)
 SOCKS5_PROXY="socks5://user:pass@host1:port,socks5://user:pass@host1:port",socks5://user:pass@host1:port""
 ```
 
