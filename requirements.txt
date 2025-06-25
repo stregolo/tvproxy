@@ -3,4 +3,4 @@ requests
 gunicorn[gevent]
 python-dotenv
 cachetools
-pysocks
+PySocks
