@@ -33,36 +33,51 @@ if not VERIFY_SSL:
 REQUEST_TIMEOUT = int(os.environ.get('REQUEST_TIMEOUT', 15))
 print(f"Timeout per le richieste impostato a {REQUEST_TIMEOUT} secondi.")
 
-# --- Configurazione Proxy SOCKS5 ---
+# --- Configurazione Proxy ---
 PROXY_LIST = []
 
 def setup_proxies():
-    """Carica la lista di proxy SOCKS5 dalla variabile d'ambiente."""
+    """Carica la lista di proxy SOCKS5, HTTP e HTTPS dalle variabili d'ambiente."""
     global PROXY_LIST
-    proxy_list_str = os.environ.get('SOCKS5_PROXY')
-    if proxy_list_str:
-        raw_proxy_list = [p.strip() for p in proxy_list_str.split(',') if p.strip()]
+    proxies_found = []
 
-        if not raw_proxy_list:
-            print("Nessun proxy SOCKS5 valido trovato nella variabile d'ambiente.")
-            PROXY_LIST = []
-            return
+    # Carica proxy SOCKS5 (supporta lista separata da virgole)
+    socks_proxy_list_str = os.environ.get('SOCKS5_PROXY')
+    if socks_proxy_list_str:
+        raw_socks_list = [p.strip() for p in socks_proxy_list_str.split(',') if p.strip()]
+        if raw_socks_list:
+            print(f"Trovati {len(raw_socks_list)} proxy SOCKS5. Verranno usati a rotazione.")
+            for proxy in raw_socks_list:
+                # Riconosce e converte automaticamente a socks5h per la risoluzione DNS remota
+                final_proxy_url = proxy
+                if proxy.startswith('socks5://'):
+                    final_proxy_url = 'socks5h' + proxy[len('socks5'):]
+                    print(f"Proxy SOCKS5 convertito per garantire la risoluzione DNS remota")
+                elif not proxy.startswith('socks5h://'):
+                    print(f"ATTENZIONE: L'URL del proxy SOCKS5 non è un formato SOCKS5 valido (es. socks5:// o socks5h://). Potrebbe non funzionare.")
+                proxies_found.append(final_proxy_url)
+            print("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
 
-        print(f"Trovati {len(raw_proxy_list)} proxy SOCKS5. Verranno usati a rotazione per ogni richiesta.")
-        for proxy in raw_proxy_list:
-            # Riconosce e converte automaticamente a socks5h per la risoluzione DNS remota
-            final_proxy_url = proxy
-            if proxy.startswith('socks5://'):
-                final_proxy_url = 'socks5h' + proxy[len('socks5'):]
-                print(f"Proxy convertito per garantire la risoluzione DNS remota.")
-            elif not proxy.startswith('socks5h://'):
-                print(f"ATTENZIONE: L'URL del proxy  non è un formato SOCKS5 valido (es. socks5:// o socks5h://). Potrebbe non funzionare.")
-            PROXY_LIST.append(final_proxy_url)
+    # Carica proxy HTTP
+    http_proxy = os.environ.get('HTTP_PROXY')
+    if http_proxy:
+        print(f"Trovato HTTP_PROXY")
+        proxies_found.append(http_proxy)
 
-        print("Assicurati di aver installato la dipendenza necessaria: 'pip install PySocks'")
+    # Carica proxy HTTPS
+    https_proxy = os.environ.get('HTTPS_PROXY')
+    if https_proxy:
+        print(f"Trovato HTTPS_PROXY")
+        # Evita duplicati se HTTP_PROXY e HTTPS_PROXY sono uguali
+        if https_proxy not in proxies_found:
+            proxies_found.append(https_proxy)
+
+    PROXY_LIST = proxies_found
+
+    if PROXY_LIST:
+        print(f"Totale di {len(PROXY_LIST)} proxy configurati. Verranno usati a rotazione per ogni richiesta.")
     else:
-        PROXY_LIST = []
-        print("Nessun proxy SOCKS5 configurato.")
+        print("Nessun proxy (SOCKS5, HTTP, HTTPS) configurato.")
 
 def get_random_proxy():
     """Seleziona un proxy casuale dalla lista e lo formatta per la libreria requests."""
