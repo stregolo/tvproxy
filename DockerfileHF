@@ -12,6 +12,7 @@ WORKDIR /app
 
 # Clona il repository GitHub
 RUN git clone https://github.com/nzo66/tvproxy .
+COPY . .
 
 # Installa le dipendenze
 RUN pip install --upgrade pip
