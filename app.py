@@ -59,18 +59,21 @@ def setup_proxies():
             print("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
 
     # Carica proxy HTTP
-    http_proxy = os.environ.get('HTTP_PROXY')
-    if http_proxy:
-        print(f"Trovato HTTP_PROXY")
-        proxies_found.append(http_proxy)
+    http_proxy_list_str = os.environ.get('HTTP_PROXY')
+    if http_proxy_list_str:
+        http_proxies = [p.strip() for p in http_proxy_list_str.split(',') if p.strip()]
+        if http_proxies:
+            print(f"Trovati {len(http_proxies)} proxy HTTP. Verranno usati a rotazione.")
+            proxies_found.extend(http_proxies)
 
     # Carica proxy HTTPS
-    https_proxy = os.environ.get('HTTPS_PROXY')
-    if https_proxy:
-        print(f"Trovato HTTPS_PROXY")
-        # Evita duplicati se HTTP_PROXY e HTTPS_PROXY sono uguali
-        if https_proxy not in proxies_found:
-            proxies_found.append(https_proxy)
+    https_proxy_list_str = os.environ.get('HTTPS_PROXY')
+    if https_proxy_list_str:
+        https_proxies = [p.strip() for p in https_proxy_list_str.split(',') if p.strip()]
+        if https_proxies:
+            print(f"Trovati {len(https_proxies)} proxy HTTPS. Verranno usati a rotazione.")
+            # Use extend to add all proxies from the list
+            proxies_found.extend(https_proxies)
 
     PROXY_LIST = proxies_found
 
@@ -703,7 +706,7 @@ def proxy():
         
     except requests.RequestException as e:
         proxy_used = proxy_for_request['http'] if proxy_for_request else "Nessuno"
-        print(f"ERRORE: Fallito il download di '{m3u_url}' usando il proxy. Dettagli: {e}")
+        print(f"ERRORE: Fallito il download di '{m3u_url}' usando il proxy.")
         return f"Errore durante il download della lista M3U: {str(e)}", 500
     except Exception as e:
         return f"Errore generico: {str(e)}", 500
