@@ -250,6 +250,11 @@ Crea un file `.env` nella directory principale del progetto per configurare faci
 # HTTPS_PROXY="http://user:pass@host:port,http://host:port"
 ```
 
+🔐 Proxy Consigliato (Huggingface Supporta solo HTTP)
+🌍 https://proxysocks5.com/
+➡️ HTTP / SOCKS5 Dedicated
+⚠️UTILIZZA IL CODICE NZO66 COME CODICE COUPON PRIMA DEL PAGAMENTO PER OTTENERE 10% DI SCONTO⚠️
+
 ---
 
 ## 🐳 Gestione Docker
