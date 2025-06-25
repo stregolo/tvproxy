@@ -641,5 +641,7 @@ def index():
 
 if __name__ == '__main__':
     get_daddylive_base_url() # Fetch on startup
-    print(f"Proxy ONLINE")
-    app.run(host="0.0.0.0", port=7860, debug=False)
+    # Usa la porta 7860 di default, ma permetti di sovrascriverla con la variabile d'ambiente PORT
+    port = int(os.environ.get("PORT", 7860))
+    print(f"Proxy ONLINE - In ascolto su porta {port}")
+    app.run(host="0.0.0.0", port=port, debug=False)
