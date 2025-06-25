@@ -703,7 +703,7 @@ def proxy():
         
     except requests.RequestException as e:
         proxy_used = proxy_for_request['http'] if proxy_for_request else "Nessuno"
-        print(f"ERRORE: Fallito il download di '{m3u_url}' usando il proxy '{proxy_used}'. Dettagli: {e}")
+        print(f"ERRORE: Fallito il download di '{m3u_url}' usando il proxy. Dettagli: {e}")
         return f"Errore durante il download della lista M3U: {str(e)}", 500
     except Exception as e:
         return f"Errore generico: {str(e)}", 500
