@@ -54,8 +54,6 @@ Un server proxy leggero e dockerizzato basato su **Flask** e **Requests**, proge
 4.  **Configura le variabili d'ambiente per la porta:**
     *   Vai su **Settings** del tuo Space.
     *   Nella sezione **Secrets**, aggiungi un nuovo secret.
-    *   **Name:** `PORT`
-    *   **Value:** `7860`
 5.  **(Opzionale) Configura un proxy HTTP/HTTPS:**
     *   HuggingFace Spaces **non supporta proxy SOCKS5**, ma puoi usare proxy HTTP/HTTPS.
     *   Nella sezione **Secrets**, aggiungi i seguenti secret (devono essere usati entrambi):
