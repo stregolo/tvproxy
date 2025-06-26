@@ -1,4 +1,4 @@
-from flask import Flask, request, Response
+from flask import Flask, request, Response, stream_with_context
 import requests
 from urllib.parse import urlparse, urljoin, quote, unquote
 import re
@@ -89,10 +89,11 @@ def get_proxy_for_url(url):
 
 setup_proxies()
 
-# --- Configurazione Cache Ottimizzata ---
-M3U8_CACHE = TTLCache(maxsize=50, ttl=30)
-TS_CACHE = TTLCache(maxsize=50, ttl=300)
-KEY_CACHE = TTLCache(maxsize=50, ttl=3600)
+# --- Configurazione Cache Ottimizzata per Streaming ---
+# Cache più piccole e con TTL più lunghi per ridurre richieste
+M3U8_CACHE = TTLCache(maxsize=100, ttl=60)    # TTL più lungo per M3U8
+TS_CACHE = TTLCache(maxsize=50, ttl=1800)     # Solo 50 segmenti, 30 minuti TTL
+KEY_CACHE = TTLCache(maxsize=50, ttl=7200)    # 2 ore per chiavi
 
 # --- Dynamic DaddyLive URL Fetcher ---
 DADDYLIVE_BASE_URL = None
@@ -366,7 +367,7 @@ def resolve_m3u8_link(url, headers=None):
 
 @app.route('/proxy/m3u')
 def proxy_m3u():
-    """Proxy per file M3U e M3U8 con supporto DaddyLive 2025 e caching"""
+    """Proxy per file M3U e M3U8 con supporto DaddyLive 2025 e caching ottimizzato"""
     m3u_url = request.args.get('url', '').strip()
     if not m3u_url:
         return "Errore: Parametro 'url' mancante", 400
@@ -377,7 +378,14 @@ def proxy_m3u():
     if cache_key in M3U8_CACHE:
         print(f"Cache HIT per M3U8: {m3u_url}")
         cached_response = M3U8_CACHE[cache_key]
-        return Response(cached_response, content_type="application/vnd.apple.mpegurl")
+        # Aggiungi header per ottimizzare il buffering del player
+        response_headers = {
+            'Cache-Control': 'public, max-age=30',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Range',
+            'Accept-Ranges': 'bytes'
+        }
+        return Response(cached_response, content_type="application/vnd.apple.mpegurl", headers=response_headers)
     print(f"Cache MISS per M3U8: {m3u_url}")
 
     daddy_base_url = get_daddylive_base_url()
@@ -446,7 +454,15 @@ def proxy_m3u():
 
         M3U8_CACHE[cache_key] = modified_m3u8_content
 
-        return Response(modified_m3u8_content, content_type="application/vnd.apple.mpegurl")
+        # Header ottimizzati per streaming
+        response_headers = {
+            'Cache-Control': 'public, max-age=30',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Range',
+            'Accept-Ranges': 'bytes'
+        }
+
+        return Response(modified_m3u8_content, content_type="application/vnd.apple.mpegurl", headers=response_headers)
 
     except requests.RequestException as e:
         print(f"Errore durante il download o la risoluzione del file: {str(e)}")
@@ -498,14 +514,23 @@ def proxy_resolve():
 
 @app.route('/proxy/ts')
 def proxy_ts():
-    """Proxy per segmenti .TS con headers personalizzati e caching ottimizzato"""
+    """Proxy per segmenti .TS con STREAMING DIRETTO SENZA ACCUMULO"""
     ts_url = request.args.get('url', '').strip()
     if not ts_url:
         return "Errore: Parametro 'url' mancante", 400
 
+    # Controlla cache prima (solo per file piccoli)
     if ts_url in TS_CACHE:
         print(f"Cache HIT per TS: {ts_url}")
-        return Response(TS_CACHE[ts_url], content_type="video/mp2t")
+        response_headers = {
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'public, max-age=3600',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Range, Content-Range',
+            'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges'
+        }
+        return Response(TS_CACHE[ts_url], content_type="video/mp2t", headers=response_headers)
+
     print(f"Cache MISS per TS: {ts_url}")
 
     headers = {
@@ -514,28 +539,73 @@ def proxy_ts():
         if key.lower().startswith("h_")
     }
 
+    # Supporta Range requests per seeking
+    range_header = request.headers.get('Range')
+    if range_header:
+        headers['Range'] = range_header
+        print(f"Range request rilevato: {range_header}")
+
     try:
-        response = requests.get(ts_url, headers=headers, stream=True, allow_redirects=True, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(ts_url), verify=VERIFY_SSL)
+        # STREAMING DIRETTO - nessun accumulo in memoria
+        response = requests.get(ts_url, headers=headers, stream=True, 
+                              allow_redirects=True, timeout=REQUEST_TIMEOUT, 
+                              proxies=get_proxy_for_url(ts_url), verify=VERIFY_SSL)
         response.raise_for_status()
 
-        # Controlla la dimensione del contenuto prima di cachare
-        content_length = response.headers.get('content-length')
-        if content_length and int(content_length) > 5 * 1024 * 1024:  # 5MB limit
-            # Stream direttamente senza cachare se troppo grande
-            return Response(response.iter_content(chunk_size=8192), 
-                          content_type="video/mp2t")
+        # Passa attraverso gli header di range per il seeking
+        response_headers = {
+            'Accept-Ranges': 'bytes',
+            'Cache-Control': 'public, max-age=3600',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Range, Content-Range',
+            'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges'
+        }
 
-        # Per file più piccoli, carica e casha
-        content = response.content
-        if len(content) < 5 * 1024 * 1024:  # 5MB limit
-            TS_CACHE[ts_url] = content
-            print(f"Segmento TS cachato ({len(content)} bytes) per: {ts_url}")
-        
-        return Response(content, content_type="video/mp2t")
+        if 'Content-Range' in response.headers:
+            response_headers['Content-Range'] = response.headers['Content-Range']
+        if 'Content-Length' in response.headers:
+            response_headers['Content-Length'] = response.headers['Content-Length']
+
+        # STREAMING DIRETTO con cache opzionale per file piccoli
+        def stream_with_optional_cache():
+            content_parts = []
+            total_size = 0
+            max_cache_size = 2 * 1024 * 1024  # 2MB limite per cache
+            should_cache = True
+            
+            # Chunk size più grande per ridurre overhead
+            for chunk in response.iter_content(chunk_size=32768):  # 32KB chunks
+                if chunk:
+                    yield chunk  # INVIA IMMEDIATAMENTE al client
+                    
+                    # Cache solo se il file è piccolo
+                    if should_cache and total_size < max_cache_size:
+                        content_parts.append(chunk)
+                        total_size += len(chunk)
+                    else:
+                        should_cache = False
+                        content_parts = []  # Libera memoria se troppo grande
+            
+            # Cache solo file piccoli
+            if should_cache and content_parts and total_size < max_cache_size:
+                try:
+                    TS_CACHE[ts_url] = b"".join(content_parts)
+                    print(f"Segmento TS piccolo cachato ({total_size} bytes)")
+                except Exception as e:
+                    print(f"Errore nel caching: {e}")
+
+        # Usa stream_with_context per Flask
+        return Response(
+            stream_with_context(stream_with_optional_cache()),
+            status=response.status_code,
+            content_type="video/mp2t",
+            headers=response_headers
+        )
 
     except requests.RequestException as e:
+        print(f"Errore durante il download del segmento TS: {str(e)}")
         return f"Errore durante il download del segmento TS: {str(e)}", 500
-        
+
 @app.route('/proxy')
 def proxy():
     """Proxy per liste M3U che aggiunge automaticamente /proxy/m3u?url= con IP prima dei link"""
@@ -660,21 +730,24 @@ def proxy_key():
     except requests.RequestException as e:
         return f"Errore durante il download della chiave AES-128: {str(e)}", 500
 
-# Endpoint semplificato per le statistiche (senza psutil)
+# Endpoint per monitorare le performance
 @app.route('/stats')
 def stats():
-    """Endpoint per monitorare le cache (senza psutil)"""
+    """Endpoint per monitorare l'uso delle cache"""
     try:
         return {
             'status': 'running',
-            'm3u8_cache_size': len(M3U8_CACHE),
-            'ts_cache_size': len(TS_CACHE),
-            'key_cache_size': len(KEY_CACHE),
-            'cache_limits': {
-                'm3u8_maxsize': M3U8_CACHE.maxsize,
-                'ts_maxsize': TS_CACHE.maxsize,
-                'key_maxsize': KEY_CACHE.maxsize
-            }
+            'cache_stats': {
+                'm3u8_cache_size': len(M3U8_CACHE),
+                'ts_cache_size': len(TS_CACHE),
+                'key_cache_size': len(KEY_CACHE),
+                'cache_limits': {
+                    'm3u8_maxsize': M3U8_CACHE.maxsize,
+                    'ts_maxsize': TS_CACHE.maxsize,
+                    'key_maxsize': KEY_CACHE.maxsize
+                }
+            },
+            'proxy_count': len(PROXY_LIST)
         }
     except Exception as e:
         return {'error': str(e)}, 500
@@ -682,12 +755,12 @@ def stats():
 # Pulizia periodica della memoria
 @app.after_request
 def cleanup_memory(response):
-    """Forza garbage collection ogni 100 richieste per liberare memoria"""
+    """Forza garbage collection ogni 50 richieste per liberare memoria"""
     if not hasattr(cleanup_memory, 'counter'):
         cleanup_memory.counter = 0
     
     cleanup_memory.counter += 1
-    if cleanup_memory.counter % 100 == 0:
+    if cleanup_memory.counter % 50 == 0:  # Più frequente per streaming
         gc.collect()
         print(f"Garbage collection eseguito dopo {cleanup_memory.counter} richieste")
     
@@ -696,10 +769,10 @@ def cleanup_memory(response):
 @app.route('/')
 def index():
     """Pagina principale che mostra un messaggio di benvenuto"""
-    base_url = get_daddylive_base_url()
-    return f"Proxy ONLINE"
+    return "Proxy ONLINE - Streaming Ottimizzato"
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
-    print(f"Proxy ONLINE - In ascolto su porta {port}")
-    app.run(host="0.0.0.0", port=port, debug=False)
+    print(f"Proxy ONLINE - Streaming ottimizzato - In ascolto su porta {port}")
+    # IMPORTANTE: Abilita threading per Flask development server
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
