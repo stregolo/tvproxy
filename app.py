@@ -107,8 +107,8 @@ setup_proxies()
 
 # --- Configurazione Cache ---
 M3U8_CACHE = TTLCache(maxsize=200, ttl=5)
-TS_CACHE = TTLCache(maxsize=1000, ttl=600) 
-KEY_CACHE = TTLCache(maxsize=200, ttl=600)
+TS_CACHE = TTLCache(maxsize=1000, ttl=300) 
+KEY_CACHE = TTLCache(maxsize=200, ttl=300)
 
 # --- Dynamic DaddyLive URL Fetcher ---
 DADDYLIVE_BASE_URL = None
