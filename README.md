@@ -254,7 +254,7 @@ Crea un file `.env` nella directory principale del progetto per configurare faci
 
 ## 🔐 Proxy Consigliato per Streaming
 
-### 🌍 [proxy-cheap](https://www.proxy-cheap.com/) — HTTP & SOCKS5 Dedicati
+### 🌍 [proxy-cheap](https://www.proxy-cheap.com/) — HTTP & SOCKS5 Static Datacenter Dedicati
 
 > ⚠️ **Importante:** HuggingFace supporta solo proxy **HTTP**  
 > ✅ Ideale per: Streaming, scraping, AI requests, automazioni
