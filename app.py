@@ -10,7 +10,6 @@ import os
 import random
 import time
 import gc
-import psutil
 from cachetools import TTLCache, LRUCache
 from dotenv import load_dotenv
 
@@ -91,10 +90,9 @@ def get_proxy_for_url(url):
 setup_proxies()
 
 # --- Configurazione Cache Ottimizzata ---
-# Cache più piccole con TTL per liberare memoria automaticamente
-M3U8_CACHE = TTLCache(maxsize=50, ttl=30)   # Ridotto da 200 a 50, TTL aumentato
-TS_CACHE = TTLCache(maxsize=50, ttl=300)    # Cache TS con TTL di 5 minuti invece di LRU infinita
-KEY_CACHE = TTLCache(maxsize=50, ttl=3600)  # Cache chiavi con TTL di 1 ora
+M3U8_CACHE = TTLCache(maxsize=50, ttl=30)
+TS_CACHE = TTLCache(maxsize=50, ttl=300)
+KEY_CACHE = TTLCache(maxsize=50, ttl=3600)
 
 # --- Dynamic DaddyLive URL Fetcher ---
 DADDYLIVE_BASE_URL = None
@@ -662,16 +660,13 @@ def proxy_key():
     except requests.RequestException as e:
         return f"Errore durante il download della chiave AES-128: {str(e)}", 500
 
-# Endpoint per monitorare l'uso di memoria
+# Endpoint semplificato per le statistiche (senza psutil)
 @app.route('/stats')
 def stats():
-    """Endpoint per monitorare l'uso di memoria e cache"""
+    """Endpoint per monitorare le cache (senza psutil)"""
     try:
-        process = psutil.Process(os.getpid())
-        memory_info = process.memory_info()
-        
         return {
-            'memory_mb': round(memory_info.rss / 1024 / 1024, 2),
+            'status': 'running',
             'm3u8_cache_size': len(M3U8_CACHE),
             'ts_cache_size': len(TS_CACHE),
             'key_cache_size': len(KEY_CACHE),
