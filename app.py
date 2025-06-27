@@ -71,9 +71,9 @@ def monitor_bandwidth():
             current_recv = net_io.bytes_recv
             
             if prev_sent > 0 and prev_recv > 0:
-                # Calcola la banda utilizzata nell'ultimo secondo (in KB/s)
-                sent_per_sec = (current_sent - prev_sent) / 1024
-                recv_per_sec = (current_recv - prev_recv) / 1024
+                # Calcola la banda utilizzata nell'ultimo secondo (in MB/s)
+                sent_per_sec = (current_sent - prev_sent) / (1024 * 1024)  # Convertito in MB/s
+                recv_per_sec = (current_recv - prev_recv) / (1024 * 1024)  # Convertito in MB/s
                 system_stats['bandwidth_usage'] = sent_per_sec + recv_per_sec
             
             prev_sent = current_sent
@@ -516,7 +516,7 @@ def dashboard():
                 
                 <div class="stat-card">
                     <div class="stat-title">🌐 Banda di Rete</div>
-                    <div class="stat-value">{stats['bandwidth_usage']:.1f} KB/s</div>
+                    <div class="stat-value">{stats['bandwidth_usage']:.2f} MB/s</div>
                     <small>Utilizzo corrente della banda</small>
                 </div>
                 
@@ -891,7 +891,7 @@ def index():
     <h2>📊 Statistiche Sistema</h2>
     <ul>
         <li><strong>RAM:</strong> {stats['ram_usage']:.1f}% ({stats['ram_used_gb']:.2f} GB / {stats['ram_total_gb']:.2f} GB)</li>
-        <li><strong>Banda:</strong> {stats['bandwidth_usage']:.1f} KB/s</li>
+        <li><strong>Banda:</strong> {stats['bandwidth_usage']:.2f} MB/s</li>
         <li><strong>Dati Inviati:</strong> {stats['network_sent']:.1f} MB</li>
         <li><strong>Dati Ricevuti:</strong> {stats['network_recv']:.1f} MB</li>
     </ul>
