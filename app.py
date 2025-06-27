@@ -68,10 +68,7 @@ def download_proxies_from_github():
         return DOWNLOADED_PROXIES
     
     proxy_sources = [
-        'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt',
-        'https://raw.githubusercontent.com/nzo66/tvproxy/refs/heads/main/proxy_http.txt',
-        'https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt',
-        'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt'
+        'https://raw.githubusercontent.com/nzo66/tvproxy/refs/heads/main/proxy_http.txt'
     ]
     
     for proxy_url in proxy_sources:
