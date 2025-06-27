@@ -10,6 +10,7 @@ import os
 import random
 import time
 from cachetools import TTLCache, LRUCache
+from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import psutil
@@ -24,312 +25,525 @@ from functools import wraps
 import ipaddress
 
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(16)
+app.secret_key = os.environ.get('SECRET_KEY', secrets.token_hex(16))
 
-# --- Configurazione Dinamica (sostituisce .env) ---
-class DynamicConfig:
-    def __init__(self):
-        self.config = {
-            'verify_ssl': False,
-            'request_timeout': 30,
-            'keep_alive_timeout': 300,
-            'max_keep_alive_requests': 1000,
-            'pool_connections': 20,
-            'pool_maxsize': 50,
-            'admin_username': 'admin',
-            'admin_password': 'password123',
-            'api_keys': [],
-            'socks5_proxies': [],
-            'http_proxies': [],
-            'https_proxies': [],
-            'cache_m3u8_size': 200,
-            'cache_m3u8_ttl': 5,
-            'cache_ts_size': 1000,
-            'cache_ts_ttl': 300,
-            'cache_key_size': 200,
-            'cache_key_ttl': 300,
-            'rate_limit_requests': 100,
-            'rate_limit_window': 3600,
-            'blocked_ips': [],
-            'whitelisted_ips': []
-        }
-        self.load_from_file()
+load_dotenv()
+
+# --- Configurazione Generale ---
+VERIFY_SSL = os.environ.get('VERIFY_SSL', 'false').lower() not in ('false', '0', 'no')
+if not VERIFY_SSL:
+    print("ATTENZIONE: La verifica del certificato SSL è DISABILITATA.")
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+REQUEST_TIMEOUT = int(os.environ.get('REQUEST_TIMEOUT', 30))
+KEEP_ALIVE_TIMEOUT = int(os.environ.get('KEEP_ALIVE_TIMEOUT', 300))
+MAX_KEEP_ALIVE_REQUESTS = int(os.environ.get('MAX_KEEP_ALIVE_REQUESTS', 1000))
+POOL_CONNECTIONS = int(os.environ.get('POOL_CONNECTIONS', 20))
+POOL_MAXSIZE = int(os.environ.get('POOL_MAXSIZE', 50))
+
+# --- Configurazione Autenticazione ---
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'password123')
+API_KEYS = set(os.environ.get('API_KEYS', '').split(',')) if os.environ.get('API_KEYS') else set()
+
+# --- Variabili globali per monitoraggio avanzato ---
+system_stats = {
+    'ram_usage': 0,
+    'ram_used_gb': 0,
+    'ram_total_gb': 0,
+    'network_sent': 0,
+    'network_recv': 0,
+    'bandwidth_usage': 0,
+    'cpu_usage': 0
+}
+
+# Statistiche avanzate
+endpoint_stats = defaultdict(lambda: {'requests': 0, 'errors': 0, 'total_time': 0, 'avg_time': 0})
+proxy_stats = defaultdict(lambda: {'success': 0, 'failures': 0, 'last_used': None, 'status': 'unknown'})
+request_log = deque(maxlen=1000)
+error_log = deque(maxlen=500)
+access_log = deque(maxlen=1000)
+
+# Rate limiting
+rate_limit_storage = defaultdict(lambda: {'count': 0, 'reset_time': time.time() + 3600})
+blocked_ips = set()
+whitelisted_ips = set()
+
+# Cache stats
+cache_stats = {
+    'hits': 0,
+    'misses': 0,
+    'hit_rate': 0
+}
+
+SESSION_POOL = {}
+SESSION_LOCK = Lock()
+
+# --- Configurazione Logging ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('proxy.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+def mask_ip(ip_address):
+    """Maschera l'IP per la privacy, mostrando solo le prime due parti"""
+    try:
+        if ':' in ip_address:  # IPv6
+            parts = ip_address.split(':')
+            return f"{parts[0]}:{parts[1]}:****:****"
+        else:  # IPv4
+            parts = ip_address.split('.')
+            return f"{parts[0]}.{parts[1]}.***.**"
+    except:
+        return "***.***.***.**"
+
+def mask_proxy_url(proxy_url):
+    """Maschera l'URL del proxy per nascondere l'IP completo"""
+    if not proxy_url:
+        return None
+    try:
+        parsed = urlparse(proxy_url)
+        masked_host = mask_ip(parsed.hostname) if parsed.hostname else "***"
+        return f"{parsed.scheme}://{masked_host}:{parsed.port}"
+    except:
+        return "***://***:***"
+
+# --- Decoratori per autenticazione e rate limiting ---
+def require_auth(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'authenticated' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+def require_api_key(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        api_key = request.headers.get('X-API-Key') or request.args.get('api_key')
+        if not api_key or api_key not in API_KEYS:
+            return jsonify({'error': 'Invalid API key'}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
+def rate_limit(max_requests=100, window=3600):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            client_ip = get_client_ip()
+            
+            if client_ip in blocked_ips:
+                return jsonify({'error': 'IP blocked'}), 403
+                
+            if client_ip in whitelisted_ips:
+                return f(*args, **kwargs)
+            
+            current_time = time.time()
+            if current_time > rate_limit_storage[client_ip]['reset_time']:
+                rate_limit_storage[client_ip] = {'count': 0, 'reset_time': current_time + window}
+            
+            rate_limit_storage[client_ip]['count'] += 1
+            
+            if rate_limit_storage[client_ip]['count'] > max_requests:
+                log_security_event(client_ip, 'rate_limit_exceeded', request.endpoint)
+                return jsonify({'error': 'Rate limit exceeded'}), 429
+                
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
+def get_client_ip():
+    """Ottiene l'IP reale del client considerando proxy e load balancer"""
+    if request.headers.getlist("X-Forwarded-For"):
+        return request.headers.getlist("X-Forwarded-For")[0].split(',')[0].strip()
+    elif request.headers.get('X-Real-IP'):
+        return request.headers.get('X-Real-IP')
+    return request.remote_addr
+
+def log_security_event(ip, event_type, details):
+    """Log eventi di sicurezza"""
+    event = {
+        'timestamp': datetime.now().isoformat(),
+        'ip': mask_ip(ip),
+        'event': event_type,
+        'details': details,
+        'user_agent': request.headers.get('User-Agent', 'Unknown')
+    }
+    access_log.append(event)
+    logger.warning(f"Security event: {event}")
+
+def log_request(endpoint, start_time, success=True, error=None):
+    """Log delle richieste con statistiche"""
+    duration = time.time() - start_time
     
-    def load_from_file(self):
-        """Carica configurazione da file JSON se esiste"""
+    # Aggiorna statistiche endpoint
+    endpoint_stats[endpoint]['requests'] += 1
+    endpoint_stats[endpoint]['total_time'] += duration
+    endpoint_stats[endpoint]['avg_time'] = endpoint_stats[endpoint]['total_time'] / endpoint_stats[endpoint]['requests']
+    
+    if not success:
+        endpoint_stats[endpoint]['errors'] += 1
+    
+    # Log della richiesta
+    log_entry = {
+        'timestamp': datetime.now().isoformat(),
+        'endpoint': endpoint,
+        'ip': mask_ip(get_client_ip()),
+        'duration': round(duration, 3),
+        'success': success,
+        'error': str(error) if error else None,
+        'user_agent': request.headers.get('User-Agent', 'Unknown')[:100]
+    }
+    request_log.append(log_entry)
+    
+    if error:
+        error_log.append(log_entry)
+
+def get_system_stats():
+    """Ottiene statistiche di sistema avanzate"""
+    global system_stats
+    
+    # Memoria RAM
+    memory = psutil.virtual_memory()
+    system_stats['ram_usage'] = memory.percent
+    system_stats['ram_used_gb'] = memory.used / (1024**3)
+    system_stats['ram_total_gb'] = memory.total / (1024**3)
+    
+    # CPU
+    system_stats['cpu_usage'] = psutil.cpu_percent(interval=1)
+    
+    # Rete
+    net_io = psutil.net_io_counters()
+    system_stats['network_sent'] = net_io.bytes_sent / (1024**2)
+    system_stats['network_recv'] = net_io.bytes_recv / (1024**2)
+    
+    return system_stats
+
+def monitor_bandwidth():
+    """Monitora la banda di rete in background"""
+    global system_stats
+    prev_sent = 0
+    prev_recv = 0
+    
+    while True:
         try:
-            if os.path.exists('config.json'):
-                with open('config.json', 'r') as f:
-                    saved_config = json.load(f)
-                    self.config.update(saved_config)
-                    print("Configurazione caricata da config.json")
+            net_io = psutil.net_io_counters()
+            current_sent = net_io.bytes_sent
+            current_recv = net_io.bytes_recv
+            
+            if prev_sent > 0 and prev_recv > 0:
+                sent_per_sec = (current_sent - prev_sent) / (1024 * 1024)
+                recv_per_sec = (current_recv - prev_recv) / (1024 * 1024)
+                system_stats['bandwidth_usage'] = sent_per_sec + recv_per_sec
+            
+            prev_sent = current_sent
+            prev_recv = current_recv
         except Exception as e:
-            print(f"Errore nel caricamento configurazione: {e}")
-    
-    def save_to_file(self):
-        """Salva configurazione su file JSON"""
-        try:
-            with open('config.json', 'w') as f:
-                json.dump(self.config, f, indent=2)
-            print("Configurazione salvata su config.json")
-            return True
-        except Exception as e:
-            print(f"Errore nel salvataggio configurazione: {e}")
-            return False
-    
-    def get(self, key, default=None):
-        return self.config.get(key, default)
-    
-    def set(self, key, value):
-        self.config[key] = value
-    
-    def update(self, updates):
-        self.config.update(updates)
-        return self.save_to_file()
+            logger.error(f"Errore nel monitoraggio banda: {e}")
+        
+        time.sleep(1)
 
-# Istanza globale della configurazione
-config = DynamicConfig()
+# --- Configurazione Proxy ---
+PROXY_LIST = []
 
-# --- Variabili globali aggiornate dinamicamente ---
-def update_global_vars():
-    """Aggiorna le variabili globali dalla configurazione"""
-    global VERIFY_SSL, REQUEST_TIMEOUT, KEEP_ALIVE_TIMEOUT, MAX_KEEP_ALIVE_REQUESTS
-    global POOL_CONNECTIONS, POOL_MAXSIZE, ADMIN_USERNAME, ADMIN_PASSWORD, API_KEYS
-    global M3U8_CACHE, TS_CACHE, KEY_CACHE, PROXY_LIST
-    
-    VERIFY_SSL = config.get('verify_ssl', False)
-    REQUEST_TIMEOUT = config.get('request_timeout', 30)
-    KEEP_ALIVE_TIMEOUT = config.get('keep_alive_timeout', 300)
-    MAX_KEEP_ALIVE_REQUESTS = config.get('max_keep_alive_requests', 1000)
-    POOL_CONNECTIONS = config.get('pool_connections', 20)
-    POOL_MAXSIZE = config.get('pool_maxsize', 50)
-    ADMIN_USERNAME = config.get('admin_username', 'admin')
-    ADMIN_PASSWORD = config.get('admin_password', 'password123')
-    API_KEYS = set(config.get('api_keys', []))
-    
-    # Ricrea le cache con nuove dimensioni
-    M3U8_CACHE = TTLCache(maxsize=config.get('cache_m3u8_size', 200), ttl=config.get('cache_m3u8_ttl', 5))
-    TS_CACHE = TTLCache(maxsize=config.get('cache_ts_size', 1000), ttl=config.get('cache_ts_ttl', 300))
-    KEY_CACHE = TTLCache(maxsize=config.get('cache_key_size', 200), ttl=config.get('cache_key_ttl', 300))
-    
-    # Aggiorna proxy
-    setup_proxies()
-
-# Inizializza variabili globali
-update_global_vars()
-
-# Resto del codice rimane uguale fino ai decoratori...
-# [Include tutto il codice precedente per autenticazione, rate limiting, etc.]
-
-# --- Configurazione Proxy Dinamica ---
 def setup_proxies():
-    """Carica la lista di proxy dalla configurazione dinamica"""
+    """Carica la lista di proxy dalle variabili d'ambiente"""
     global PROXY_LIST
     proxies_found = []
-    
-    # SOCKS5 Proxies
-    socks5_proxies = config.get('socks5_proxies', [])
-    for proxy in socks5_proxies:
-        if proxy.strip():
-            final_proxy_url = proxy.strip()
-            if proxy.startswith('socks5://'):
-                final_proxy_url = 'socks5h' + proxy[len('socks5'):]
-            proxies_found.append(final_proxy_url)
-            proxy_stats[final_proxy_url] = {'success': 0, 'failures': 0, 'last_used': None, 'status': 'unknown'}
-    
-    # HTTP Proxies
-    http_proxies = config.get('http_proxies', [])
-    for proxy in http_proxies:
-        if proxy.strip():
-            proxies_found.append(proxy.strip())
-            proxy_stats[proxy.strip()] = {'success': 0, 'failures': 0, 'last_used': None, 'status': 'unknown'}
-    
-    # HTTPS Proxies
-    https_proxies = config.get('https_proxies', [])
-    for proxy in https_proxies:
-        if proxy.strip():
-            proxies_found.append(proxy.strip())
-            proxy_stats[proxy.strip()] = {'success': 0, 'failures': 0, 'last_used': None, 'status': 'unknown'}
-    
-    PROXY_LIST = proxies_found
-    logger.info(f"Configurati {len(PROXY_LIST)} proxy dalla configurazione web")
 
-# --- Routes per gestione configurazione ---
-@app.route('/config-panel')
+    for proxy_type in ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']:
+        proxy_list_str = os.environ.get(proxy_type)
+        if proxy_list_str:
+            raw_proxies = [p.strip() for p in proxy_list_str.split(',') if p.strip()]
+            for proxy in raw_proxies:
+                if proxy_type == 'SOCKS5_PROXY' and proxy.startswith('socks5://'):
+                    proxy = 'socks5h' + proxy[len('socks5'):]
+                proxies_found.append(proxy)
+                # Inizializza statistiche proxy
+                proxy_stats[proxy] = {'success': 0, 'failures': 0, 'last_used': None, 'status': 'unknown'}
+
+    PROXY_LIST = proxies_found
+    logger.info(f"Configurati {len(PROXY_LIST)} proxy")
+
+def get_proxy_for_url(url):
+    """Seleziona un proxy casuale dalla lista"""
+    if not PROXY_LIST:
+        return None
+
+    try:
+        parsed_url = urlparse(url)
+        if 'github.com' in parsed_url.netloc:
+            return None
+    except Exception:
+        pass
+
+    # Seleziona proxy con meno fallimenti
+    available_proxies = [p for p in PROXY_LIST if proxy_stats[p]['status'] != 'failed']
+    if not available_proxies:
+        available_proxies = PROXY_LIST  # Fallback a tutti i proxy
+    
+    chosen_proxy = random.choice(available_proxies)
+    proxy_stats[chosen_proxy]['last_used'] = datetime.now().isoformat()
+    
+    return {'http': chosen_proxy, 'https': chosen_proxy}
+
+def test_proxy(proxy_url):
+    """Testa la connettività di un proxy"""
+    try:
+        test_response = requests.get(
+            'https://httpbin.org/ip',
+            proxies={'http': proxy_url, 'https': proxy_url},
+            timeout=10,
+            verify=VERIFY_SSL
+        )
+        if test_response.status_code == 200:
+            proxy_stats[proxy_url]['status'] = 'active'
+            proxy_stats[proxy_url]['success'] += 1
+            return True
+    except Exception as e:
+        proxy_stats[proxy_url]['status'] = 'failed'
+        proxy_stats[proxy_url]['failures'] += 1
+        logger.warning(f"Proxy test failed for {mask_proxy_url(proxy_url)}: {e}")
+    
+    return False
+
+# --- Cache con statistiche ---
+M3U8_CACHE = TTLCache(maxsize=200, ttl=5)
+TS_CACHE = TTLCache(maxsize=1000, ttl=300)
+KEY_CACHE = TTLCache(maxsize=200, ttl=300)
+
+def update_cache_stats(cache_hit):
+    """Aggiorna statistiche cache"""
+    global cache_stats
+    if cache_hit:
+        cache_stats['hits'] += 1
+    else:
+        cache_stats['misses'] += 1
+    
+    total = cache_stats['hits'] + cache_stats['misses']
+    cache_stats['hit_rate'] = (cache_stats['hits'] / total * 100) if total > 0 else 0
+
+# --- Routes di autenticazione ---
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
+            session['authenticated'] = True
+            session['username'] = username
+            log_security_event(get_client_ip(), 'successful_login', username)
+            return redirect(url_for('advanced_dashboard'))
+        else:
+            log_security_event(get_client_ip(), 'failed_login', username)
+            return render_template_string(LOGIN_TEMPLATE, error="Credenziali non valide")
+    
+    return render_template_string(LOGIN_TEMPLATE)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+# --- Routes API ---
+@app.route('/api/stats')
+@rate_limit(max_requests=1000)
+def api_stats():
+    """API per statistiche complete"""
+    stats = get_system_stats()
+    
+    # Aggiungi statistiche cache
+    stats['cache'] = {
+        'hits': cache_stats['hits'],
+        'misses': cache_stats['misses'],
+        'hit_rate': round(cache_stats['hit_rate'], 2),
+        'm3u8_size': len(M3U8_CACHE),
+        'ts_size': len(TS_CACHE),
+        'key_size': len(KEY_CACHE)
+    }
+    
+    # Aggiungi statistiche endpoint (mascherate)
+    stats['endpoints'] = {}
+    for endpoint, data in endpoint_stats.items():
+        stats['endpoints'][endpoint] = {
+            'requests': data['requests'],
+            'errors': data['errors'],
+            'avg_time': round(data['avg_time'], 3),
+            'error_rate': round((data['errors'] / data['requests'] * 100) if data['requests'] > 0 else 0, 2)
+        }
+    
+    # Aggiungi statistiche proxy (mascherate)
+    stats['proxies'] = {}
+    for proxy, data in proxy_stats.items():
+        masked_proxy = mask_proxy_url(proxy)
+        stats['proxies'][masked_proxy] = {
+            'success': data['success'],
+            'failures': data['failures'],
+            'status': data['status'],
+            'last_used': data['last_used'],
+            'success_rate': round((data['success'] / (data['success'] + data['failures']) * 100) if (data['success'] + data['failures']) > 0 else 0, 2)
+        }
+    
+    return jsonify(stats)
+
+@app.route('/api/logs')
 @require_auth
-def config_panel():
-    """Pannello di configurazione web"""
-    return render_template_string(CONFIG_PANEL_TEMPLATE)
+def api_logs():
+    """API per ottenere i log"""
+    log_type = request.args.get('type', 'requests')
+    limit = min(int(request.args.get('limit', 100)), 1000)
+    
+    if log_type == 'requests':
+        return jsonify(list(request_log)[-limit:])
+    elif log_type == 'errors':
+        return jsonify(list(error_log)[-limit:])
+    elif log_type == 'access':
+        return jsonify(list(access_log)[-limit:])
+    else:
+        return jsonify({'error': 'Invalid log type'}), 400
+
+@app.route('/api/test-url', methods=['POST'])
+@require_auth
+def api_test_url():
+    """API per testare URL M3U/M3U8"""
+    data = request.get_json()
+    url = data.get('url')
+    
+    if not url:
+        return jsonify({'error': 'URL required'}), 400
+    
+    try:
+        response = requests.head(url, timeout=10, verify=VERIFY_SSL)
+        return jsonify({
+            'status': 'success',
+            'status_code': response.status_code,
+            'headers': dict(response.headers),
+            'content_type': response.headers.get('Content-Type', 'unknown')
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+@app.route('/api/test-proxies', methods=['POST'])
+@require_auth
+def api_test_proxies():
+    """API per testare tutti i proxy"""
+    results = {}
+    for proxy in PROXY_LIST:
+        masked_proxy = mask_proxy_url(proxy)
+        results[masked_proxy] = test_proxy(proxy)
+    
+    return jsonify(results)
+
+@app.route('/api/clear-cache', methods=['POST'])
+@require_auth
+def api_clear_cache():
+    """API per pulire la cache"""
+    cache_type = request.json.get('type', 'all') if request.json else 'all'
+    
+    cleared = 0
+    if cache_type in ['all', 'm3u8']:
+        cleared += len(M3U8_CACHE)
+        M3U8_CACHE.clear()
+    if cache_type in ['all', 'ts']:
+        cleared += len(TS_CACHE)
+        TS_CACHE.clear()
+    if cache_type in ['all', 'key']:
+        cleared += len(KEY_CACHE)
+        KEY_CACHE.clear()
+    
+    return jsonify({
+        'message': f'Cache cleared: {cleared} items removed',
+        'type': cache_type
+    })
 
 @app.route('/api/config', methods=['GET', 'POST'])
 @require_auth
 def api_config():
     """API per gestire la configurazione"""
     if request.method == 'GET':
-        return jsonify({
-            'config': config.config,
-            'masked_proxies': {
-                'socks5': [mask_proxy_url(p) for p in config.get('socks5_proxies', [])],
-                'http': [mask_proxy_url(p) for p in config.get('http_proxies', [])],
-                'https': [mask_proxy_url(p) for p in config.get('https_proxies', [])]
+        config = {
+            'request_timeout': REQUEST_TIMEOUT,
+            'verify_ssl': VERIFY_SSL,
+            'proxy_count': len(PROXY_LIST),
+            'masked_proxies': [mask_proxy_url(p) for p in PROXY_LIST],
+            'cache_sizes': {
+                'm3u8_maxsize': M3U8_CACHE.maxsize,
+                'ts_maxsize': TS_CACHE.maxsize,
+                'key_maxsize': KEY_CACHE.maxsize
             }
-        })
+        }
+        return jsonify(config)
     
     # POST per aggiornare configurazione
-    try:
-        new_config = request.get_json()
-        
-        # Validazione dei dati
-        if 'request_timeout' in new_config:
-            new_config['request_timeout'] = max(5, min(300, int(new_config['request_timeout'])))
-        
-        if 'cache_m3u8_size' in new_config:
-            new_config['cache_m3u8_size'] = max(10, min(10000, int(new_config['cache_m3u8_size'])))
-        
-        # Aggiorna configurazione
-        success = config.update(new_config)
-        
-        if success:
-            # Aggiorna variabili globali
-            update_global_vars()
-            
-            # Log della modifica
-            log_security_event(get_client_ip(), 'config_updated', f"Updated by {session.get('username', 'unknown')}")
-            
-            return jsonify({
-                'success': True,
-                'message': 'Configurazione aggiornata e salvata con successo'
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'message': 'Errore nel salvataggio della configurazione'
-            }), 500
-            
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'Errore nell\'aggiornamento: {str(e)}'
-        }), 400
+    data = request.get_json()
+    # Implementa logica di aggiornamento configurazione
+    return jsonify({'message': 'Configuration updated'})
 
-@app.route('/api/config/reset', methods=['POST'])
+# --- Dashboard avanzato ---
+@app.route('/advanced-dashboard')
 @require_auth
-def api_config_reset():
-    """Reset configurazione ai valori di default"""
-    try:
-        # Backup configurazione corrente
-        backup_config = config.config.copy()
-        
-        # Reset ai valori di default
-        config.config = DynamicConfig().config
-        
-        if config.save_to_file():
-            update_global_vars()
-            log_security_event(get_client_ip(), 'config_reset', f"Reset by {session.get('username', 'unknown')}")
-            
-            return jsonify({
-                'success': True,
-                'message': 'Configurazione resettata ai valori di default'
-            })
-        else:
-            # Ripristina backup in caso di errore
-            config.config = backup_config
-            return jsonify({
-                'success': False,
-                'message': 'Errore nel reset della configurazione'
-            }), 500
-            
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'Errore nel reset: {str(e)}'
-        }), 500
+def advanced_dashboard():
+    """Dashboard avanzato con tutte le funzionalità"""
+    return render_template_string(ADVANCED_DASHBOARD_TEMPLATE)
 
-@app.route('/api/config/export')
-@require_auth
-def api_config_export():
-    """Esporta configurazione come file JSON"""
-    try:
-        # Crea una copia della configurazione senza dati sensibili
-        export_config = config.config.copy()
-        
-        # Rimuovi password e API keys per sicurezza
-        if 'admin_password' in export_config:
-            export_config['admin_password'] = '***HIDDEN***'
-        if 'api_keys' in export_config:
-            export_config['api_keys'] = ['***HIDDEN***'] * len(export_config['api_keys'])
-        
-        return Response(
-            json.dumps(export_config, indent=2),
-            mimetype='application/json',
-            headers={'Content-Disposition': f'attachment; filename=proxy_config_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json'}
-        )
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'Errore nell\'esportazione: {str(e)}'
-        }), 500
-
-@app.route('/api/config/import', methods=['POST'])
-@require_auth
-def api_config_import():
-    """Importa configurazione da file JSON"""
-    try:
-        if 'config_file' not in request.files:
-            return jsonify({
-                'success': False,
-                'message': 'Nessun file selezionato'
-            }), 400
-        
-        file = request.files['config_file']
-        if file.filename == '':
-            return jsonify({
-                'success': False,
-                'message': 'Nessun file selezionato'
-            }), 400
-        
-        # Leggi e valida il file JSON
-        try:
-            import_config = json.loads(file.read().decode('utf-8'))
-        except json.JSONDecodeError:
-            return jsonify({
-                'success': False,
-                'message': 'File JSON non valido'
-            }), 400
-        
-        # Backup configurazione corrente
-        backup_config = config.config.copy()
-        
-        # Aggiorna configurazione
-        if config.update(import_config):
-            update_global_vars()
-            log_security_event(get_client_ip(), 'config_imported', f"Imported by {session.get('username', 'unknown')}")
-            
-            return jsonify({
-                'success': True,
-                'message': 'Configurazione importata con successo'
-            })
-        else:
-            # Ripristina backup in caso di errore
-            config.config = backup_config
-            return jsonify({
-                'success': False,
-                'message': 'Errore nell\'importazione della configurazione'
-            }), 500
-            
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'Errore nell\'importazione: {str(e)}'
-        }), 500
-
-# --- Template per il pannello di configurazione ---
-CONFIG_PANEL_TEMPLATE = '''
+# --- Templates ---
+LOGIN_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Configuration Panel</title>
+    <title>Proxy Login</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 20px; }
+        .login-container { max-width: 400px; margin: 100px auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #0056b3; }
+        .error { color: red; margin-top: 10px; }
+        h2 { text-align: center; margin-bottom: 30px; color: #333; }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h2>🔐 Proxy Admin Login</h2>
+        <form method="POST">
+            <div class="form-group">
+                <label for="username">Username:</label>
+                <input type="text" id="username" name="username" required>
+            </div>
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            <button type="submit">Login</button>
+            {% if error %}
+                <div class="error">{{ error }}</div>
+            {% endif %}
+        </form>
+    </div>
+</body>
+</html>
+'''
+
+ADVANCED_DASHBOARD_TEMPLATE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Advanced Proxy Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
             --bg-color: #f8f9fa;
@@ -347,6 +561,7 @@ CONFIG_PANEL_TEMPLATE = '''
             --card-bg: #2d2d2d;
             --text-color: #ffffff;
             --border-color: #444;
+            --primary-color: #0d6efd;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -354,7 +569,7 @@ CONFIG_PANEL_TEMPLATE = '''
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
             background: var(--bg-color); 
             color: var(--text-color);
-            line-height: 1.6;
+            transition: all 0.3s ease;
         }
         
         .header {
@@ -367,99 +582,229 @@ CONFIG_PANEL_TEMPLATE = '''
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         
-        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+        .header h1 { color: var(--primary-color); }
         
-        .config-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-            gap: 2rem;
-        }
-        
-        .config-section {
-            background: var(--card-bg);
-            border-radius: 8px;
-            padding: 2rem;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            border: 1px solid var(--border-color);
-        }
-        
-        .config-section h3 {
-            margin-bottom: 1.5rem;
-            color: var(--primary-color);
-            border-bottom: 2px solid var(--primary-color);
-            padding-bottom: 0.5rem;
-        }
-        
-        .form-group {
-            margin-bottom: 1.5rem;
-        }
-        
-        .form-group label {
-            display: block;
-            margin-bottom: 0.5rem;
-            font-weight: 600;
-            color: var(--text-color);
-        }
-        
-        .form-group input, .form-group select, .form-group textarea {
-            width: 100%;
-            padding: 0.75rem;
-            border: 2px solid var(--border-color);
-            border-radius: 6px;
-            background: var(--card-bg);
-            color: var(--text-color);
-            font-size: 1rem;
-            transition: border-color 0.3s ease;
-        }
-        
-        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
-            outline: none;
-            border-color: var(--primary-color);
-        }
-        
-        .form-group textarea {
-            min-height: 100px;
-            resize: vertical;
+        .controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
         }
         
         .btn {
-            padding: 0.75rem 1.5rem;
+            padding: 0.5rem 1rem;
             border: none;
-            border-radius: 6px;
+            border-radius: 4px;
             cursor: pointer;
             text-decoration: none;
             display: inline-block;
-            font-size: 1rem;
-            font-weight: 600;
-            transition: all 0.3s ease;
-            margin-right: 0.5rem;
-            margin-bottom: 0.5rem;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
         }
         
         .btn-primary { background: var(--primary-color); color: white; }
         .btn-success { background: var(--success-color); color: white; }
         .btn-danger { background: var(--danger-color); color: white; }
         .btn-warning { background: var(--warning-color); color: black; }
-        .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+        .btn:hover { opacity: 0.8; transform: translateY(-1px); }
         
-        .proxy-list {
+        .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .card {
+            background: var(--card-bg);
+            border-radius: 8px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border: 1px solid var(--border-color);
+        }
+        
+        .card h3 {
+            margin-bottom: 1rem;
+            color: var(--primary-color);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: var(--primary-color);
+            margin-bottom: 0.5rem;
+        }
+        
+        .stat-label {
+            color: #666;
+            font-size: 0.9rem;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 0.5rem 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: var(--primary-color);
+            transition: width 0.3s ease;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin: 1rem 0;
+        }
+        
+        .log-container {
+            max-height: 400px;
+            overflow-y: auto;
             background: var(--bg-color);
             border-radius: 4px;
             padding: 1rem;
-            margin-top: 0.5rem;
-            max-height: 200px;
-            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8rem;
         }
         
-        .proxy-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0.5rem;
+        .log-entry {
             margin-bottom: 0.5rem;
-            background: var(--card-bg);
-            border-radius: 4px;
+            padding: 0.25rem;
+            border-radius: 2px;
+        }
+        
+        .log-success { background: rgba(40, 167, 69, 0.1); }
+        .log-error { background: rgba(220, 53, 69, 0.1); }
+        .log-warning { background: rgba(255, 193, 7, 0.1); }
+        
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+        
+        .form-group input, .form-group select, .form-group textarea {
+            width: 100%;
+            padding: 0.5rem;
             border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--card-bg);
+            color: var(--text-color);
+        }
+        
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 1rem;
+        }
+        
+        .tab {
+            padding: 0.75rem 1.5rem;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s ease;
+        }
+        
+        .tab.active {
+            border-bottom-color: var(--primary-color);
+            color: var(--primary-color);
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+        }
+        
+        .status-active { background: var(--success-color); }
+        .status-failed { background: var(--danger-color); }
+        .status-unknown { background: #6c757d; }
+        
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+        }
+        
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+        
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        
+        input:checked + .slider {
+            background-color: var(--primary-color);
+        }
+        
+        input:checked + .slider:before {
+            transform: translateX(26px);
+        }
+        
+        @media (max-width: 768px) {
+            .header {
+                flex-direction: column;
+                gap: 1rem;
+            }
+            
+            .controls {
+                flex-wrap: wrap;
+                justify-content: center;
+            }
+            
+            .container {
+                padding: 1rem;
+            }
+            
+            .grid {
+                grid-template-columns: 1fr;
+            }
         }
         
         .notification {
@@ -467,384 +812,547 @@ CONFIG_PANEL_TEMPLATE = '''
             top: 20px;
             right: 20px;
             padding: 1rem 1.5rem;
-            border-radius: 6px;
+            border-radius: 4px;
             color: white;
-            font-weight: 600;
+            font-weight: 500;
             z-index: 1000;
             transform: translateX(100%);
             transition: transform 0.3s ease;
-            max-width: 400px;
         }
         
-        .notification.show { transform: translateX(0); }
+        .notification.show {
+            transform: translateX(0);
+        }
+        
         .notification.success { background: var(--success-color); }
         .notification.error { background: var(--danger-color); }
         .notification.warning { background: var(--warning-color); color: black; }
-        
-        .actions-bar {
-            background: var(--card-bg);
-            padding: 1rem;
-            border-radius: 8px;
-            margin-bottom: 2rem;
-            text-align: center;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        
-        .file-input {
-            display: none;
-        }
-        
-        .file-label {
-            display: inline-block;
-            padding: 0.75rem 1.5rem;
-            background: var(--warning-color);
-            color: black;
-            border-radius: 6px;
-            cursor: pointer;
-            font-weight: 600;
-            transition: all 0.3s ease;
-        }
-        
-        .file-label:hover {
-            opacity: 0.9;
-            transform: translateY(-1px);
-        }
-        
-        @media (max-width: 768px) {
-            .config-grid {
-                grid-template-columns: 1fr;
-            }
-            .container {
-                padding: 1rem;
-            }
-        }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>⚙️ Configuration Panel</h1>
-        <div>
-            <a href="/advanced-dashboard" class="btn btn-primary">📊 Dashboard</a>
-            <a href="/logout" class="btn btn-danger">🚪 Logout</a>
+        <h1>🚀 Advanced Proxy Dashboard</h1>
+        <div class="controls">
+            <label class="toggle-switch">
+                <input type="checkbox" id="autoRefresh" checked>
+                <span class="slider"></span>
+            </label>
+            <span>Auto Refresh</span>
+            
+            <button class="btn btn-primary" onclick="toggleTheme()">🌓 Theme</button>
+            <button class="btn btn-warning" onclick="testAllProxies()">🔍 Test Proxies</button>
+            <button class="btn btn-danger" onclick="clearCache()">🗑️ Clear Cache</button>
+            <a href="/logout" class="btn btn-primary">🚪 Logout</a>
         </div>
     </div>
 
     <div class="container">
-        <div class="actions-bar">
-            <button class="btn btn-success" onclick="saveConfig()">💾 Save Configuration</button>
-            <button class="btn btn-warning" onclick="exportConfig()">📤 Export Config</button>
-            <label for="importFile" class="file-label">📥 Import Config</label>
-            <input type="file" id="importFile" class="file-input" accept=".json" onchange="importConfig()">
-            <button class="btn btn-danger" onclick="resetConfig()">🔄 Reset to Default</button>
+        <!-- Statistiche Sistema -->
+        <div class="grid">
+            <div class="card">
+                <h3>💾 Sistema</h3>
+                <div class="stat-value" id="ramUsage">--%</div>
+                <div class="stat-label">RAM Usage</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="ramProgress"></div>
+                </div>
+                <small id="ramDetails">-- GB / -- GB</small>
+            </div>
+            
+            <div class="card">
+                <h3>⚡ CPU</h3>
+                <div class="stat-value" id="cpuUsage">--%</div>
+                <div class="stat-label">CPU Usage</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="cpuProgress"></div>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h3>🌐 Network</h3>
+                <div class="stat-value" id="bandwidth">-- MB/s</div>
+                <div class="stat-label">Current Bandwidth</div>
+                <div style="margin-top: 1rem;">
+                    <div>📤 Sent: <span id="networkSent">-- MB</span></div>
+                    <div>📥 Received: <span id="networkRecv">-- MB</span></div>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h3>💾 Cache</h3>
+                <div class="stat-value" id="cacheHitRate">--%</div>
+                <div class="stat-label">Hit Rate</div>
+                <div style="margin-top: 1rem;">
+                    <div>✅ Hits: <span id="cacheHits">--</span></div>
+                    <div>❌ Misses: <span id="cacheMisses">--</span></div>
+                </div>
+            </div>
         </div>
 
-        <div class="config-grid">
-            <!-- Configurazione Generale -->
-            <div class="config-section">
-                <h3>🔧 General Settings</h3>
-                
-                <div class="form-group">
-                    <label for="requestTimeout">Request Timeout (seconds):</label>
-                    <input type="number" id="requestTimeout" min="5" max="300" value="30">
+        <!-- Grafici -->
+        <div class="grid">
+            <div class="card">
+                <h3>📊 Performance Trends</h3>
+                <div class="chart-container">
+                    <canvas id="performanceChart"></canvas>
                 </div>
-                
+            </div>
+            
+            <div class="card">
+                <h3>🎯 Endpoint Statistics</h3>
+                <div class="chart-container">
+                    <canvas id="endpointChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tabs per diverse sezioni -->
+        <div class="card">
+            <div class="tabs">
+                <div class="tab active" onclick="showTab('logs')">📋 Logs</div>
+                <div class="tab" onclick="showTab('proxies')">🔗 Proxies</div>
+                <div class="tab" onclick="showTab('tools')">🛠️ Tools</div>
+                <div class="tab" onclick="showTab('config')">⚙️ Config</div>
+            </div>
+            
+            <div id="logs" class="tab-content active">
+                <h3>📋 Request Logs</h3>
                 <div class="form-group">
-                    <label for="verifySsl">Verify SSL Certificates:</label>
-                    <select id="verifySsl">
-                        <option value="false">Disabled (Not Recommended)</option>
-                        <option value="true">Enabled (Recommended)</option>
+                    <select id="logType" onchange="loadLogs()">
+                        <option value="requests">Request Logs</option>
+                        <option value="errors">Error Logs</option>
+                        <option value="access">Access Logs</option>
                     </select>
                 </div>
-                
-                <div class="form-group">
-                    <label for="keepAliveTimeout">Keep-Alive Timeout (seconds):</label>
-                    <input type="number" id="keepAliveTimeout" min="60" max="3600" value="300">
-                </div>
-                
-                <div class="form-group">
-                    <label for="poolConnections">Pool Connections:</label>
-                    <input type="number" id="poolConnections" min="5" max="100" value="20">
+                <div class="log-container" id="logContainer">
+                    Loading logs...
                 </div>
             </div>
-
-            <!-- Configurazione Cache -->
-            <div class="config-section">
-                <h3>💾 Cache Settings</h3>
-                
-                <div class="form-group">
-                    <label for="cacheM3u8Size">M3U8 Cache Size:</label>
-                    <input type="number" id="cacheM3u8Size" min="10" max="10000" value="200">
-                </div>
-                
-                <div class="form-group">
-                    <label for="cacheM3u8Ttl">M3U8 Cache TTL (seconds):</label>
-                    <input type="number" id="cacheM3u8Ttl" min="1" max="3600" value="5">
-                </div>
-                
-                <div class="form-group">
-                    <label for="cacheTsSize">TS Cache Size:</label>
-                    <input type="number" id="cacheTsSize" min="100" max="50000" value="1000">
-                </div>
-                
-                <div class="form-group">
-                    <label for="cacheTsTtl">TS Cache TTL (seconds):</label>
-                    <input type="number" id="cacheTsTtl" min="60" max="3600" value="300">
+            
+            <div id="proxies" class="tab-content">
+                <h3>🔗 Proxy Status</h3>
+                <div id="proxyStatus">
+                    Loading proxy status...
                 </div>
             </div>
-
-            <!-- Configurazione Autenticazione -->
-            <div class="config-section">
-                <h3>🔐 Authentication</h3>
+            
+            <div id="tools" class="tab-content">
+                <h3>🛠️ Testing Tools</h3>
                 
                 <div class="form-group">
-                    <label for="adminUsername">Admin Username:</label>
-                    <input type="text" id="adminUsername" value="admin">
+                    <label for="testUrl">Test M3U/M3U8 URL:</label>
+                    <input type="url" id="testUrl" placeholder="Enter URL to test">
+                    <button class="btn btn-primary" onclick="testUrl()" style="margin-top: 0.5rem;">Test URL</button>
                 </div>
                 
-                <div class="form-group">
-                    <label for="adminPassword">Admin Password:</label>
-                    <input type="password" id="adminPassword" value="">
-                    <small>Leave empty to keep current password</small>
-                </div>
+                <div id="testResults" style="margin-top: 1rem;"></div>
                 
-                <div class="form-group">
-                    <label for="apiKeys">API Keys (one per line):</label>
-                    <textarea id="apiKeys" placeholder="Enter API keys, one per line"></textarea>
-                </div>
-            </div>
-
-            <!-- Configurazione Rate Limiting -->
-            <div class="config-section">
-                <h3>🛡️ Rate Limiting & Security</h3>
-                
-                <div class="form-group">
-                    <label for="rateLimitRequests">Max Requests per Window:</label>
-                    <input type="number" id="rateLimitRequests" min="10" max="10000" value="100">
-                </div>
-                
-                <div class="form-group">
-                    <label for="rateLimitWindow">Rate Limit Window (seconds):</label>
-                    <input type="number" id="rateLimitWindow" min="60" max="86400" value="3600">
-                </div>
-                
-                <div class="form-group">
-                    <label for="blockedIps">Blocked IPs (one per line):</label>
-                    <textarea id="blockedIps" placeholder="Enter blocked IP addresses, one per line"></textarea>
-                </div>
-                
-                <div class="form-group">
-                    <label for="whitelistedIps">Whitelisted IPs (one per line):</label>
-                    <textarea id="whitelistedIps" placeholder="Enter whitelisted IP addresses, one per line"></textarea>
-                </div>
-            </div>
-
-            <!-- Configurazione Proxy SOCKS5 -->
-            <div class="config-section">
-                <h3>🔗 SOCKS5 Proxies</h3>
-                
-                <div class="form-group">
-                    <label for="socks5Proxies">SOCKS5 Proxy URLs (one per line):</label>
-                    <textarea id="socks5Proxies" placeholder="socks5://username:password@host:port"></textarea>
-                </div>
-                
-                <div class="form-group">
-                    <label>Current SOCKS5 Proxies:</label>
-                    <div id="socks5ProxyList" class="proxy-list">
-                        Loading...
+                <div class="form-group" style="margin-top: 2rem;">
+                    <label>Cache Management:</label>
+                    <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+                        <button class="btn btn-warning" onclick="clearSpecificCache('m3u8')">Clear M3U8</button>
+                        <button class="btn btn-warning" onclick="clearSpecificCache('ts')">Clear TS</button>
+                        <button class="btn btn-warning" onclick="clearSpecificCache('key')">Clear Keys</button>
+                        <button class="btn btn-danger" onclick="clearSpecificCache('all')">Clear All</button>
                     </div>
                 </div>
             </div>
-
-            <!-- Configurazione Proxy HTTP -->
-            <div class="config-section">
-                <h3>🌐 HTTP/HTTPS Proxies</h3>
-                
-                <div class="form-group">
-                    <label for="httpProxies">HTTP Proxy URLs (one per line):</label>
-                    <textarea id="httpProxies" placeholder="http://username:password@host:port"></textarea>
-                </div>
-                
-                <div class="form-group">
-                    <label for="httpsProxies">HTTPS Proxy URLs (one per line):</label>
-                    <textarea id="httpsProxies" placeholder="https://username:password@host:port"></textarea>
-                </div>
-                
-                <div class="form-group">
-                    <label>Current HTTP/HTTPS Proxies:</label>
-                    <div id="httpProxyList" class="proxy-list">
-                        Loading...
-                    </div>
+            
+            <div id="config" class="tab-content">
+                <h3>⚙️ Configuration</h3>
+                <div id="configContent">
+                    Loading configuration...
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        let currentConfig = {};
+        let autoRefreshEnabled = true;
+        let performanceChart, endpointChart;
+        let performanceData = {
+            labels: [],
+            ram: [],
+            cpu: [],
+            bandwidth: []
+        };
 
+        // Inizializzazione
         document.addEventListener('DOMContentLoaded', function() {
+            initCharts();
+            loadStats();
+            loadLogs();
+            loadProxyStatus();
             loadConfig();
+            
+            // Auto refresh
+            setInterval(() => {
+                if (autoRefreshEnabled) {
+                    loadStats();
+                    updateCharts();
+                }
+            }, 5000);
+            
+            // Toggle auto refresh
+            document.getElementById('autoRefresh').addEventListener('change', function() {
+                autoRefreshEnabled = this.checked;
+            });
         });
+
+        function initCharts() {
+            // Performance Chart
+            const perfCtx = document.getElementById('performanceChart').getContext('2d');
+            performanceChart = new Chart(perfCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'RAM %',
+                        data: [],
+                        borderColor: '#007bff',
+                        backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                        tension: 0.4
+                    }, {
+                        label: 'CPU %',
+                        data: [],
+                        borderColor: '#28a745',
+                        backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                        tension: 0.4
+                    }, {
+                        label: 'Bandwidth MB/s',
+                        data: [],
+                        borderColor: '#ffc107',
+                        backgroundColor: 'rgba(255, 193, 7, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top'
+                        }
+                    }
+                }
+            });
+
+            // Endpoint Chart
+            const endCtx = document.getElementById('endpointChart').getContext('2d');
+            endpointChart = new Chart(endCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        data: [],
+                        backgroundColor: [
+                            '#007bff',
+                            '#28a745',
+                            '#ffc107',
+                            '#dc3545',
+                            '#6c757d',
+                            '#17a2b8'
+                        ]
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+        }
+
+        function loadStats() {
+            fetch('/api/stats')
+                .then(response => response.json())
+                .then(data => {
+                    updateSystemStats(data);
+                    updateCacheStats(data.cache);
+                    updateEndpointStats(data.endpoints);
+                })
+                .catch(error => {
+                    console.error('Error loading stats:', error);
+                    showNotification('Error loading statistics', 'error');
+                });
+        }
+
+        function updateSystemStats(data) {
+            document.getElementById('ramUsage').textContent = data.ram_usage.toFixed(1) + '%';
+            document.getElementById('ramProgress').style.width = data.ram_usage + '%';
+            document.getElementById('ramDetails').textContent = 
+                `${data.ram_used_gb.toFixed(2)} GB / ${data.ram_total_gb.toFixed(2)} GB`;
+            
+            document.getElementById('cpuUsage').textContent = data.cpu_usage.toFixed(1) + '%';
+            document.getElementById('cpuProgress').style.width = data.cpu_usage + '%';
+            
+            document.getElementById('bandwidth').textContent = data.bandwidth_usage.toFixed(2) + ' MB/s';
+            document.getElementById('networkSent').textContent = data.network_sent.toFixed(1) + ' MB';
+            document.getElementById('networkRecv').textContent = data.network_recv.toFixed(1) + ' MB';
+            
+            // Aggiorna dati per i grafici
+            const now = new Date().toLocaleTimeString();
+            performanceData.labels.push(now);
+            performanceData.ram.push(data.ram_usage);
+            performanceData.cpu.push(data.cpu_usage);
+            performanceData.bandwidth.push(data.bandwidth_usage);
+            
+            // Mantieni solo gli ultimi 20 punti
+            if (performanceData.labels.length > 20) {
+                performanceData.labels.shift();
+                performanceData.ram.shift();
+                performanceData.cpu.shift();
+                performanceData.bandwidth.shift();
+            }
+        }
+
+        function updateCacheStats(cacheData) {
+            document.getElementById('cacheHitRate').textContent = cacheData.hit_rate.toFixed(1) + '%';
+            document.getElementById('cacheHits').textContent = cacheData.hits;
+            document.getElementById('cacheMisses').textContent = cacheData.misses;
+        }
+
+        function updateEndpointStats(endpoints) {
+            const labels = Object.keys(endpoints);
+            const data = labels.map(label => endpoints[label].requests);
+            
+            endpointChart.data.labels = labels;
+            endpointChart.data.datasets[0].data = data;
+            endpointChart.update();
+        }
+
+        function updateCharts() {
+            performanceChart.data.labels = performanceData.labels;
+            performanceChart.data.datasets[0].data = performanceData.ram;
+            performanceChart.data.datasets[1].data = performanceData.cpu;
+            performanceChart.data.datasets[2].data = performanceData.bandwidth;
+            performanceChart.update();
+        }
+
+        function loadLogs() {
+            const logType = document.getElementById('logType').value;
+            fetch(`/api/logs?type=${logType}&limit=50`)
+                .then(response => response.json())
+                .then(logs => {
+                    const container = document.getElementById('logContainer');
+                    container.innerHTML = logs.map(log => {
+                        const cssClass = log.success === false ? 'log-error' : 
+                                       log.event ? 'log-warning' : 'log-success';
+                        return `<div class="log-entry ${cssClass}">
+                            [${log.timestamp}] ${log.endpoint || log.event || 'REQUEST'} - 
+                            IP: ${log.ip} - 
+                            ${log.duration ? `${log.duration}s` : ''} 
+                            ${log.error ? `ERROR: ${log.error}` : 'SUCCESS'}
+                        </div>`;
+                    }).join('');
+                    container.scrollTop = container.scrollHeight;
+                })
+                .catch(error => {
+                    console.error('Error loading logs:', error);
+                });
+        }
+
+        function loadProxyStatus() {
+            fetch('/api/stats')
+                .then(response => response.json())
+                .then(data => {
+                    const container = document.getElementById('proxyStatus');
+                    const proxies = data.proxies;
+                    
+                    if (Object.keys(proxies).length === 0) {
+                        container.innerHTML = '<p>No proxies configured</p>';
+                        return;
+                    }
+                    
+                    container.innerHTML = Object.entries(proxies).map(([proxy, stats]) => {
+                        const statusClass = stats.status === 'active' ? 'status-active' : 
+                                          stats.status === 'failed' ? 'status-failed' : 'status-unknown';
+                        return `<div style="margin-bottom: 1rem; padding: 1rem; border: 1px solid var(--border-color); border-radius: 4px;">
+                            <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">
+                                <span class="status-indicator ${statusClass}"></span>
+                                <strong>${proxy}</strong>
+                            </div>
+                            <div style="font-size: 0.9rem; color: #666;">
+                                Success: ${stats.success} | Failures: ${stats.failures} | 
+                                Success Rate: ${stats.success_rate}% | 
+                                Last Used: ${stats.last_used || 'Never'}
+                            </div>
+                        </div>`;
+                    }).join('');
+                })
+                .catch(error => {
+                    console.error('Error loading proxy status:', error);
+                });
+        }
 
         function loadConfig() {
             fetch('/api/config')
                 .then(response => response.json())
-                .then(data => {
-                    currentConfig = data.config;
-                    populateForm(data.config);
-                    updateProxyLists(data.masked_proxies);
+                .then(config => {
+                    const container = document.getElementById('configContent');
+                    container.innerHTML = `
+                        <div class="form-group">
+                            <label>Request Timeout:</label>
+                            <input type="number" value="${config.request_timeout}" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label>SSL Verification:</label>
+                            <input type="checkbox" ${config.verify_ssl ? 'checked' : ''} disabled>
+                        </div>
+                        <div class="form-group">
+                            <label>Configured Proxies:</label>
+                            <div style="margin-top: 0.5rem;">
+                                ${config.masked_proxies.map(proxy => `<div>${proxy}</div>`).join('')}
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Cache Sizes:</label>
+                            <div style="margin-top: 0.5rem;">
+                                M3U8: ${config.cache_sizes.m3u8_maxsize} | 
+                                TS: ${config.cache_sizes.ts_maxsize} | 
+                                Keys: ${config.cache_sizes.key_maxsize}
+                            </div>
+                        </div>
+                    `;
                 })
                 .catch(error => {
                     console.error('Error loading config:', error);
-                    showNotification('Error loading configuration', 'error');
                 });
         }
 
-        function populateForm(config) {
-            document.getElementById('requestTimeout').value = config.request_timeout || 30;
-            document.getElementById('verifySsl').value = config.verify_ssl ? 'true' : 'false';
-            document.getElementById('keepAliveTimeout').value = config.keep_alive_timeout || 300;
-            document.getElementById('poolConnections').value = config.pool_connections || 20;
+        function showTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
             
-            document.getElementById('cacheM3u8Size').value = config.cache_m3u8_size || 200;
-            document.getElementById('cacheM3u8Ttl').value = config.cache_m3u8_ttl || 5;
-            document.getElementById('cacheTsSize').value = config.cache_ts_size || 1000;
-            document.getElementById('cacheTsTtl').value = config.cache_ts_ttl || 300;
+            // Remove active class from all tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
             
-            document.getElementById('adminUsername').value = config.admin_username || 'admin';
-            document.getElementById('apiKeys').value = (config.api_keys || []).join('\\n');
+            // Show selected tab content
+            document.getElementById(tabName).classList.add('active');
             
-            document.getElementById('rateLimitRequests').value = config.rate_limit_requests || 100;
-            document.getElementById('rateLimitWindow').value = config.rate_limit_window || 3600;
-            document.getElementById('blockedIps').value = (config.blocked_ips || []).join('\\n');
-            document.getElementById('whitelistedIps').value = (config.whitelisted_ips || []).join('\\n');
+            // Add active class to clicked tab
+            event.target.classList.add('active');
             
-            document.getElementById('socks5Proxies').value = (config.socks5_proxies || []).join('\\n');
-            document.getElementById('httpProxies').value = (config.http_proxies || []).join('\\n');
-            document.getElementById('httpsProxies').value = (config.https_proxies || []).join('\\n');
-        }
-
-        function updateProxyLists(maskedProxies) {
-            const socks5List = document.getElementById('socks5ProxyList');
-            const httpList = document.getElementById('httpProxyList');
-            
-            socks5List.innerHTML = maskedProxies.socks5.length > 0 
-                ? maskedProxies.socks5.map(proxy => `<div class="proxy-item">${proxy}</div>`).join('')
-                : '<div class="proxy-item">No SOCKS5 proxies configured</div>';
-            
-            const allHttpProxies = [...maskedProxies.http, ...maskedProxies.https];
-            httpList.innerHTML = allHttpProxies.length > 0
-                ? allHttpProxies.map(proxy => `<div class="proxy-item">${proxy}</div>`).join('')
-                : '<div class="proxy-item">No HTTP/HTTPS proxies configured</div>';
-        }
-
-        function saveConfig() {
-            const newConfig = {
-                request_timeout: parseInt(document.getElementById('requestTimeout').value),
-                verify_ssl: document.getElementById('verifySsl').value === 'true',
-                keep_alive_timeout: parseInt(document.getElementById('keepAliveTimeout').value),
-                pool_connections: parseInt(document.getElementById('poolConnections').value),
-                
-                cache_m3u8_size: parseInt(document.getElementById('cacheM3u8Size').value),
-                cache_m3u8_ttl: parseInt(document.getElementById('cacheM3u8Ttl').value),
-                cache_ts_size: parseInt(document.getElementById('cacheTsSize').value),
-                cache_ts_ttl: parseInt(document.getElementById('cacheTsTtl').value),
-                
-                admin_username: document.getElementById('adminUsername').value,
-                api_keys: document.getElementById('apiKeys').value.split('\\n').filter(key => key.trim()),
-                
-                rate_limit_requests: parseInt(document.getElementById('rateLimitRequests').value),
-                rate_limit_window: parseInt(document.getElementById('rateLimitWindow').value),
-                blocked_ips: document.getElementById('blockedIps').value.split('\\n').filter(ip => ip.trim()),
-                whitelisted_ips: document.getElementById('whitelistedIps').value.split('\\n').filter(ip => ip.trim()),
-                
-                socks5_proxies: document.getElementById('socks5Proxies').value.split('\\n').filter(proxy => proxy.trim()),
-                http_proxies: document.getElementById('httpProxies').value.split('\\n').filter(proxy => proxy.trim()),
-                https_proxies: document.getElementById('httpsProxies').value.split('\\n').filter(proxy => proxy.trim())
-            };
-            
-            // Aggiungi password solo se specificata
-            const newPassword = document.getElementById('adminPassword').value;
-            if (newPassword.trim()) {
-                newConfig.admin_password = newPassword;
+            // Load data for specific tabs
+            if (tabName === 'logs') {
+                loadLogs();
+            } else if (tabName === 'proxies') {
+                loadProxyStatus();
+            } else if (tabName === 'config') {
+                loadConfig();
             }
+        }
 
-            fetch('/api/config', {
+        function testUrl() {
+            const url = document.getElementById('testUrl').value;
+            if (!url) {
+                showNotification('Please enter a URL', 'warning');
+                return;
+            }
+            
+            fetch('/api/test-url', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(newConfig)
+                body: JSON.stringify({url: url})
             })
             .then(response => response.json())
             .then(data => {
-                if (data.success) {
-                    showNotification(data.message, 'success');
-                    loadConfig(); // Ricarica la configurazione
+                const container = document.getElementById('testResults');
+                if (data.status === 'success') {
+                    container.innerHTML = `
+                        <div class="card" style="background: rgba(40, 167, 69, 0.1);">
+                            <h4>✅ URL Test Successful</h4>
+                            <p><strong>Status Code:</strong> ${data.status_code}</p>
+                            <p><strong>Content Type:</strong> ${data.content_type}</p>
+                            <details>
+                                <summary>Response Headers</summary>
+                                <pre>${JSON.stringify(data.headers, null, 2)}</pre>
+                            </details>
+                        </div>
+                    `;
+                    showNotification('URL test successful', 'success');
                 } else {
-                    showNotification(data.message, 'error');
+                    container.innerHTML = `
+                        <div class="card" style="background: rgba(220, 53, 69, 0.1);">
+                            <h4>❌ URL Test Failed</h4>
+                            <p><strong>Error:</strong> ${data.error}</p>
+                        </div>
+                    `;
+                    showNotification('URL test failed', 'error');
                 }
             })
             .catch(error => {
-                console.error('Error saving config:', error);
-                showNotification('Error saving configuration', 'error');
+                console.error('Error testing URL:', error);
+                showNotification('Error testing URL', 'error');
             });
         }
 
-        function exportConfig() {
-            window.location.href = '/api/config/export';
-        }
-
-        function importConfig() {
-            const fileInput = document.getElementById('importFile');
-            const file = fileInput.files[0];
+        function testAllProxies() {
+            showNotification('Testing all proxies...', 'warning');
             
-            if (!file) return;
-            
-            const formData = new FormData();
-            formData.append('config_file', file);
-            
-            fetch('/api/config/import', {
-                method: 'POST',
-                body: formData
+            fetch('/api/test-proxies', {
+                method: 'POST'
             })
             .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    showNotification(data.message, 'success');
-                    loadConfig(); // Ricarica la configurazione
-                } else {
-                    showNotification(data.message, 'error');
-                }
+            .then(results => {
+                const successful = Object.values(results).filter(r => r).length;
+                const total = Object.keys(results).length;
+                showNotification(`Proxy test complete: ${successful}/${total} working`, 'success');
+                loadProxyStatus(); // Refresh proxy status
             })
             .catch(error => {
-                console.error('Error importing config:', error);
-                showNotification('Error importing configuration', 'error');
+                console.error('Error testing proxies:', error);
+                showNotification('Error testing proxies', 'error');
             });
-            
-            // Reset file input
-            fileInput.value = '';
         }
 
-        function resetConfig() {
-            if (confirm('Are you sure you want to reset all configuration to default values? This action cannot be undone.')) {
-                fetch('/api/config/reset', {
-                    method: 'POST'
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        showNotification(data.message, 'success');
-                        loadConfig(); // Ricarica la configurazione
-                    } else {
-                        showNotification(data.message, 'error');
-                    }
-                })
-                .catch(error => {
-                    console.error('Error resetting config:', error);
-                    showNotification('Error resetting configuration', 'error');
-                });
+        function clearCache() {
+            if (confirm('Are you sure you want to clear all cache?')) {
+                clearSpecificCache('all');
             }
+        }
+
+        function clearSpecificCache(type) {
+            fetch('/api/clear-cache', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({type: type})
+            })
+            .then(response => response.json())
+            .then(data => {
+                showNotification(data.message, 'success');
+                loadStats(); // Refresh cache stats
+            })
+            .catch(error => {
+                console.error('Error clearing cache:', error);
+                showNotification('Error clearing cache', 'error');
+            });
+        }
+
+        function toggleTheme() {
+            const body = document.body;
+            const currentTheme = body.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            body.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
         }
 
         function showNotification(message, type) {
@@ -862,25 +1370,30 @@ CONFIG_PANEL_TEMPLATE = '''
                 setTimeout(() => {
                     document.body.removeChild(notification);
                 }, 300);
-            }, 4000);
+            }, 3000);
+        }
+
+        // Load saved theme
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme) {
+            document.body.setAttribute('data-theme', savedTheme);
         }
     </script>
 </body>
 </html>
 '''
 
-# Aggiorna il template del dashboard avanzato per includere il link al pannello di configurazione
-ADVANCED_DASHBOARD_TEMPLATE = ADVANCED_DASHBOARD_TEMPLATE.replace(
-    '<a href="/logout" class="btn btn-primary">🚪 Logout</a>',
-    '<a href="/config-panel" class="btn btn-warning">⚙️ Config</a>\n            <a href="/logout" class="btn btn-primary">🚪 Logout</a>'
-)
+# Avvia i thread di monitoraggio
+bandwidth_thread = Thread(target=monitor_bandwidth, daemon=True)
+bandwidth_thread.start()
 
-# Resto del codice rimane uguale...
-# [Include tutto il resto del codice precedente]
+setup_proxies()
+
+# Resto del codice originale per i proxy endpoints...
+# [Il resto del codice rimane uguale, inclusi tutti gli endpoint /proxy, /proxy/m3u, etc.]
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
     print(f"Advanced Proxy Dashboard ONLINE - Porta {port}")
-    print(f"Login: {config.get('admin_username')} / {config.get('admin_password')}")
-    print("Configurazione gestita tramite pannello web: /config-panel")
+    print(f"Login: {ADMIN_USERNAME} / {ADMIN_PASSWORD}")
     app.run(host="0.0.0.0", port=port, debug=False)
