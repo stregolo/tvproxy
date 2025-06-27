@@ -60,43 +60,53 @@ PROXY_REFRESH_INTERVAL = 3600  # 1 ora
 LAST_PROXY_FETCH = 0
 
 def download_proxies_from_github():
-    """Scarica la lista di proxy HTTP da GitHub"""
+    """Scarica la lista di proxy HTTP da GitHub con fonti multiple"""
     global DOWNLOADED_PROXIES, LAST_PROXY_FETCH
     
     current_time = time.time()
     if DOWNLOADED_PROXIES and (current_time - LAST_PROXY_FETCH < PROXY_REFRESH_INTERVAL):
         return DOWNLOADED_PROXIES
     
-    try:
-        print("Scaricando proxy da GitHub...")
-        proxy_url = 'https://raw.githubusercontent.com/nzo66/tvproxy/refs/heads/main/proxy_http.txt'
-        
-        response = requests.get(proxy_url, timeout=30, verify=VERIFY_SSL)
-        response.raise_for_status()
-        
-        proxy_lines = response.text.strip().split('\n')
-        proxies = []
-        
-        for line in proxy_lines:
-            line = line.strip()
-            if line and not line.startswith('#'):
-                # Formato IP:PORT
-                if ':' in line:
-                    ip_port = line.split(':')
-                    if len(ip_port) == 2:
-                        ip, port = ip_port
-                        proxy_url = f"http://{ip}:{port}"
-                        proxies.append(proxy_url)
-        
-        DOWNLOADED_PROXIES = proxies
-        LAST_PROXY_FETCH = current_time
-        
-        print(f"Scaricati {len(proxies)} proxy da GitHub")
-        return proxies
-        
-    except Exception as e:
-        print(f"Errore nel download dei proxy da GitHub: {e}")
-        return []
+    proxy_sources = [
+        'https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt',
+        'https://raw.githubusercontent.com/nzo66/tvproxy/refs/heads/main/proxy_http.txt',
+        'https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies/protocols/http/data.txt',
+        'https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt'
+    ]
+    
+    for proxy_url in proxy_sources:
+        try:
+            print(f"Tentativo download proxy da: {proxy_url}")
+            response = requests.get(proxy_url, timeout=30, verify=VERIFY_SSL)
+            response.raise_for_status()
+            
+            proxy_lines = response.text.strip().split('\n')
+            proxies = []
+            
+            for line in proxy_lines:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    # Gestisce diversi formati
+                    if line.startswith('http://') or line.startswith('https://'):
+                        proxies.append(line)
+                    elif ':' in line and len(line.split(':')) == 2:
+                        ip, port = line.split(':')
+                        if ip and port.isdigit():
+                            proxy_url_formatted = f"http://{ip}:{port}"
+                            proxies.append(proxy_url_formatted)
+            
+            if proxies:
+                DOWNLOADED_PROXIES = proxies
+                LAST_PROXY_FETCH = current_time
+                print(f"Scaricati {len(proxies)} proxy da {proxy_url}")
+                return proxies
+                
+        except Exception as e:
+            print(f"Errore nel download da {proxy_url}: {e}")
+            continue
+    
+    print("Nessuna fonte di proxy funzionante trovata")
+    return []
 
 def setup_proxies():
     """Configura i proxy secondo la logica:
@@ -387,7 +397,7 @@ LAST_FETCH_TIME = 0
 FETCH_INTERVAL = 3600
 
 def get_daddylive_base_url():
-    """Fetches and caches the dynamic base URL for DaddyLive."""
+    """Fetches and caches the dynamic base URL for DaddyLive con gestione migliorata degli errori."""
     global DADDYLIVE_BASE_URL, LAST_FETCH_TIME
     current_time = time.time()
     
@@ -400,25 +410,55 @@ def get_daddylive_base_url():
         response = requests.get(
             github_url,
             timeout=REQUEST_TIMEOUT,
-            proxies=get_proxy_for_url(github_url),
             verify=VERIFY_SSL
         )
         response.raise_for_status()
         content = response.text
-        match = re.search(r'src\s*=\s*"([^"]*)"', content)
-        if match:
-            base_url = match.group(1)
+        
+        # Prova diverse regex per estrarre l'URL
+        patterns = [
+            r'src\s*=\s*"([^"]*)"',
+            r'<url>([^<]*)</url>',
+            r'https?://[^\s<>"]+',
+        ]
+        
+        base_url = None
+        for pattern in patterns:
+            match = re.search(pattern, content)
+            if match:
+                base_url = match.group(1) if pattern != r'https?://[^\s<>"]+' else match.group(0)
+                break
+        
+        if base_url:
             if not base_url.endswith('/'):
                 base_url += '/'
             DADDYLIVE_BASE_URL = base_url
             LAST_FETCH_TIME = current_time
             print(f"Dynamic DaddyLive base URL updated to: {DADDYLIVE_BASE_URL}")
             return DADDYLIVE_BASE_URL
-    except requests.RequestException as e:
-        print(f"Error fetching dynamic DaddyLive URL: {e}. Using fallback.")
+    except Exception as e:
+        print(f"Error fetching dynamic DaddyLive URL: {e}")
     
-    DADDYLIVE_BASE_URL = "https://daddylive.sx/"
-    print(f"Using fallback DaddyLive URL: {DADDYLIVE_BASE_URL}")
+    # Fallback URLs aggiornati
+    fallback_urls = [
+        "https://thedaddy.to/",
+        "https://daddylive.sx/",
+        "https://dlhd.so/"
+    ]
+    
+    for fallback_url in fallback_urls:
+        try:
+            test_response = requests.get(fallback_url, timeout=10, verify=VERIFY_SSL)
+            if test_response.status_code == 200:
+                DADDYLIVE_BASE_URL = fallback_url
+                LAST_FETCH_TIME = current_time
+                print(f"Using working fallback DaddyLive URL: {DADDYLIVE_BASE_URL}")
+                return DADDYLIVE_BASE_URL
+        except:
+            continue
+    
+    DADDYLIVE_BASE_URL = "https://thedaddy.to/"
+    print(f"Using default fallback DaddyLive URL: {DADDYLIVE_BASE_URL}")
     return DADDYLIVE_BASE_URL
 
 get_daddylive_base_url()
@@ -697,7 +737,7 @@ def get_stats():
 
 @app.route('/dashboard')
 def dashboard():
-    """Dashboard con statistiche di sistema"""
+    """Dashboard con statistiche di sistema e informazioni di debug"""
     stats = get_system_stats()
     daddy_base_url = get_daddylive_base_url()
     use_free_proxies = os.environ.get('FREE_PROXY', 'no').lower() in ('yes', '1', 'true')
@@ -711,6 +751,16 @@ def dashboard():
     else:
         proxy_status_text = "DISABILITATI"
         proxy_color = "#dc3545"
+    
+    # Informazioni di debug
+    debug_info = {
+        'last_fetch_time': time.ctime(LAST_FETCH_TIME) if LAST_FETCH_TIME > 0 else 'Mai',
+        'fetch_interval': FETCH_INTERVAL,
+        'github_proxies_count': len(DOWNLOADED_PROXIES),
+        'total_proxies_count': len(PROXY_LIST),
+        'verify_ssl': VERIFY_SSL,
+        'request_timeout': REQUEST_TIMEOUT
+    }
     
     dashboard_html = f"""
     <!DOCTYPE html>
@@ -730,6 +780,7 @@ def dashboard():
             .progress-bar {{ width: 100%; height: 20px; background-color: #e9ecef; border-radius: 10px; overflow: hidden; }}
             .progress-fill {{ height: 100%; background-color: #007bff; transition: width 0.3s ease; }}
             .connection-stats {{ background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 10px 0; }}
+            .debug-info {{ background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0; }}
         </style>
     </head>
     <body>
@@ -747,6 +798,18 @@ def dashboard():
                     FREE_PROXY≠yes → Variabili d'ambiente | 
                     Vuoto → Nessun proxy
                 </small>
+            </div>
+            
+            <div class="debug-info">
+                <h3>🔍 Informazioni di Debug</h3>
+                <ul>
+                    <li><strong>Ultimo fetch base URL:</strong> {debug_info['last_fetch_time']}</li>
+                    <li><strong>Intervallo aggiornamento:</strong> {debug_info['fetch_interval']} secondi</li>
+                    <li><strong>Proxy GitHub:</strong> {debug_info['github_proxies_count']}</li>
+                    <li><strong>Proxy totali:</strong> {debug_info['total_proxies_count']}</li>
+                    <li><strong>SSL Verify:</strong> {debug_info['verify_ssl']}</li>
+                    <li><strong>Timeout richieste:</strong> {debug_info['request_timeout']} secondi</li>
+                </ul>
             </div>
             
             <div class="connection-stats">
