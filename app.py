@@ -14,19 +14,12 @@ from collections import defaultdict
 app = Flask(__name__)
 
 # Configurazione
-VERIFY_SSL = True
+VERIFY_SSL = False
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 ]
-
-# Proxy configuration
-PROXY_LIST = [
-    {"http": "http://proxy1:port", "https": "https://proxy1:port"},
-    {"http": "http://proxy2:port", "https": "https://proxy2:port"},
-]
-USE_PROXY = False
 
 # Cache ottimizzate per ridurre consumo memoria
 M3U8_CACHE = TTLCache(maxsize=50, ttl=10)   # Ridotta da 200 a 50, TTL da 5 a 10 secondi
@@ -64,11 +57,6 @@ def before_request():
 
 def get_random_user_agent():
     return random.choice(USER_AGENTS)
-
-def get_proxy_for_url(url):
-    if not USE_PROXY or not PROXY_LIST:
-        return None
-    return random.choice(PROXY_LIST)
 
 def create_robust_session():
     session = requests.Session()
@@ -145,7 +133,6 @@ def preload_next_segments(m3u8_content, base_url, headers):
                         segment_url, 
                         headers=headers, 
                         timeout=10,
-                        proxies=get_proxy_for_url(segment_url),
                         verify=VERIFY_SSL
                     )
                     if response.status_code == 200:
@@ -257,7 +244,6 @@ def proxy_m3u():
                 m3u_url, 
                 headers=current_headers_for_proxy, 
                 timeout=m3u_timeout, 
-                proxies=get_proxy_for_url(m3u_url), 
                 verify=VERIFY_SSL
             )
             response.raise_for_status()
@@ -390,7 +376,6 @@ def proxy_ts():
                     ts_url, 
                     headers=headers, 
                     timeout=ts_timeout, 
-                    proxies=get_proxy_for_url(ts_url), 
                     verify=VERIFY_SSL
                 )
                 response.raise_for_status()
@@ -447,7 +432,6 @@ def proxy_key():
             key_url, 
             headers=headers, 
             timeout=10, 
-            proxies=get_proxy_for_url(key_url), 
             verify=VERIFY_SSL
         )
         response.raise_for_status()
