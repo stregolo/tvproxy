@@ -18,9 +18,12 @@ from threading import Thread, Lock
 import weakref
 import hashlib
 from functools import wraps
+import logging
+from logging.handlers import RotatingFileHandler
+from datetime import datetime
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
+app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
 
 load_dotenv()
 
@@ -69,6 +72,158 @@ POOL_CONNECTIONS = int(os.environ.get('POOL_CONNECTIONS', 20))
 POOL_MAXSIZE = int(os.environ.get('POOL_MAXSIZE', 50))
 
 print(f"Keep-Alive configurato: timeout={KEEP_ALIVE_TIMEOUT}s, max_requests={MAX_KEEP_ALIVE_REQUESTS}")
+
+# --- Setup Logging System ---
+def setup_logging():
+    """Configura il sistema di logging"""
+    os.makedirs('logs', exist_ok=True)
+    
+    formatter = logging.Formatter(
+        '[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
+    )
+    
+    # Handler per file con rotazione
+    file_handler = RotatingFileHandler(
+        'logs/proxy.log', 
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=5
+    )
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(logging.INFO)
+    
+    # Handler per console
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(logging.INFO)
+    
+    # Configura il logger principale
+    app.logger.addHandler(file_handler)
+    app.logger.addHandler(console_handler)
+    app.logger.setLevel(logging.INFO)
+
+setup_logging()
+
+# --- Configurazione Manager ---
+class ConfigManager:
+    def __init__(self):
+        self.config_file = 'proxy_config.json'
+        self.default_config = {
+            'SOCKS5_PROXY': '',
+            'HTTP_PROXY': '',
+            'HTTPS_PROXY': '',
+            'REQUEST_TIMEOUT': 30,
+            'VERIFY_SSL': False,
+            'KEEP_ALIVE_TIMEOUT': 300,
+            'MAX_KEEP_ALIVE_REQUESTS': 1000,
+            'POOL_CONNECTIONS': 20,
+            'POOL_MAXSIZE': 50,
+            'CACHE_TTL_M3U8': 5,
+            'CACHE_TTL_TS': 300,
+            'CACHE_TTL_KEY': 300,
+            'CACHE_MAXSIZE_M3U8': 200,
+            'CACHE_MAXSIZE_TS': 1000,
+            'CACHE_MAXSIZE_KEY': 200,
+            'ALLOWED_IPS': '',
+            'ADMIN_USERNAME': 'admin',
+            'ADMIN_PASSWORD': 'password123'
+        }
+        
+    def load_config(self):
+        """Carica la configurazione dal file JSON"""
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                app.logger.error(f"Errore nel caricamento della configurazione: {e}")
+        return self.default_config.copy()
+    
+    def save_config(self, config):
+        """Salva la configurazione nel file JSON"""
+        try:
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=4)
+            return True
+        except Exception as e:
+            app.logger.error(f"Errore nel salvataggio della configurazione: {e}")
+            return False
+    
+    def apply_config_to_app(self, config):
+        """Applica la configurazione all'app Flask"""
+        for key, value in config.items():
+            if hasattr(app, 'config'):
+                app.config[key] = value
+            os.environ[key] = str(value)
+        return True
+
+config_manager = ConfigManager()
+
+# --- Log Manager ---
+class LogManager:
+    def __init__(self):
+        self.log_file = 'logs/proxy.log'
+        
+    def get_log_files(self):
+        """Ottiene la lista dei file di log disponibili"""
+        log_files = []
+        logs_dir = 'logs'
+        
+        if os.path.exists(logs_dir):
+            for filename in os.listdir(logs_dir):
+                if filename.endswith('.log'):
+                    filepath = os.path.join(logs_dir, filename)
+                    stat = os.stat(filepath)
+                    log_files.append({
+                        'name': filename,
+                        'size': stat.st_size,
+                        'modified': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                    })
+        
+        return sorted(log_files, key=lambda x: x['modified'], reverse=True)
+    
+    def read_log_file(self, filename, lines=100):
+        """Legge le ultime righe di un file di log"""
+        filepath = os.path.join('logs', filename)
+        
+        if not os.path.exists(filepath):
+            return []
+        
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                all_lines = f.readlines()
+                return all_lines[-lines:] if lines else all_lines
+        except Exception as e:
+            return [f"Errore nella lettura del file: {str(e)}"]
+    
+    def stream_log_file(self, filename):
+        """Stream in tempo reale di un file di log"""
+        filepath = os.path.join('logs', filename)
+        
+        def generate():
+            if not os.path.exists(filepath):
+                yield f"data: {json.dumps({'error': 'File non trovato'})}\n\n"
+                return
+            
+            # Leggi le ultime 50 righe per iniziare
+            with open(filepath, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                for line in lines[-50:]:
+                    yield f"data: {json.dumps({'line': line.strip(), 'timestamp': time.time()})}\n\n"
+            
+            # Monitora il file per nuove righe
+            f = open(filepath, 'r', encoding='utf-8')
+            f.seek(0, 2)  # Vai alla fine del file
+            
+            while True:
+                line = f.readline()
+                if line:
+                    yield f"data: {json.dumps({'line': line.strip(), 'timestamp': time.time()})}\n\n"
+                else:
+                    time.sleep(0.1)
+        
+        return generate()
+
+log_manager = LogManager()
 
 # --- Variabili globali per monitoraggio sistema ---
 system_stats = {
@@ -122,7 +277,7 @@ def monitor_bandwidth():
             prev_sent = current_sent
             prev_recv = current_recv
         except Exception as e:
-            print(f"Errore nel monitoraggio banda: {e}")
+            app.logger.error(f"Errore nel monitoraggio banda: {e}")
         
         time.sleep(1)
 
@@ -135,14 +290,14 @@ def connection_manager():
             # Statistiche connessioni
             with SESSION_LOCK:
                 active_sessions = len(SESSION_POOL)
-                print(f"Sessioni attive nel pool: {active_sessions}")
+                app.logger.info(f"Sessioni attive nel pool: {active_sessions}")
                 
                 # Pulizia periodica delle sessioni inattive
                 if active_sessions > 10:  # Se troppe sessioni, pulisci
                     cleanup_sessions()
                     
         except Exception as e:
-            print(f"Errore nel connection manager: {e}")
+            app.logger.error(f"Errore nel connection manager: {e}")
 
 def cleanup_sessions():
     """Pulisce le sessioni inattive dal pool"""
@@ -155,7 +310,7 @@ def cleanup_sessions():
             except:
                 pass
         SESSION_POOL.clear()
-        print("Pool di sessioni pulito")
+        app.logger.info("Pool di sessioni pulito")
 
 # Avvia i thread di monitoraggio
 bandwidth_thread = Thread(target=monitor_bandwidth, daemon=True)
@@ -176,37 +331,37 @@ def setup_proxies():
     if socks_proxy_list_str:
         raw_socks_list = [p.strip() for p in socks_proxy_list_str.split(',') if p.strip()]
         if raw_socks_list:
-            print(f"Trovati {len(raw_socks_list)} proxy SOCKS5. Verranno usati a rotazione.")
+            app.logger.info(f"Trovati {len(raw_socks_list)} proxy SOCKS5. Verranno usati a rotazione.")
             for proxy in raw_socks_list:
                 final_proxy_url = proxy
                 if proxy.startswith('socks5://'):
                     final_proxy_url = 'socks5h' + proxy[len('socks5'):]
-                    print(f"Proxy SOCKS5 convertito per garantire la risoluzione DNS remota")
+                    app.logger.info(f"Proxy SOCKS5 convertito per garantire la risoluzione DNS remota")
                 elif not proxy.startswith('socks5h://'):
-                    print(f"ATTENZIONE: L'URL del proxy SOCKS5 non è un formato SOCKS5 valido (es. socks5:// o socks5h://). Potrebbe non funzionare.")
+                    app.logger.warning(f"ATTENZIONE: L'URL del proxy SOCKS5 non è un formato SOCKS5 valido (es. socks5:// o socks5h://). Potrebbe non funzionare.")
                 proxies_found.append(final_proxy_url)
-            print("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
+            app.logger.info("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
 
     http_proxy_list_str = os.environ.get('HTTP_PROXY')
     if http_proxy_list_str:
         http_proxies = [p.strip() for p in http_proxy_list_str.split(',') if p.strip()]
         if http_proxies:
-            print(f"Trovati {len(http_proxies)} proxy HTTP. Verranno usati a rotazione.")
+            app.logger.info(f"Trovati {len(http_proxies)} proxy HTTP. Verranno usati a rotazione.")
             proxies_found.extend(http_proxies)
 
     https_proxy_list_str = os.environ.get('HTTPS_PROXY')
     if https_proxy_list_str:
         https_proxies = [p.strip() for p in https_proxy_list_str.split(',') if p.strip()]
         if https_proxies:
-            print(f"Trovati {len(https_proxies)} proxy HTTPS. Verranno usati a rotazione.")
+            app.logger.info(f"Trovati {len(https_proxies)} proxy HTTPS. Verranno usati a rotazione.")
             proxies_found.extend(https_proxies)
 
     PROXY_LIST = proxies_found
 
     if PROXY_LIST:
-        print(f"Totale di {len(PROXY_LIST)} proxy configurati. Verranno usati a rotazione per ogni richiesta.")
+        app.logger.info(f"Totale di {len(PROXY_LIST)} proxy configurati. Verranno usati a rotazione per ogni richiesta.")
     else:
-        print("Nessun proxy (SOCKS5, HTTP, HTTPS) configurato.")
+        app.logger.info("Nessun proxy (SOCKS5, HTTP, HTTPS) configurato.")
 
 def get_proxy_for_url(url):
     """Seleziona un proxy casuale dalla lista, ma lo salta per i domini GitHub."""
@@ -270,7 +425,7 @@ def get_persistent_session(proxy_url=None):
                 session.proxies.update({'http': proxy_url, 'https': proxy_url})
             
             SESSION_POOL[pool_key] = session
-            print(f"Nuova sessione persistente creata per: {pool_key}")
+            app.logger.info(f"Nuova sessione persistente creata per: {pool_key}")
         
         return SESSION_POOL[pool_key]
 
@@ -297,7 +452,7 @@ def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, **k
         )
         return response
     except Exception as e:
-        print(f"Errore nella richiesta persistente: {e}")
+        app.logger.error(f"Errore nella richiesta persistente: {e}")
         # In caso di errore, rimuovi la sessione dal pool
         with SESSION_LOCK:
             if proxy_url in SESSION_POOL:
@@ -334,7 +489,7 @@ def get_daddylive_base_url():
         return DADDYLIVE_BASE_URL
 
     try:
-        print("Fetching dynamic DaddyLive base URL from GitHub...")
+        app.logger.info("Fetching dynamic DaddyLive base URL from GitHub...")
         github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
         response = requests.get(
             github_url,
@@ -351,17 +506,18 @@ def get_daddylive_base_url():
                 base_url += '/'
             DADDYLIVE_BASE_URL = base_url
             LAST_FETCH_TIME = current_time
-            print(f"Dynamic DaddyLive base URL updated to: {DADDYLIVE_BASE_URL}")
+            app.logger.info(f"Dynamic DaddyLive base URL updated to: {DADDYLIVE_BASE_URL}")
             return DADDYLIVE_BASE_URL
     except requests.RequestException as e:
-        print(f"Error fetching dynamic DaddyLive URL: {e}. Using fallback.")
+        app.logger.error(f"Error fetching dynamic DaddyLive URL: {e}. Using fallback.")
     
     DADDYLIVE_BASE_URL = "https://daddylive.sx/"
-    print(f"Using fallback DaddyLive URL: {DADDYLIVE_BASE_URL}")
+    app.logger.info(f"Using fallback DaddyLive URL: {DADDYLIVE_BASE_URL}")
     return DADDYLIVE_BASE_URL
 
 get_daddylive_base_url()
 
+# [Mantieni tutte le funzioni esistenti per il processing DaddyLive...]
 def detect_m3u_type(content):
     """Rileva se è un M3U (lista IPTV) o un M3U8 (flusso HLS)"""
     if "#EXTM3U" in content and "#EXTINF" in content:
@@ -398,7 +554,7 @@ def process_daddylive_url(url):
     if match_premium:
         channel_id = match_premium.group(1)
         new_url = f"{daddy_base_url}watch/stream-{channel_id}.php"
-        print(f"URL processato da {url} a {new_url}")
+        app.logger.info(f"URL processato da {url} a {new_url}")
         return new_url
 
     if daddy_domain in url and any(p in url for p in ['/watch/', '/stream/', '/cast/', '/player/']):
@@ -412,7 +568,7 @@ def process_daddylive_url(url):
 def resolve_m3u8_link(url, headers=None):
     """Risolve URL DaddyLive con gestione avanzata degli errori di timeout."""
     if not url:
-        print("Errore: URL non fornito.")
+        app.logger.error("Errore: URL non fornito.")
         return {"resolved_url": None, "headers": {}}
 
     current_headers = headers.copy() if headers else {}
@@ -420,7 +576,7 @@ def resolve_m3u8_link(url, headers=None):
     clean_url = url
     extracted_headers = {}
     if '&h_' in url or '%26h_' in url:
-        print("Rilevati parametri header nell'URL - Estrazione in corso...")
+        app.logger.info("Rilevati parametri header nell'URL - Estrazione in corso...")
         temp_url = url
         if 'vavoo.to' in temp_url.lower() and '%26' in temp_url:
              temp_url = temp_url.replace('%26', '&')
@@ -441,9 +597,9 @@ def resolve_m3u8_link(url, headers=None):
                         value = unquote(key_value[1])
                         extracted_headers[key] = value
                 except Exception as e:
-                    print(f"Errore nell'estrazione dell'header {param}: {e}")
+                    app.logger.error(f"Errore nell'estrazione dell'header {param}: {e}")
 
-    print(f"Tentativo di risoluzione URL (DaddyLive): {clean_url}")
+    app.logger.info(f"Tentativo di risoluzione URL (DaddyLive): {clean_url}")
 
     daddy_base_url = get_daddylive_base_url()
     daddy_origin = urlparse(daddy_base_url).scheme + "://" + urlparse(daddy_base_url).netloc
@@ -456,7 +612,7 @@ def resolve_m3u8_link(url, headers=None):
     final_headers_for_resolving = {**current_headers, **daddylive_headers}
 
     try:
-        print("Ottengo URL base dinamico...")
+        app.logger.info("Ottengo URL base dinamico...")
         github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
         main_url_req = requests.get(
             github_url,
@@ -467,31 +623,31 @@ def resolve_m3u8_link(url, headers=None):
         main_url_req.raise_for_status()
         main_url = main_url_req.text
         baseurl = re.findall('(?s)src = "([^"]*)', main_url)[0]
-        print(f"URL base ottenuto: {baseurl}")
+        app.logger.info(f"URL base ottenuto: {baseurl}")
 
         channel_id = extract_channel_id(clean_url)
         if not channel_id:
-            print(f"Impossibile estrarre ID canale da {clean_url}")
+            app.logger.error(f"Impossibile estrarre ID canale da {clean_url}")
             return {"resolved_url": clean_url, "headers": current_headers}
 
-        print(f"ID canale estratto: {channel_id}")
+        app.logger.info(f"ID canale estratto: {channel_id}")
 
         stream_url = f"{baseurl}stream/stream-{channel_id}.php"
-        print(f"URL stream costruito: {stream_url}")
+        app.logger.info(f"URL stream costruito: {stream_url}")
 
         final_headers_for_resolving['Referer'] = baseurl + '/'
         final_headers_for_resolving['Origin'] = baseurl
 
-        print(f"Passo 1: Richiesta a {stream_url}")
+        app.logger.info(f"Passo 1: Richiesta a {stream_url}")
         response = requests.get(stream_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(stream_url), verify=VERIFY_SSL)
         response.raise_for_status()
 
         iframes = re.findall(r'<a[^>]*href="([^"]+)"[^>]*>\s*<button[^>]*>\s*Player\s*2\s*</button>', response.text)
         if not iframes:
-            print("Nessun link Player 2 trovato")
+            app.logger.error("Nessun link Player 2 trovato")
             return {"resolved_url": clean_url, "headers": current_headers}
 
-        print(f"Passo 2: Trovato link Player 2: {iframes[0]}")
+        app.logger.info(f"Passo 2: Trovato link Player 2: {iframes[0]}")
 
         url2 = iframes[0]
         url2 = baseurl + url2
@@ -500,19 +656,19 @@ def resolve_m3u8_link(url, headers=None):
         final_headers_for_resolving['Referer'] = url2
         final_headers_for_resolving['Origin'] = url2
 
-        print(f"Passo 3: Richiesta a Player 2: {url2}")
+        app.logger.info(f"Passo 3: Richiesta a Player 2: {url2}")
         response = requests.get(url2, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(url2), verify=VERIFY_SSL)
         response.raise_for_status()
 
         iframes = re.findall(r'iframe src="([^"]*)', response.text)
         if not iframes:
-            print("Nessun iframe trovato nella pagina Player 2")
+            app.logger.error("Nessun iframe trovato nella pagina Player 2")
             return {"resolved_url": clean_url, "headers": current_headers}
 
         iframe_url = iframes[0]
-        print(f"Passo 4: Trovato iframe: {iframe_url}")
+        app.logger.info(f"Passo 4: Trovato iframe: {iframe_url}")
 
-        print(f"Passo 5: Richiesta iframe: {iframe_url}")
+        app.logger.info(f"Passo 5: Richiesta iframe: {iframe_url}")
         response = requests.get(iframe_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(iframe_url), verify=VERIFY_SSL)
         response.raise_for_status()
 
@@ -537,14 +693,14 @@ def resolve_m3u8_link(url, headers=None):
             auth_php_b64 = re.findall(r'(?s)b = atob\("([^"]*)', iframe_content)[0]
             auth_php = base64.b64decode(auth_php_b64).decode('utf-8')
 
-            print(f"Parametri estratti: channel_key={channel_key}")
+            app.logger.info(f"Parametri estratti: channel_key={channel_key}")
 
         except (IndexError, Exception) as e:
-            print(f"Errore estrazione parametri: {e}")
+            app.logger.error(f"Errore estrazione parametri: {e}")
             return {"resolved_url": clean_url, "headers": current_headers}
 
         auth_url = f'{auth_host}{auth_php}?channel_id={channel_key}&ts={auth_ts}&rnd={auth_rnd}&sig={auth_sig}'
-        print(f"Passo 6: Autenticazione: {auth_url}")
+        app.logger.info(f"Passo 6: Autenticazione: {auth_url}")
 
         auth_response = requests.get(auth_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(auth_url), verify=VERIFY_SSL)
         auth_response.raise_for_status()
@@ -553,20 +709,20 @@ def resolve_m3u8_link(url, headers=None):
         server_lookup = re.findall(r'n fetchWithRetry\(\s*\'([^\']*)', iframe_content)[0]
 
         server_lookup_url = f"https://{urlparse(iframe_url).netloc}{server_lookup}{channel_key}"
-        print(f"Passo 7: Server lookup: {server_lookup_url}")
+        app.logger.info(f"Passo 7: Server lookup: {server_lookup_url}")
 
         lookup_response = requests.get(server_lookup_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(server_lookup_url), verify=VERIFY_SSL)
         lookup_response.raise_for_status()
         server_data = lookup_response.json()
         server_key = server_data['server_key']
 
-        print(f"Server key ottenuto: {server_key}")
+        app.logger.info(f"Server key ottenuto: {server_key}")
 
         referer_raw = f'https://{urlparse(iframe_url).netloc}'
 
         clean_m3u8_url = f'https://{server_key}{host}{server_key}/{channel_key}/mono.m3u8'
 
-        print(f"URL M3U8 pulito costruito: {clean_m3u8_url}")
+        app.logger.info(f"URL M3U8 pulito costruito: {clean_m3u8_url}")
 
         final_headers_for_fetch = {
             'User-Agent': final_headers_for_resolving.get('User-Agent'),
@@ -580,24 +736,23 @@ def resolve_m3u8_link(url, headers=None):
         }
 
     except (requests.exceptions.ConnectTimeout, requests.exceptions.ProxyError) as e:
-        print(f"ERRORE DI TIMEOUT O PROXY DURANTE LA RISOLUZIONE: {e}")
-        print("Questo problema è spesso legato a un proxy SOCKS5 lento, non funzionante o bloccato.")
-        print("CONSIGLI: Controlla che i tuoi proxy siano attivi. Prova ad aumentare il timeout impostando la variabile d'ambiente 'REQUEST_TIMEOUT' (es. a 20 o 30 secondi).")
+        app.logger.error(f"ERRORE DI TIMEOUT O PROXY DURANTE LA RISOLUZIONE: {e}")
+        app.logger.error("Questo problema è spesso legato a un proxy SOCKS5 lento, non funzionante o bloccato.")
+        app.logger.error("CONSIGLI: Controlla che i tuoi proxy siano attivi. Prova ad aumentare il timeout impostando la variabile d'ambiente 'REQUEST_TIMEOUT' (es. a 20 o 30 secondi).")
         return {"resolved_url": clean_url, "headers": current_headers}
     except requests.exceptions.ConnectionError as e:
         if "Read timed out" in str(e):
-            print(f"Read timeout durante la risoluzione per {clean_url}")
+            app.logger.error(f"Read timeout durante la risoluzione per {clean_url}")
             return {"resolved_url": clean_url, "headers": current_headers}
         else:
-            print(f"Errore di connessione durante la risoluzione: {e}")
+            app.logger.error(f"Errore di connessione durante la risoluzione: {e}")
             return {"resolved_url": clean_url, "headers": current_headers}
     except requests.exceptions.ReadTimeout as e:
-        print(f"Read timeout esplicito per {clean_url}")
+        app.logger.error(f"Read timeout esplicito per {clean_url}")
         return {"resolved_url": clean_url, "headers": current_headers}
     except Exception as e:
-        print(f"Errore durante la risoluzione: {e}")
-        import traceback
-        print(f"Traceback: {traceback.format_exc()}")
+        app.logger.error(f"Errore durante la risoluzione: {e}")
+        app.logger.error(f"Traceback: {traceback.format_exc()}")
         return {"resolved_url": clean_url, "headers": current_headers}
 
 # --- Template HTML ---
@@ -867,7 +1022,9 @@ DASHBOARD_TEMPLATE = """
     <nav class="navbar">
         <h1>🚀 Proxy Dashboard</h1>
         <div class="nav-links">
-            <a href="/admin">⚙️ Admin</a>
+            <a href="/admin/config">⚙️ Configurazioni</a>
+            <a href="/admin/logs">📝 Log</a>
+            <a href="/admin">🏠 Admin</a>
             <a href="/stats">📊 API</a>
             <a href="/logout">🚪 Logout</a>
         </div>
@@ -1015,49 +1172,797 @@ ADMIN_TEMPLATE = """
             color: #667eea;
             text-decoration: none;
         }
+        .navbar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin: -20px -20px 20px -20px;
+        }
+        .navbar h1 {
+            font-size: 24px;
+            margin: 0;
+        }
+        .navbar .nav-links {
+            display: flex;
+            gap: 20px;
+        }
+        .navbar a {
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: background 0.3s;
+        }
+        .navbar a:hover {
+            background: rgba(255,255,255,0.2);
+        }
     </style>
 </head>
 <body>
-    <div class="container">
+    <div class="navbar">
         <h1>⚙️ Pannello di Amministrazione</h1>
-        
+        <div class="nav-links">
+            <a href="/dashboard">📊 Dashboard</a>
+            <a href="/logout">🚪 Logout</a>
+        </div>
+    </div>
+    
+    <div class="container">
         <div class="admin-grid">
             <div class="admin-card">
                 <h3>📊 Monitoraggio Sistema</h3>
-                <p>Visualizza statistiche dettagliate del sistema</p>
+                <p>Visualizza statistiche dettagliate del sistema in tempo reale</p>
                 <a href="/dashboard" class="btn">Vai alla Dashboard</a>
             </div>
             
             <div class="admin-card">
                 <h3>🔧 Configurazioni</h3>
-                <p>Gestisci le impostazioni del proxy</p>
-                <button class="btn" onclick="alert('Funzionalità in sviluppo')">Configura</button>
+                <p>Gestisci le impostazioni del proxy, timeout, cache e sicurezza</p>
+                <a href="/admin/config" class="btn">Configura Sistema</a>
             </div>
             
             <div class="admin-card">
                 <h3>📝 Log Sistema</h3>
-                <p>Visualizza i log delle attività</p>
-                <button class="btn" onclick="alert('Funzionalità in sviluppo')">Visualizza Log</button>
+                <p>Visualizza i log delle attività in tempo reale con streaming</p>
+                <a href="/admin/logs" class="btn">Visualizza Log</a>
             </div>
             
             <div class="admin-card">
                 <h3>🔄 Gestione Cache</h3>
-                <p>Pulisci e gestisci la cache</p>
+                <p>Pulisci e gestisci la cache del sistema</p>
                 <button class="btn" onclick="clearCache()">Pulisci Cache</button>
             </div>
+            
+            <div class="admin-card">
+                <h3>📈 API Statistiche</h3>
+                <p>Accesso alle API JSON per integrazioni esterne</p>
+                <a href="/stats" class="btn">API Endpoint</a>
+            </div>
+            
+            <div class="admin-card">
+                <h3>🛡️ Sicurezza</h3>
+                <p>Gestione IP consentiti e credenziali di accesso</p>
+                <a href="/admin/config#security" class="btn">Impostazioni Sicurezza</a>
+            </div>
         </div>
-        
-        <a href="/dashboard" class="back-link">← Torna alla Dashboard</a>
     </div>
     
     <script>
         function clearCache() {
-            if(confirm('Sei sicuro di voler pulire la cache?')) {
+            if(confirm('Sei sicuro di voler pulire la cache del sistema?')) {
                 fetch('/admin/clear-cache', {method: 'POST'})
-                    .then(() => alert('Cache pulita con successo!'))
+                    .then(response => response.json())
+                    .then(data => {
+                        alert(data.message);
+                    })
                     .catch(() => alert('Errore durante la pulizia della cache'));
             }
         }
+    </script>
+</body>
+</html>
+"""
+
+CONFIG_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gestione Configurazioni - Proxy</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f8f9fa;
+            margin: 0;
+            padding: 0;
+        }
+        .navbar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .navbar h1 {
+            font-size: 24px;
+            margin: 0;
+        }
+        .navbar .nav-links a {
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: background 0.3s;
+            margin-left: 10px;
+        }
+        .navbar .nav-links a:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        .container {
+            max-width: 1000px;
+            margin: 20px auto;
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+        .form-group input, .form-group textarea, .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+            box-sizing: border-box;
+        }
+        .form-group input:focus, .form-group textarea:focus, .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .form-group small {
+            color: #666;
+            font-size: 12px;
+            margin-top: 5px;
+            display: block;
+        }
+        .config-section {
+            margin-bottom: 40px;
+            padding: 25px;
+            border: 1px solid #e1e5e9;
+            border-radius: 10px;
+            background: #f8f9ff;
+        }
+        .config-section h3 {
+            margin: 0 0 20px 0;
+            color: #667eea;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+            transition: transform 0.2s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        .btn-secondary {
+            background: #6c757d;
+        }
+        .alert {
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 8px;
+            display: none;
+        }
+        .alert-success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .alert-error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .row {
+            display: flex;
+            gap: 20px;
+        }
+        .col {
+            flex: 1;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <h1>⚙️ Gestione Configurazioni Proxy</h1>
+        <div class="nav-links">
+            <a href="/admin">← Admin</a>
+            <a href="/dashboard">📊 Dashboard</a>
+            <a href="/logout">🚪 Logout</a>
+        </div>
+    </nav>
+    
+    <div class="container">
+        <div id="alert" class="alert"></div>
+        
+        <form id="configForm">
+            <!-- Sezione Proxy -->
+            <div class="config-section">
+                <h3>🌐 Configurazioni Proxy</h3>
+                <div class="form-group">
+                    <label for="socks5_proxy">Proxy SOCKS5:</label>
+                    <textarea id="socks5_proxy" name="SOCKS5_PROXY" rows="3" placeholder="socks5://user:pass@proxy1:1080,socks5://user:pass@proxy2:1080">{{ config.SOCKS5_PROXY }}</textarea>
+                    <small>Lista di proxy SOCKS5 separati da virgola</small>
+                </div>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="http_proxy">Proxy HTTP:</label>
+                            <textarea id="http_proxy" name="HTTP_PROXY" rows="2" placeholder="http://proxy1:8080,http://proxy2:8080">{{ config.HTTP_PROXY }}</textarea>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="https_proxy">Proxy HTTPS:</label>
+                            <textarea id="https_proxy" name="HTTPS_PROXY" rows="2" placeholder="https://proxy1:8080,https://proxy2:8080">{{ config.HTTPS_PROXY }}</textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sezione Timeouts -->
+            <div class="config-section">
+                <h3>⏱️ Configurazioni Timeout</h3>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="request_timeout">Request Timeout (secondi):</label>
+                            <input type="number" id="request_timeout" name="REQUEST_TIMEOUT" value="{{ config.REQUEST_TIMEOUT }}" min="5" max="300">
+                            <small>Timeout per le richieste HTTP</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="keep_alive_timeout">Keep-Alive Timeout (secondi):</label>
+                            <input type="number" id="keep_alive_timeout" name="KEEP_ALIVE_TIMEOUT" value="{{ config.KEEP_ALIVE_TIMEOUT }}" min="60" max="3600">
+                            <small>Timeout per connessioni persistenti</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sezione Cache -->
+            <div class="config-section">
+                <h3>💾 Configurazioni Cache</h3>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="cache_ttl_m3u8">TTL Cache M3U8 (secondi):</label>
+                            <input type="number" id="cache_ttl_m3u8" name="CACHE_TTL_M3U8" value="{{ config.CACHE_TTL_M3U8 }}" min="1" max="300">
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_maxsize_m3u8">Max Size Cache M3U8:</label>
+                            <input type="number" id="cache_maxsize_m3u8" name="CACHE_MAXSIZE_M3U8" value="{{ config.CACHE_MAXSIZE_M3U8 }}" min="10" max="1000">
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="cache_ttl_ts">TTL Cache TS (secondi):</label>
+                            <input type="number" id="cache_ttl_ts" name="CACHE_TTL_TS" value="{{ config.CACHE_TTL_TS }}" min="60" max="3600">
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_maxsize_ts">Max Size Cache TS:</label>
+                            <input type="number" id="cache_maxsize_ts" name="CACHE_MAXSIZE_TS" value="{{ config.CACHE_MAXSIZE_TS }}" min="100" max="5000">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sezione Sicurezza -->
+            <div class="config-section" id="security">
+                <h3>🔒 Configurazioni Sicurezza</h3>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="admin_username">Username Admin:</label>
+                            <input type="text" id="admin_username" name="ADMIN_USERNAME" value="{{ config.ADMIN_USERNAME }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="verify_ssl">Verifica SSL:</label>
+                            <select id="verify_ssl" name="VERIFY_SSL">
+                                <option value="true" {% if config.VERIFY_SSL %}selected{% endif %}>Abilitato</option>
+                                <option value="false" {% if not config.VERIFY_SSL %}selected{% endif %}>Disabilitato</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="admin_password">Password Admin:</label>
+                            <input type="password" id="admin_password" name="ADMIN_PASSWORD" value="{{ config.ADMIN_PASSWORD }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="allowed_ips">IP Consentiti:</label>
+                            <input type="text" id="allowed_ips" name="ALLOWED_IPS" value="{{ config.ALLOWED_IPS }}" placeholder="192.168.1.100,10.0.0.1">
+                            <small>Lista di IP separati da virgola (lascia vuoto per tutti)</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="margin-top: 30px;">
+                <button type="submit" class="btn">💾 Salva Configurazioni</button>
+                <button type="button" class="btn btn-secondary" onclick="resetForm()">🔄 Ripristina Default</button>
+                <button type="button" class="btn btn-secondary" onclick="testConnection()">🔍 Test Connessioni</button>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        document.getElementById('configForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const config = {};
+            
+            for (let [key, value] of formData.entries()) {
+                if (key === 'VERIFY_SSL') {
+                    config[key] = value === 'true';
+                } else if (['REQUEST_TIMEOUT', 'KEEP_ALIVE_TIMEOUT', 'CACHE_TTL_M3U8', 'CACHE_TTL_TS', 'CACHE_MAXSIZE_M3U8', 'CACHE_MAXSIZE_TS'].includes(key)) {
+                    config[key] = parseInt(value);
+                } else {
+                    config[key] = value;
+                }
+            }
+            
+            fetch('/admin/config/save', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(config)
+            })
+            .then(response => response.json())
+            .then(data => {
+                showAlert(data.message, data.status === 'success' ? 'success' : 'error');
+                if (data.status === 'success') {
+                    setTimeout(() => location.reload(), 2000);
+                }
+            })
+            .catch(error => {
+                showAlert('Errore nel salvataggio della configurazione', 'error');
+                console.error('Error:', error);
+            });
+        });
+        
+        function showAlert(message, type) {
+            const alert = document.getElementById('alert');
+            alert.textContent = message;
+            alert.className = 'alert alert-' + type;
+            alert.style.display = 'block';
+            
+            setTimeout(() => {
+                alert.style.display = 'none';
+            }, 5000);
+        }
+        
+        function resetForm() {
+            if (confirm('Sei sicuro di voler ripristinare le configurazioni di default?')) {
+                fetch('/admin/config/reset', {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    showAlert(data.message, data.status === 'success' ? 'success' : 'error');
+                    if (data.status === 'success') {
+                        setTimeout(() => location.reload(), 2000);
+                    }
+                });
+            }
+        }
+        
+        function testConnection() {
+            showAlert('Test delle connessioni in corso...', 'success');
+            
+            fetch('/admin/config/test', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                showAlert(data.message, data.status === 'success' ? 'success' : 'error');
+            })
+            .catch(error => {
+                showAlert('Errore nel test delle connessioni', 'error');
+            });
+        }
+    </script>
+</body>
+</html>
+"""
+
+LOG_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Sistema Log - Proxy</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            margin: 0;
+            padding: 0;
+        }
+        .navbar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .navbar h1 {
+            font-size: 24px;
+            margin: 0;
+        }
+        .navbar .nav-links a {
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: background 0.3s;
+            margin-left: 10px;
+        }
+        .navbar .nav-links a:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: #252526;
+            border-radius: 0;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.3);
+            overflow: hidden;
+            height: calc(100vh - 80px);
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            background: #2d2d30;
+            color: white;
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.3s;
+        }
+        .btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        .btn.active {
+            background: rgba(255,255,255,0.4);
+        }
+        .log-selector {
+            background: #2d2d30;
+            padding: 15px;
+            border-bottom: 1px solid #3e3e42;
+        }
+        .log-selector select {
+            background: #3c3c3c;
+            color: #d4d4d4;
+            border: 1px solid #5a5a5a;
+            padding: 8px 12px;
+            border-radius: 5px;
+            margin-right: 10px;
+        }
+        .log-info {
+            background: #2d2d30;
+            padding: 10px 15px;
+            border-bottom: 1px solid #3e3e42;
+            font-size: 12px;
+            color: #858585;
+        }
+        .log-container {
+            flex: 1;
+            overflow-y: auto;
+            background: #1e1e1e;
+            padding: 15px;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .log-line {
+            margin-bottom: 2px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .log-line.info {
+            color: #4fc3f7;
+        }
+        .log-line.warning {
+            color: #ffb74d;
+        }
+        .log-line.error {
+            color: #f44336;
+        }
+        .log-line.debug {
+            color: #81c784;
+        }
+        .log-line:hover {
+            background: #2d2d30;
+        }
+        .stats {
+            display: flex;
+            gap: 20px;
+            color: #858585;
+            font-size: 11px;
+        }
+        .auto-scroll {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 25px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+        .filter-controls {
+            background: #2d2d30;
+            padding: 10px 15px;
+            border-bottom: 1px solid #3e3e42;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            font-size: 12px;
+        }
+        .filter-controls input, .filter-controls select {
+            background: #3c3c3c;
+            color: #d4d4d4;
+            border: 1px solid #5a5a5a;
+            padding: 5px 10px;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <h1>📝 Sistema Log</h1>
+        <div class="nav-links">
+            <a href="/admin">← Admin</a>
+            <a href="/dashboard">📊 Dashboard</a>
+            <a href="/logout">🚪 Logout</a>
+        </div>
+    </nav>
+    
+    <div class="container">
+        <div class="header">
+            <h2>Log in Tempo Reale</h2>
+            <div class="controls">
+                <button class="btn" id="pauseBtn" onclick="toggleStream()">⏸️ Pausa</button>
+                <button class="btn" onclick="clearLogs()">🗑️ Pulisci</button>
+                <button class="btn" onclick="downloadLog()">💾 Download</button>
+                <div class="stats">
+                    <span>Righe: <span id="lineCount">0</span></span>
+                    <span>Ultimo aggiornamento: <span id="lastUpdate">-</span></span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="log-selector">
+            <label for="logFile">File di Log:</label>
+            <select id="logFile" onchange="changeLogFile()">
+                {% for log_file in log_files %}
+                <option value="{{ log_file.name }}" {% if loop.first %}selected{% endif %}>
+                    {{ log_file.name }} ({{ "%.1f"|format(log_file.size/1024) }} KB - {{ log_file.modified }})
+                </option>
+                {% endfor %}
+            </select>
+            
+            <label for="logLevel">Livello:</label>
+            <select id="logLevel" onchange="filterLogs()">
+                <option value="">Tutti</option>
+                <option value="DEBUG">Debug</option>
+                <option value="INFO">Info</option>
+                <option value="WARNING">Warning</option>
+                <option value="ERROR">Error</option>
+            </select>
+        </div>
+        
+        <div class="filter-controls">
+            <label>Filtro testo:</label>
+            <input type="text" id="textFilter" placeholder="Cerca nei log..." onkeyup="filterLogs()">
+            <label>Max righe:</label>
+            <input type="number" id="maxLines" value="1000" min="100" max="10000" onchange="filterLogs()">
+        </div>
+        
+        <div class="log-info">
+            <span id="logInfo">Connessione al log in corso...</span>
+        </div>
+        
+        <div class="log-container" id="logContainer">
+            <!-- I log appariranno qui -->
+        </div>
+    </div>
+    
+    <button class="auto-scroll" id="autoScrollBtn" onclick="toggleAutoScroll()">📜 Auto-scroll</button>
+
+    <script>
+        let eventSource = null;
+        let isPaused = false;
+        let autoScroll = true;
+        let lineCount = 0;
+        let allLogs = [];
+        
+        function initLogStream() {
+            const selectedFile = document.getElementById('logFile').value;
+            
+            if (eventSource) {
+                eventSource.close();
+            }
+            
+            eventSource = new EventSource(`/admin/logs/stream/${selectedFile}`);
+            
+            eventSource.onmessage = function(event) {
+                if (!isPaused) {
+                    const data = JSON.parse(event.data);
+                    if (data.line) {
+                        addLogLine(data.line, data.timestamp);
+                    }
+                }
+            };
+            
+            eventSource.onerror = function(event) {
+                document.getElementById('logInfo').textContent = 'Errore di connessione al log stream';
+            };
+            
+            document.getElementById('logInfo').textContent = `Streaming log: ${selectedFile}`;
+        }
+        
+        function addLogLine(line, timestamp) {
+            allLogs.push({line, timestamp});
+            lineCount++;
+            
+            // Mantieni solo le ultime N righe
+            const maxLines = parseInt(document.getElementById('maxLines').value);
+            if (allLogs.length > maxLines) {
+                allLogs = allLogs.slice(-maxLines);
+            }
+            
+            filterLogs();
+            updateStats();
+        }
+        
+        function filterLogs() {
+            const levelFilter = document.getElementById('logLevel').value;
+            const textFilter = document.getElementById('textFilter').value.toLowerCase();
+            const container = document.getElementById('logContainer');
+            
+            let filteredLogs = allLogs;
+            
+            if (levelFilter) {
+                filteredLogs = filteredLogs.filter(log => log.line.includes(levelFilter));
+            }
+            
+            if (textFilter) {
+                filteredLogs = filteredLogs.filter(log => log.line.toLowerCase().includes(textFilter));
+            }
+            
+            container.innerHTML = '';
+            
+            filteredLogs.forEach(log => {
+                const div = document.createElement('div');
+                div.className = 'log-line ' + getLogLevel(log.line);
+                div.textContent = log.line;
+                container.appendChild(div);
+            });
+            
+            if (autoScroll) {
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+        
+        function getLogLevel(line) {
+            if (line.includes('ERROR')) return 'error';
+            if (line.includes('WARNING')) return 'warning';
+            if (line.includes('DEBUG')) return 'debug';
+            if (line.includes('INFO')) return 'info';
+            return '';
+        }
+        
+        function updateStats() {
+            document.getElementById('lineCount').textContent = lineCount;
+            document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+        }
+        
+        function toggleStream() {
+            isPaused = !isPaused;
+            const btn = document.getElementById('pauseBtn');
+            btn.textContent = isPaused ? '▶️ Riprendi' : '⏸️ Pausa';
+            btn.classList.toggle('active', isPaused);
+        }
+        
+        function toggleAutoScroll() {
+            autoScroll = !autoScroll;
+            const btn = document.getElementById('autoScrollBtn');
+            btn.textContent = autoScroll ? '📜 Auto-scroll' : '📜 Scroll OFF';
+            btn.classList.toggle('active', !autoScroll);
+        }
+        
+        function changeLogFile() {
+            allLogs = [];
+            lineCount = 0;
+            document.getElementById('logContainer').innerHTML = '';
+            initLogStream();
+        }
+        
+        function clearLogs() {
+            if (confirm('Sei sicuro di voler pulire i log visualizzati?')) {
+                allLogs = [];
+                lineCount = 0;
+                document.getElementById('logContainer').innerHTML = '';
+                updateStats();
+            }
+        }
+        
+        function downloadLog() {
+            const selectedFile = document.getElementById('logFile').value;
+            window.open(`/admin/logs/download/${selectedFile}`, '_blank');
+        }
+        
+        // Inizializza al caricamento della pagina
+        document.addEventListener('DOMContentLoaded', function() {
+            initLogStream();
+        });
+        
+        // Pulisci la connessione quando si chiude la pagina
+        window.addEventListener('beforeunload', function() {
+            if (eventSource) {
+                eventSource.close();
+            }
+        });
     </script>
 </body>
 </html>
@@ -1203,6 +2108,7 @@ INDEX_TEMPLATE = """
 def login():
     """Pagina di login"""
     if not check_ip_allowed():
+        app.logger.warning(f"Tentativo di accesso da IP non autorizzato: {request.remote_addr}")
         return "Accesso negato: IP non autorizzato", 403
         
     if request.method == 'POST':
@@ -1210,8 +2116,11 @@ def login():
         password = request.form['password']
         if check_auth(username, password):
             session['logged_in'] = True
+            session['username'] = username
+            app.logger.info(f"Login riuscito per utente: {username}")
             return redirect(url_for('dashboard'))
         else:
+            app.logger.warning(f"Tentativo di login fallito per utente: {username}")
             error = 'Credenziali non valide'
             return render_template_string(LOGIN_TEMPLATE, error=error)
     
@@ -1220,7 +2129,10 @@ def login():
 @app.route('/logout')
 def logout():
     """Logout"""
+    username = session.get('username', 'unknown')
     session.pop('logged_in', None)
+    session.pop('username', None)
+    app.logger.info(f"Logout per utente: {username}")
     return redirect(url_for('index'))
 
 @app.route('/dashboard')
@@ -1242,6 +2154,158 @@ def admin_panel():
     """Pannello di amministrazione"""
     return render_template_string(ADMIN_TEMPLATE)
 
+@app.route('/admin/config')
+@login_required
+def admin_config():
+    """Pagina di gestione configurazioni"""
+    config = config_manager.load_config()
+    return render_template_string(CONFIG_TEMPLATE, config=config)
+
+@app.route('/admin/config/save', methods=['POST'])
+@login_required
+def save_config():
+    """Salva la configurazione"""
+    try:
+        new_config = request.get_json()
+        
+        # Valida la configurazione
+        if not isinstance(new_config, dict):
+            return jsonify({"status": "error", "message": "Configurazione non valida"})
+        
+        # Salva la configurazione
+        if config_manager.save_config(new_config):
+            # Applica la configurazione all'app
+            config_manager.apply_config_to_app(new_config)
+            
+            # Riavvia i proxy se necessario
+            setup_proxies()
+            
+            app.logger.info(f"Configurazione aggiornata dall'utente {session.get('username', 'unknown')}")
+            return jsonify({"status": "success", "message": "Configurazione salvata con successo! Riavvia l'applicazione per applicare tutte le modifiche."})
+        else:
+            return jsonify({"status": "error", "message": "Errore nel salvataggio della configurazione"})
+            
+    except Exception as e:
+        app.logger.error(f"Errore nel salvataggio configurazione: {e}")
+        return jsonify({"status": "error", "message": f"Errore: {str(e)}"})
+
+@app.route('/admin/config/reset', methods=['POST'])
+@login_required
+def reset_config():
+    """Ripristina la configurazione di default"""
+    try:
+        default_config = config_manager.default_config.copy()
+        if config_manager.save_config(default_config):
+            config_manager.apply_config_to_app(default_config)
+            app.logger.info("Configurazione ripristinata ai valori di default")
+            return jsonify({"status": "success", "message": "Configurazione ripristinata ai valori di default"})
+        else:
+            return jsonify({"status": "error", "message": "Errore nel ripristino della configurazione"})
+    except Exception as e:
+        app.logger.error(f"Errore nel ripristino configurazione: {e}")
+        return jsonify({"status": "error", "message": f"Errore: {str(e)}"})
+
+@app.route('/admin/config/test', methods=['POST'])
+@login_required
+def test_config():
+    """Testa le configurazioni proxy"""
+    try:
+        config = config_manager.load_config()
+        results = []
+        
+        # Test proxy SOCKS5
+        if config.get('SOCKS5_PROXY'):
+            proxies = [p.strip() for p in config['SOCKS5_PROXY'].split(',') if p.strip()]
+            for proxy in proxies[:3]:  # Testa solo i primi 3
+                try:
+                    response = requests.get('https://httpbin.org/ip', 
+                                          proxies={'http': proxy, 'https': proxy}, 
+                                          timeout=10)
+                    if response.status_code == 200:
+                        results.append(f"✅ SOCKS5 {proxy}: OK")
+                    else:
+                        results.append(f"❌ SOCKS5 {proxy}: Status {response.status_code}")
+                except Exception as e:
+                    results.append(f"❌ SOCKS5 {proxy}: {str(e)}")
+        
+        # Test HTTP proxy
+        if config.get('HTTP_PROXY'):
+            proxies = [p.strip() for p in config['HTTP_PROXY'].split(',') if p.strip()]
+            for proxy in proxies[:2]:  # Testa solo i primi 2
+                try:
+                    response = requests.get('http://httpbin.org/ip', 
+                                          proxies={'http': proxy}, 
+                                          timeout=10)
+                    if response.status_code == 200:
+                        results.append(f"✅ HTTP {proxy}: OK")
+                    else:
+                        results.append(f"❌ HTTP {proxy}: Status {response.status_code}")
+                except Exception as e:
+                    results.append(f"❌ HTTP {proxy}: {str(e)}")
+        
+        # Test DaddyLive URL
+        try:
+            daddy_url = get_daddylive_base_url()
+            response = requests.get(daddy_url, timeout=10)
+            if response.status_code == 200:
+                results.append(f"✅ DaddyLive URL: OK ({daddy_url})")
+            else:
+                results.append(f"❌ DaddyLive URL: Status {response.status_code}")
+        except Exception as e:
+            results.append(f"❌ DaddyLive URL: {str(e)}")
+        
+        app.logger.info("Test configurazioni eseguito")
+        message = "Test completato:\n" + "\n".join(results)
+        return jsonify({"status": "success", "message": message})
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel test configurazioni: {e}")
+        return jsonify({"status": "error", "message": f"Errore nel test: {str(e)}"})
+
+@app.route('/admin/logs')
+@login_required
+def admin_logs():
+    """Pagina di visualizzazione log"""
+    log_files = log_manager.get_log_files()
+    return render_template_string(LOG_TEMPLATE, log_files=log_files)
+
+@app.route('/admin/logs/stream/<filename>')
+@login_required
+def stream_logs(filename):
+    """Stream in tempo reale dei log"""
+    return Response(
+        log_manager.stream_log_file(filename),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*'
+        }
+    )
+
+@app.route('/admin/logs/download/<filename>')
+@login_required
+def download_log(filename):
+    """Download di un file di log"""
+    try:
+        filepath = os.path.join('logs', filename)
+        if os.path.exists(filepath):
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            return Response(
+                content,
+                mimetype='text/plain',
+                headers={
+                    'Content-Disposition': f'attachment; filename={filename}'
+                }
+            )
+        else:
+            return "File non trovato", 404
+    except Exception as e:
+        app.logger.error(f"Errore nel download log {filename}: {e}")
+        return f"Errore nel download: {str(e)}", 500
+
 @app.route('/admin/clear-cache', methods=['POST'])
 @login_required
 def clear_cache():
@@ -1250,12 +2314,16 @@ def clear_cache():
     TS_CACHE.clear()
     KEY_CACHE.clear()
     cleanup_sessions()
+    app.logger.info(f"Cache pulita dall'utente {session.get('username', 'unknown')}")
     return jsonify({"status": "success", "message": "Cache pulita con successo"})
 
 @app.route('/stats')
 def get_stats():
     """Endpoint per ottenere le statistiche di sistema"""
     stats = get_system_stats()
+    stats['daddy_base_url'] = get_daddylive_base_url()
+    stats['session_count'] = len(SESSION_POOL)
+    stats['proxy_count'] = len(PROXY_LIST)
     return jsonify(stats)
 
 @app.route('/')
@@ -1269,7 +2337,7 @@ def index():
                                 base_url=base_url,
                                 session_count=len(SESSION_POOL))
 
-# --- Route Proxy (tutte le route proxy esistenti rimangono identiche) ---
+# --- Route Proxy (mantieni tutte le route proxy esistenti) ---
 
 @app.route('/proxy/m3u')
 def proxy_m3u():
@@ -1282,10 +2350,10 @@ def proxy_m3u():
     cache_key = f"{m3u_url}|{cache_key_headers}"
 
     if cache_key in M3U8_CACHE:
-        print(f"Cache HIT per M3U8: {m3u_url}")
+        app.logger.info(f"Cache HIT per M3U8: {m3u_url}")
         cached_response = M3U8_CACHE[cache_key]
         return Response(cached_response, content_type="application/vnd.apple.mpegurl")
-    print(f"Cache MISS per M3U8: {m3u_url}")
+    app.logger.info(f"Cache MISS per M3U8: {m3u_url}")
 
     daddy_base_url = get_daddylive_base_url()
     daddy_origin = urlparse(daddy_base_url).scheme + "://" + urlparse(daddy_base_url).netloc
@@ -1303,11 +2371,10 @@ def proxy_m3u():
     }
 
     headers = {**default_headers, **request_headers}
-
     processed_url = process_daddylive_url(m3u_url)
 
     try:
-        print(f"Chiamata a resolve_m3u8_link per URL processato: {processed_url}")
+        app.logger.info(f"Chiamata a resolve_m3u8_link per URL processato: {processed_url}")
         result = resolve_m3u8_link(processed_url, headers)
         if not result["resolved_url"]:
             return "Errore: Impossibile risolvere l'URL in un M3U8 valido.", 500
@@ -1315,14 +2382,13 @@ def proxy_m3u():
         resolved_url = result["resolved_url"]
         current_headers_for_proxy = result["headers"]
 
-        print(f"Risoluzione completata. URL M3U8 finale: {resolved_url}")
+        app.logger.info(f"Risoluzione completata. URL M3U8 finale: {resolved_url}")
 
         if not resolved_url.endswith('.m3u8'):
-            print(f"URL risolto non è un M3U8: {resolved_url}")
+            app.logger.error(f"URL risolto non è un M3U8: {resolved_url}")
             return "Errore: Impossibile ottenere un M3U8 valido dal canale", 500
 
-        print(f"Fetching M3U8 content from clean URL: {resolved_url}")
-        print(f"Using headers: {current_headers_for_proxy}")
+        app.logger.info(f"Fetching M3U8 content from clean URL: {resolved_url}")
 
         timeout = get_dynamic_timeout(resolved_url)
         proxy_config = get_proxy_for_url(resolved_url)
@@ -1360,16 +2426,15 @@ def proxy_m3u():
             modified_m3u8.append(line)
 
         modified_m3u8_content = "\n".join(modified_m3u8)
-
         M3U8_CACHE[cache_key] = modified_m3u8_content
 
         return Response(modified_m3u8_content, content_type="application/vnd.apple.mpegurl")
 
     except requests.RequestException as e:
-        print(f"Errore durante il download o la risoluzione del file: {str(e)}")
+        app.logger.error(f"Errore durante il download o la risoluzione del file: {str(e)}")
         return f"Errore durante il download o la risoluzione del file M3U/M3U8: {str(e)}", 500
     except Exception as e:
-        print(f"Errore generico nella funzione proxy_m3u: {str(e)}")
+        app.logger.error(f"Errore generico nella funzione proxy_m3u: {str(e)}")
         return f"Errore generico durante l'elaborazione: {str(e)}", 500
 
 @app.route('/proxy/resolve')
@@ -1411,6 +2476,7 @@ def proxy_resolve():
         )
 
     except Exception as e:
+        app.logger.error(f"Errore durante la risoluzione dell'URL: {str(e)}")
         return f"Errore durante la risoluzione dell'URL: {str(e)}", 500
 
 @app.route('/proxy/ts')
@@ -1421,9 +2487,9 @@ def proxy_ts():
         return "Errore: Parametro 'url' mancante", 400
 
     if ts_url in TS_CACHE:
-        print(f"Cache HIT per TS: {ts_url}")
+        app.logger.info(f"Cache HIT per TS: {ts_url}")
         return Response(TS_CACHE[ts_url], content_type="video/mp2t")
-    print(f"Cache MISS per TS: {ts_url}")
+    app.logger.info(f"Cache MISS per TS: {ts_url}")
 
     headers = {
         unquote(key[2:]).replace("_", "-"): unquote(value).strip()
@@ -1458,33 +2524,35 @@ def proxy_ts():
                             yield chunk
                 except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
                     if "Read timed out" in str(e) or "timed out" in str(e).lower():
-                        print(f"Timeout durante il download del segmento TS (tentativo {attempt + 1}): {ts_url}")
+                        app.logger.warning(f"Timeout durante il download del segmento TS (tentativo {attempt + 1}): {ts_url}")
                         return
                     raise
                 finally:
                     ts_content = b"".join(content_parts)
                     if ts_content and len(ts_content) > 1024:
                         TS_CACHE[ts_url] = ts_content
-                        print(f"Segmento TS cachato ({len(ts_content)} bytes) per: {ts_url}")
+                        app.logger.info(f"Segmento TS cachato ({len(ts_content)} bytes) per: {ts_url}")
 
             return Response(generate_and_cache(), content_type="video/mp2t")
 
         except requests.exceptions.ConnectionError as e:
             if "Read timed out" in str(e) or "timed out" in str(e).lower():
-                print(f"Timeout del segmento TS (tentativo {attempt + 1}/{max_retries}): {ts_url}")
+                app.logger.warning(f"Timeout del segmento TS (tentativo {attempt + 1}/{max_retries}): {ts_url}")
                 if attempt == max_retries - 1:
                     return f"Errore: Timeout persistente per il segmento TS dopo {max_retries} tentativi", 504
                 time.sleep(2 ** attempt)
                 continue
             else:
+                app.logger.error(f"Errore di connessione per il segmento TS: {str(e)}")
                 return f"Errore di connessione per il segmento TS: {str(e)}", 500
         except requests.exceptions.ReadTimeout as e:
-            print(f"Read timeout esplicito per il segmento TS (tentativo {attempt + 1}/{max_retries}): {ts_url}")
+            app.logger.warning(f"Read timeout esplicito per il segmento TS (tentativo {attempt + 1}/{max_retries}): {ts_url}")
             if attempt == max_retries - 1:
                 return f"Errore: Read timeout persistente per il segmento TS dopo {max_retries} tentativi", 504
             time.sleep(2 ** attempt)
             continue
         except requests.RequestException as e:
+            app.logger.error(f"Errore durante il download del segmento TS: {str(e)}")
             return f"Errore durante il download del segmento TS: {str(e)}", 500
         
 @app.route('/proxy')
@@ -1521,7 +2589,7 @@ def proxy():
                         encoded_value = quote(quote(str(value)))
                         current_stream_headers_params.append(f"h_{encoded_key}={encoded_value}")
                 except Exception as e:
-                    print(f"ERROR: Errore nel parsing di #EXTHTTP '{line}': {e}")
+                    app.logger.error(f"Errore nel parsing di #EXTHTTP '{line}': {e}")
                 modified_lines.append(line)
             
             elif line.startswith('#EXTVLCOPT:'):
@@ -1548,7 +2616,7 @@ def proxy():
                                     header_key = header_name.strip()
                                     value = header_val.strip()
                                 else:
-                                    print(f"WARNING: Malformed http-header option in EXTVLCOPT: {opt_pair}")
+                                    app.logger.warning(f"Malformed http-header option in EXTVLCOPT: {opt_pair}")
                                     continue
                             
                             if header_key:
@@ -1557,7 +2625,7 @@ def proxy():
                                 current_stream_headers_params.append(f"h_{encoded_key}={encoded_value}")
                             
                 except Exception as e:
-                    print(f"ERROR: Errore nel parsing di #EXTVLCOPT '{line}': {e}")
+                    app.logger.error(f"Errore nel parsing di #EXTVLCOPT '{line}': {e}")
                 modified_lines.append(line)
             elif line and not line.startswith('#'):
                 if 'pluto.tv' in line.lower():
@@ -1582,9 +2650,10 @@ def proxy():
         return Response(modified_content, content_type="application/vnd.apple.mpegurl", headers={'Content-Disposition': f'attachment; filename="{original_filename}"'})
         
     except requests.RequestException as e:
-        print(f"ERRORE: Fallito il download di '{m3u_url}'.")
+        app.logger.error(f"Fallito il download di '{m3u_url}': {e}")
         return f"Errore durante il download della lista M3U: {str(e)}", 500
     except Exception as e:
+        app.logger.error(f"Errore generico nel proxy M3U: {e}")
         return f"Errore generico: {str(e)}", 500
 
 @app.route('/proxy/key')
@@ -1595,9 +2664,9 @@ def proxy_key():
         return "Errore: Parametro 'url' mancante per la chiave", 400
 
     if key_url in KEY_CACHE:
-        print(f"Cache HIT per KEY: {key_url}")
+        app.logger.info(f"Cache HIT per KEY: {key_url}")
         return Response(KEY_CACHE[key_url], content_type="application/octet-stream")
-    print(f"Cache MISS per KEY: {key_url}")
+    app.logger.info(f"Cache MISS per KEY: {key_url}")
 
     headers = {
         unquote(key[2:]).replace("_", "-"): unquote(value).strip()
@@ -1623,13 +2692,30 @@ def proxy_key():
         return Response(key_content, content_type="application/octet-stream")
 
     except requests.RequestException as e:
+        app.logger.error(f"Errore durante il download della chiave AES-128: {str(e)}")
         return f"Errore durante il download della chiave AES-128: {str(e)}", 500
+
+# --- Inizializzazione dell'app ---
+
+# Carica e applica la configurazione salvata al startup
+saved_config = config_manager.load_config()
+config_manager.apply_config_to_app(saved_config)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
-    print(f"Proxy ONLINE - In ascolto su porta {port}")
-    print(f"Admin Username: {ADMIN_USERNAME}")
-    print(f"Admin Password: {ADMIN_PASSWORD}")
+    
+    # Log di avvio
+    app.logger.info("="*50)
+    app.logger.info("🚀 PROXY SERVER AVVIATO")
+    app.logger.info("="*50)
+    app.logger.info(f"Porta: {port}")
+    app.logger.info(f"Admin Username: {ADMIN_USERNAME}")
+    app.logger.info(f"Admin Password: {ADMIN_PASSWORD}")
+    app.logger.info(f"Proxy configurati: {len(PROXY_LIST)}")
     if ALLOWED_IPS:
-        print(f"IP consentiti: {ALLOWED_IPS}")
+        app.logger.info(f"IP consentiti: {ALLOWED_IPS}")
+    else:
+        app.logger.info("Accesso consentito da tutti gli IP")
+    app.logger.info("="*50)
+    
     app.run(host="0.0.0.0", port=port, debug=False)
