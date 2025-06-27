@@ -14,7 +14,8 @@ from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import psutil
-from threading import Thread
+from threading import Thread, Lock
+import weakref
 
 app = Flask(__name__)
 
@@ -31,6 +32,14 @@ if not VERIFY_SSL:
 REQUEST_TIMEOUT = int(os.environ.get('REQUEST_TIMEOUT', 30))
 print(f"Timeout per le richieste impostato a {REQUEST_TIMEOUT} secondi.")
 
+# Configurazioni Keep-Alive
+KEEP_ALIVE_TIMEOUT = int(os.environ.get('KEEP_ALIVE_TIMEOUT', 300))  # 5 minuti
+MAX_KEEP_ALIVE_REQUESTS = int(os.environ.get('MAX_KEEP_ALIVE_REQUESTS', 1000))
+POOL_CONNECTIONS = int(os.environ.get('POOL_CONNECTIONS', 20))
+POOL_MAXSIZE = int(os.environ.get('POOL_MAXSIZE', 50))
+
+print(f"Keep-Alive configurato: timeout={KEEP_ALIVE_TIMEOUT}s, max_requests={MAX_KEEP_ALIVE_REQUESTS}")
+
 # --- Variabili globali per monitoraggio sistema ---
 system_stats = {
     'ram_usage': 0,
@@ -40,6 +49,10 @@ system_stats = {
     'network_recv': 0,
     'bandwidth_usage': 0
 }
+
+# Pool globale di sessioni per connessioni persistenti
+SESSION_POOL = {}
+SESSION_LOCK = Lock()
 
 def get_system_stats():
     """Ottiene le statistiche di sistema in tempo reale"""
@@ -83,9 +96,43 @@ def monitor_bandwidth():
         
         time.sleep(1)
 
-# Avvia il monitoraggio in background
+def connection_manager():
+    """Thread per gestire le connessioni persistenti"""
+    while True:
+        try:
+            time.sleep(300)  # Controlla ogni 5 minuti
+            
+            # Statistiche connessioni
+            with SESSION_LOCK:
+                active_sessions = len(SESSION_POOL)
+                print(f"Sessioni attive nel pool: {active_sessions}")
+                
+                # Pulizia periodica delle sessioni inattive
+                if active_sessions > 10:  # Se troppe sessioni, pulisci
+                    cleanup_sessions()
+                    
+        except Exception as e:
+            print(f"Errore nel connection manager: {e}")
+
+def cleanup_sessions():
+    """Pulisce le sessioni inattive dal pool"""
+    global SESSION_POOL, SESSION_LOCK
+    
+    with SESSION_LOCK:
+        for key, session in list(SESSION_POOL.items()):
+            try:
+                session.close()
+            except:
+                pass
+        SESSION_POOL.clear()
+        print("Pool di sessioni pulito")
+
+# Avvia i thread di monitoraggio
 bandwidth_thread = Thread(target=monitor_bandwidth, daemon=True)
 bandwidth_thread.start()
+
+connection_thread = Thread(target=connection_manager, daemon=True)
+connection_thread.start()
 
 # --- Configurazione Proxy ---
 PROXY_LIST = []
@@ -147,8 +194,14 @@ def get_proxy_for_url(url):
     return {'http': chosen_proxy, 'https': chosen_proxy}
 
 def create_robust_session():
-    """Crea una sessione con configurazione robusta per gestire timeout e retry."""
+    """Crea una sessione con configurazione robusta e keep-alive per connessioni persistenti."""
     session = requests.Session()
+    
+    # Configurazione Keep-Alive
+    session.headers.update({
+        'Connection': 'keep-alive',
+        'Keep-Alive': f'timeout={KEEP_ALIVE_TIMEOUT}, max={MAX_KEEP_ALIVE_REQUESTS}'
+    })
     
     retry_strategy = Retry(
         total=3,
@@ -161,14 +214,65 @@ def create_robust_session():
     
     adapter = HTTPAdapter(
         max_retries=retry_strategy,
-        pool_connections=10,
-        pool_maxsize=20
+        pool_connections=POOL_CONNECTIONS,
+        pool_maxsize=POOL_MAXSIZE,
+        pool_block=False
     )
     
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     
     return session
+
+def get_persistent_session(proxy_url=None):
+    """Ottiene una sessione persistente dal pool o ne crea una nuova"""
+    global SESSION_POOL, SESSION_LOCK
+    
+    # Usa proxy_url come chiave, o 'default' se non c'è proxy
+    pool_key = proxy_url if proxy_url else 'default'
+    
+    with SESSION_LOCK:
+        if pool_key not in SESSION_POOL:
+            session = create_robust_session()
+            
+            # Configura proxy se fornito
+            if proxy_url:
+                session.proxies.update({'http': proxy_url, 'https': proxy_url})
+            
+            SESSION_POOL[pool_key] = session
+            print(f"Nuova sessione persistente creata per: {pool_key}")
+        
+        return SESSION_POOL[pool_key]
+
+def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, **kwargs):
+    """Effettua una richiesta usando connessioni persistenti"""
+    session = get_persistent_session(proxy_url)
+    
+    # Headers per keep-alive
+    request_headers = {
+        'Connection': 'keep-alive',
+        'Keep-Alive': f'timeout={KEEP_ALIVE_TIMEOUT}, max={MAX_KEEP_ALIVE_REQUESTS}'
+    }
+    
+    if headers:
+        request_headers.update(headers)
+    
+    try:
+        response = session.get(
+            url, 
+            headers=request_headers, 
+            timeout=timeout or REQUEST_TIMEOUT,
+            verify=VERIFY_SSL,
+            **kwargs
+        )
+        return response
+    except Exception as e:
+        print(f"Errore nella richiesta persistente: {e}")
+        # In caso di errore, rimuovi la sessione dal pool
+        with SESSION_LOCK:
+            if proxy_url in SESSION_POOL:
+                del SESSION_POOL[proxy_url]
+        raise
 
 def get_dynamic_timeout(url, base_timeout=REQUEST_TIMEOUT):
     """Calcola timeout dinamico basato sul tipo di risorsa."""
@@ -494,6 +598,7 @@ def dashboard():
             .status {{ padding: 10px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; margin: 20px 0; }}
             .progress-bar {{ width: 100%; height: 20px; background-color: #e9ecef; border-radius: 10px; overflow: hidden; }}
             .progress-fill {{ height: 100%; background-color: #007bff; transition: width 0.3s ease; }}
+            .connection-stats {{ background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 10px 0; }}
         </style>
     </head>
     <body>
@@ -502,6 +607,10 @@ def dashboard():
             
             <div class="status">
                 <strong>Status:</strong> Proxy ONLINE - Base URL: {daddy_base_url}
+            </div>
+            
+            <div class="connection-stats">
+                <strong>Connessioni Persistenti:</strong> {len(SESSION_POOL)} sessioni attive nel pool
             </div>
             
             <div class="stats-grid">
@@ -603,7 +712,16 @@ def proxy_m3u():
         print(f"Using headers: {current_headers_for_proxy}")
 
         timeout = get_dynamic_timeout(resolved_url)
-        m3u_response = requests.get(resolved_url, headers=current_headers_for_proxy, allow_redirects=True, timeout=timeout, proxies=get_proxy_for_url(resolved_url), verify=VERIFY_SSL)
+        proxy_config = get_proxy_for_url(resolved_url)
+        proxy_key = proxy_config['http'] if proxy_config else None
+        
+        m3u_response = make_persistent_request(
+            resolved_url,
+            headers=current_headers_for_proxy,
+            timeout=timeout,
+            proxy_url=proxy_key,
+            allow_redirects=True
+        )
         m3u_response.raise_for_status()
 
         m3u_content = m3u_response.text
@@ -684,7 +802,7 @@ def proxy_resolve():
 
 @app.route('/proxy/ts')
 def proxy_ts():
-    """Proxy per segmenti .TS con headers personalizzati, caching e gestione avanzata timeout"""
+    """Proxy per segmenti .TS con connessioni persistenti, headers personalizzati e caching"""
     ts_url = request.args.get('url', '').strip()
     if not ts_url:
         return "Errore: Parametro 'url' mancante", 400
@@ -700,20 +818,21 @@ def proxy_ts():
         if key.lower().startswith("h_")
     }
 
+    proxy_config = get_proxy_for_url(ts_url)
+    proxy_key = proxy_config['http'] if proxy_config else None
+    
     ts_timeout = get_dynamic_timeout(ts_url)
     max_retries = 3
     
     for attempt in range(max_retries):
         try:
-            session = create_robust_session()
-            response = session.get(
-                ts_url, 
-                headers=headers, 
-                stream=True, 
-                allow_redirects=True, 
-                timeout=ts_timeout, 
-                proxies=get_proxy_for_url(ts_url), 
-                verify=VERIFY_SSL
+            response = make_persistent_request(
+                ts_url,
+                headers=headers,
+                timeout=ts_timeout,
+                proxy_url=proxy_key,
+                stream=True,
+                allow_redirects=True
             )
             response.raise_for_status()
 
@@ -731,7 +850,7 @@ def proxy_ts():
                     raise
                 finally:
                     ts_content = b"".join(content_parts)
-                    if ts_content and len(ts_content) > 1024:  # Solo se abbiamo contenuto significativo
+                    if ts_content and len(ts_content) > 1024:
                         TS_CACHE[ts_url] = ts_content
                         print(f"Segmento TS cachato ({len(ts_content)} bytes) per: {ts_url}")
 
@@ -764,8 +883,14 @@ def proxy():
 
     try:
         server_ip = request.host
-        proxy_for_request = get_proxy_for_url(m3u_url)
-        response = requests.get(m3u_url, timeout=REQUEST_TIMEOUT, proxies=proxy_for_request, verify=VERIFY_SSL)
+        proxy_config = get_proxy_for_url(m3u_url)
+        proxy_key = proxy_config['http'] if proxy_config else None
+        
+        response = make_persistent_request(
+            m3u_url,
+            timeout=REQUEST_TIMEOUT,
+            proxy_url=proxy_key
+        )
         response.raise_for_status()
         m3u_content = response.text
         
@@ -868,7 +993,16 @@ def proxy_key():
     }
 
     try:
-        response = requests.get(key_url, headers=headers, allow_redirects=True, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(key_url), verify=VERIFY_SSL)
+        proxy_config = get_proxy_for_url(key_url)
+        proxy_key = proxy_config['http'] if proxy_config else None
+        
+        response = make_persistent_request(
+            key_url,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+            proxy_url=proxy_key,
+            allow_redirects=True
+        )
         response.raise_for_status()
         key_content = response.content
 
@@ -894,6 +1028,7 @@ def index():
         <li><strong>Banda:</strong> {stats['bandwidth_usage']:.2f} MB/s</li>
         <li><strong>Dati Inviati:</strong> {stats['network_sent']:.1f} MB</li>
         <li><strong>Dati Ricevuti:</strong> {stats['network_recv']:.1f} MB</li>
+        <li><strong>Connessioni Persistenti:</strong> {len(SESSION_POOL)} sessioni attive</li>
     </ul>
     
     <p><a href="/dashboard">📈 Dashboard Completo</a> | <a href="/stats">📊 API JSON</a></p>
