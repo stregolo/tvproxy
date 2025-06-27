@@ -80,8 +80,12 @@ def download_proxies_from_github():
         for line in proxy_lines:
             line = line.strip()
             if line and not line.startswith('#'):
-                # Formato IP:PORT
-                if ':' in line:
+                # Gestisce sia formato completo che IP:PORT
+                if line.startswith('http://') or line.startswith('https://'):
+                    # Formato già completo: http://IP:PORT
+                    proxies.append(line)
+                elif ':' in line:
+                    # Formato IP:PORT - aggiunge http://
                     ip_port = line.split(':')
                     if len(ip_port) == 2:
                         ip, port = ip_port
