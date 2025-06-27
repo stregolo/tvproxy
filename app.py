@@ -4,7 +4,7 @@ import time
 import random
 import requests
 import threading
-from urllib.parse import urljoin, urlparse, unquote, parse_qs
+from urllib.parse import urljoin, urlparse, unquote, parse_qs, quote
 from flask import Flask, request, Response, jsonify, render_template_string
 from cachetools import TTLCache
 import psutil
@@ -14,7 +14,7 @@ from collections import defaultdict
 app = Flask(__name__)
 
 # Configurazione
-VERIFY_SSL = False
+VERIFY_SSL = True
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
@@ -49,6 +49,56 @@ def cleanup_if_needed():
         new_memory = get_memory_usage()
         print(f"Memoria dopo pulizia: {new_memory:.1f}MB")
 
+def setup_proxy_from_env():
+    """Configura proxy dalle variabili d'ambiente con supporto completo"""
+    proxy_config = {}
+    
+    # Proxy HTTP
+    http_proxy = (os.environ.get('HTTP_PROXY') or 
+                  os.environ.get('http_proxy'))
+    
+    # Proxy HTTPS  
+    https_proxy = (os.environ.get('HTTPS_PROXY') or 
+                   os.environ.get('https_proxy'))
+    
+    # Proxy SOCKS
+    socks_proxy = (os.environ.get('SOCKS_PROXY') or 
+                   os.environ.get('socks_proxy'))
+    
+    # Lista di proxy multipli (separati da virgola)
+    proxy_list = os.environ.get('PROXY_LIST')
+    
+    if proxy_list:
+        # Supporto per lista di proxy
+        proxies = [p.strip() for p in proxy_list.split(',')]
+        selected_proxy = random.choice(proxies)
+        proxy_config['http'] = selected_proxy
+        proxy_config['https'] = selected_proxy
+        print(f"Proxy selezionato dalla lista: {selected_proxy}")
+    elif socks_proxy:
+        # SOCKS proxy per entrambi HTTP e HTTPS
+        proxy_config['http'] = socks_proxy
+        proxy_config['https'] = socks_proxy
+        print(f"SOCKS proxy configurato: {socks_proxy}")
+    else:
+        # Proxy separati per HTTP e HTTPS
+        if http_proxy:
+            proxy_config['http'] = http_proxy
+        if https_proxy:
+            proxy_config['https'] = https_proxy
+        if proxy_config:
+            print(f"Proxy configurati: {proxy_config}")
+    
+    # NO_PROXY per escludere domini
+    no_proxy = os.environ.get('NO_PROXY') or os.environ.get('no_proxy')
+    if no_proxy:
+        print(f"Domini esclusi dal proxy: {no_proxy}")
+    
+    return proxy_config if proxy_config else None
+
+# Inizializza proxy all'avvio
+PROXY_CONFIG = setup_proxy_from_env()
+
 @app.before_request
 def before_request():
     """Pulizia periodica della memoria"""
@@ -57,6 +107,10 @@ def before_request():
 
 def get_random_user_agent():
     return random.choice(USER_AGENTS)
+
+def get_proxy_for_request():
+    """Restituisce la configurazione proxy per le richieste"""
+    return PROXY_CONFIG
 
 def create_robust_session():
     session = requests.Session()
@@ -68,6 +122,11 @@ def create_robust_session():
         'Connection': 'keep-alive',
         'Upgrade-Insecure-Requests': '1',
     })
+    
+    # Configura proxy se disponibili
+    if PROXY_CONFIG:
+        session.proxies.update(PROXY_CONFIG)
+    
     return session
 
 def get_dynamic_timeout(url):
@@ -133,6 +192,7 @@ def preload_next_segments(m3u8_content, base_url, headers):
                         segment_url, 
                         headers=headers, 
                         timeout=10,
+                        proxies=get_proxy_for_request(),
                         verify=VERIFY_SSL
                     )
                     if response.status_code == 200:
@@ -157,6 +217,8 @@ def home():
         'KEY_CACHE': f"{len(KEY_CACHE)}/{KEY_CACHE.maxsize}",
     }
     
+    proxy_status = "Attivo" if PROXY_CONFIG else "Disattivato"
+    
     html = """
     <!DOCTYPE html>
     <html>
@@ -167,16 +229,19 @@ def home():
             .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
             .status { background: #e8f5e8; padding: 15px; border-radius: 5px; margin: 20px 0; }
             .cache-info { background: #f0f8ff; padding: 15px; border-radius: 5px; margin: 20px 0; }
+            .proxy-info { background: #fff3cd; padding: 15px; border-radius: 5px; margin: 20px 0; }
             h1 { color: #333; }
             .endpoint { background: #f8f8f8; padding: 10px; margin: 10px 0; border-left: 4px solid #007cba; }
+            .example { background: #f8f9fa; padding: 10px; margin: 10px 0; border-left: 4px solid #28a745; font-family: monospace; }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🎬 M3U8 Proxy Server</h1>
+            <h1>🎬 M3U8 Proxy Server Ottimizzato</h1>
             <div class="status">
                 <strong>✅ Server Attivo</strong><br>
                 Memoria utilizzata: {{ memory_mb }}MB<br>
+                Proxy: {{ proxy_status }}<br>
                 Timestamp: {{ timestamp }}
             </div>
             
@@ -187,21 +252,62 @@ def home():
                 {% endfor %}
             </div>
             
+            {% if proxy_config %}
+            <div class="proxy-info">
+                <strong>🌐 Configurazione Proxy:</strong><br>
+                {{ proxy_config }}
+            </div>
+            {% endif %}
+            
             <h2>📡 Endpoints Disponibili</h2>
             <div class="endpoint">
                 <strong>GET /proxy/m3u</strong><br>
-                Proxy per playlist M3U8<br>
-                Parametri: url, h_* (headers)
+                Proxy per playlist M3U8 con cache condivisa<br>
+                Parametri: url, h_* (headers personalizzati)
             </div>
+            <div class="example">
+                Esempio: /proxy/m3u?url=https://example.com/playlist.m3u8&h_User_Agent=MyApp&h_Referer=https://site.com
+            </div>
+            
             <div class="endpoint">
                 <strong>GET /proxy/ts</strong><br>
-                Proxy per segmenti TS con cache condivisa<br>
-                Parametri: url, h_* (headers)
+                Proxy per segmenti TS con cache condivisa e ottimizzazione memoria<br>
+                Parametri: url, h_* (headers personalizzati)
             </div>
+            <div class="example">
+                Esempio: /proxy/ts?url=https://example.com/segment001.ts&h_Authorization=Bearer token123
+            </div>
+            
             <div class="endpoint">
                 <strong>GET /proxy/key</strong><br>
-                Proxy per chiavi di decrittazione<br>
-                Parametri: url, h_* (headers)
+                Proxy per chiavi di decrittazione AES-128<br>
+                Parametri: url, h_* (headers personalizzati)
+            </div>
+            
+            <div class="endpoint">
+                <strong>GET /proxy</strong><br>
+                Proxy per liste M3U che aggiunge automaticamente proxy agli URL<br>
+                Parametri: url
+            </div>
+            
+            <h2>🔧 Endpoints di Gestione</h2>
+            <div class="endpoint">
+                <strong>GET /status</strong><br>
+                Informazioni dettagliate su memoria e cache (JSON)
+            </div>
+            
+            <div class="endpoint">
+                <strong>GET /clear-cache</strong><br>
+                Pulisce manualmente tutte le cache
+            </div>
+            
+            <h2>🌍 Configurazione Proxy</h2>
+            <p>Per utilizzare proxy, imposta le variabili d'ambiente:</p>
+            <div class="example">
+                export HTTP_PROXY=http://proxy.example.com:8080<br>
+                export HTTPS_PROXY=https://proxy.example.com:8080<br>
+                export SOCKS_PROXY=socks5://proxy.example.com:1080<br>
+                export PROXY_LIST="http://proxy1:8080,socks5://proxy2:1080"
             </div>
         </div>
     </body>
@@ -211,6 +317,8 @@ def home():
     return render_template_string(html, 
                                 memory_mb=f"{memory_mb:.1f}",
                                 cache_stats=cache_stats,
+                                proxy_status=proxy_status,
+                                proxy_config=str(PROXY_CONFIG) if PROXY_CONFIG else None,
                                 timestamp=time.strftime("%Y-%m-%d %H:%M:%S"))
 
 @app.route('/proxy/m3u')
@@ -243,7 +351,8 @@ def proxy_m3u():
             response = session.get(
                 m3u_url, 
                 headers=current_headers_for_proxy, 
-                timeout=m3u_timeout, 
+                timeout=m3u_timeout,
+                proxies=get_proxy_for_request(),
                 verify=VERIFY_SSL
             )
             response.raise_for_status()
@@ -296,16 +405,16 @@ def process_m3u_content(content, base_url, headers):
             
             # Determina il tipo di proxy necessario
             if segment_url.endswith('.ts'):
-                proxy_url = f"/proxy/ts?url={segment_url}"
+                proxy_url = f"/proxy/ts?url={quote(segment_url)}"
             elif segment_url.endswith('.m3u8'):
-                proxy_url = f"/proxy/m3u?url={segment_url}"
+                proxy_url = f"/proxy/m3u?url={quote(segment_url)}"
             else:
-                proxy_url = f"/proxy/ts?url={segment_url}"  # Default a TS
+                proxy_url = f"/proxy/ts?url={quote(segment_url)}"  # Default a TS
             
             # Aggiungi headers se presenti
             for header_name, header_value in headers.items():
                 encoded_name = f"h_{header_name.replace('-', '_')}"
-                proxy_url += f"&{encoded_name}={header_value}"
+                proxy_url += f"&{encoded_name}={quote(header_value)}"
             
             processed_lines.append(proxy_url)
         elif line.startswith('#EXT-X-KEY:'):
@@ -328,12 +437,12 @@ def process_key_line(line, base_url, headers):
                 key_url = urljoin(base_url, key_url)
             
             # Crea URL proxy per la chiave
-            proxy_key_url = f"/proxy/key?url={key_url}"
+            proxy_key_url = f"/proxy/key?url={quote(key_url)}"
             
             # Aggiungi headers
             for header_name, header_value in headers.items():
                 encoded_name = f"h_{header_name.replace('-', '_')}"
-                proxy_key_url += f"&{encoded_name}={header_value}"
+                proxy_key_url += f"&{encoded_name}={quote(header_value)}"
             
             # Sostituisci l'URL nella linea
             line = re.sub(r'URI="[^"]+"', f'URI="{proxy_key_url}"', line)
@@ -375,7 +484,8 @@ def proxy_ts():
                 response = session.get(
                     ts_url, 
                     headers=headers, 
-                    timeout=ts_timeout, 
+                    timeout=ts_timeout,
+                    proxies=get_proxy_for_request(),
                     verify=VERIFY_SSL
                 )
                 response.raise_for_status()
@@ -431,7 +541,8 @@ def proxy_key():
         response = session.get(
             key_url, 
             headers=headers, 
-            timeout=10, 
+            timeout=10,
+            proxies=get_proxy_for_request(),
             verify=VERIFY_SSL
         )
         response.raise_for_status()
@@ -444,6 +555,105 @@ def proxy_key():
 
     except requests.RequestException as e:
         return f"Errore download chiave: {str(e)}", 500
+
+@app.route('/proxy')
+def proxy():
+    """Proxy per liste M3U che aggiunge automaticamente /proxy/m3u?url= con IP prima dei link"""
+    m3u_url = request.args.get('url', '').strip()
+    if not m3u_url:
+        return "Errore: Parametro 'url' mancante", 400
+
+    try:
+        server_ip = request.host
+        session = create_robust_session()
+        response = session.get(
+            m3u_url, 
+            timeout=20,
+            proxies=get_proxy_for_request(),
+            verify=VERIFY_SSL
+        )
+        response.raise_for_status()
+        m3u_content = response.text
+        
+        modified_lines = []
+        current_stream_headers_params = [] 
+
+        for line in m3u_content.splitlines():
+            line = line.strip()
+            if line.startswith('#EXTHTTP:'):
+                try:
+                    json_str = line.split(':', 1)[1].strip()
+                    headers_dict = json.loads(json_str)
+                    for key, value in headers_dict.items():
+                        encoded_key = quote(quote(key))
+                        encoded_value = quote(quote(str(value)))
+                        current_stream_headers_params.append(f"h_{encoded_key}={encoded_value}")
+                except Exception as e:
+                    print(f"ERROR: Errore nel parsing di #EXTHTTP '{line}': {e}")
+                modified_lines.append(line)
+            
+            elif line.startswith('#EXTVLCOPT:'):
+                try:
+                    options_str = line.split(':', 1)[1].strip()
+                    for opt_pair in options_str.split(','):
+                        opt_pair = opt_pair.strip()
+                        if '=' in opt_pair:
+                            key, value = opt_pair.split('=', 1)
+                            key = key.strip()
+                            value = value.strip().strip('"')
+                            
+                            header_key = None
+                            if key.lower() == 'http-user-agent':
+                                header_key = 'User-Agent'
+                            elif key.lower() == 'http-referer':
+                                header_key = 'Referer'
+                            elif key.lower() == 'http-cookie':
+                                header_key = 'Cookie'
+                            elif key.lower() == 'http-header':
+                                full_header_value = value
+                                if ':' in full_header_value:
+                                    header_name, header_val = full_header_value.split(':', 1)
+                                    header_key = header_name.strip()
+                                    value = header_val.strip()
+                                else:
+                                    print(f"WARNING: Malformed http-header option in EXTVLCOPT: {opt_pair}")
+                                    continue
+                            
+                            if header_key:
+                                encoded_key = quote(quote(header_key))
+                                encoded_value = quote(quote(value))
+                                current_stream_headers_params.append(f"h_{encoded_key}={encoded_value}")
+                            
+                except Exception as e:
+                    print(f"ERROR: Errore nel parsing di #EXTVLCOPT '{line}': {e}")
+                modified_lines.append(line)
+            elif line and not line.startswith('#'):
+                if 'pluto.tv' in line.lower():
+                    modified_lines.append(line)
+                else:
+                    encoded_line = quote(line, safe='')
+                    headers_query_string = ""
+                    if current_stream_headers_params:
+                        headers_query_string = "%26" + "%26".join(current_stream_headers_params)
+                    
+                    modified_line = f"http://{server_ip}/proxy/m3u?url={encoded_line}{headers_query_string}"
+                    modified_lines.append(modified_line)
+                
+                current_stream_headers_params = [] 
+            else:
+                modified_lines.append(line)
+        
+        modified_content = '\n'.join(modified_lines)
+        parsed_m3u_url = urlparse(m3u_url)
+        original_filename = os.path.basename(parsed_m3u_url.path)
+        
+        return Response(modified_content, content_type="application/vnd.apple.mpegurl", headers={'Content-Disposition': f'attachment; filename="{original_filename}"'})
+        
+    except requests.RequestException as e:
+        print(f"ERRORE: Fallito il download di '{m3u_url}'.")
+        return f"Errore durante il download della lista M3U: {str(e)}", 500
+    except Exception as e:
+        return f"Errore generico: {str(e)}", 500
 
 @app.route('/status')
 def status():
@@ -463,6 +673,8 @@ def status():
             "ts_ttl": TS_CACHE.ttl,
             "key_ttl": KEY_CACHE.ttl
         },
+        "proxy_config": PROXY_CONFIG,
+        "proxy_enabled": bool(PROXY_CONFIG),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
     
@@ -489,5 +701,10 @@ if __name__ == '__main__':
     print(f"   - TS: {TS_CACHE.maxsize} elementi, TTL {TS_CACHE.ttl}s")
     print(f"   - KEY: {KEY_CACHE.maxsize} elementi, TTL {KEY_CACHE.ttl}s")
     print(f"🔧 Memoria iniziale: {get_memory_usage():.1f}MB")
+    
+    if PROXY_CONFIG:
+        print(f"🌐 Proxy configurato: {PROXY_CONFIG}")
+    else:
+        print("🌐 Nessun proxy configurato (connessione diretta)")
     
     app.run(host='0.0.0.0', port=7860, debug=False, threaded=True)
