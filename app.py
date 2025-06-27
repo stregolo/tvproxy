@@ -217,7 +217,8 @@ def home():
         'KEY_CACHE': f"{len(KEY_CACHE)}/{KEY_CACHE.maxsize}",
     }
     
-    proxy_status = "Attivo" if PROXY_CONFIG else "Disattivato"
+    # Nasconde lo stato del proxy
+    proxy_status = "Nascosto"
     
     html = """
     <!DOCTYPE html>
@@ -229,7 +230,6 @@ def home():
             .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
             .status { background: #e8f5e8; padding: 15px; border-radius: 5px; margin: 20px 0; }
             .cache-info { background: #f0f8ff; padding: 15px; border-radius: 5px; margin: 20px 0; }
-            .proxy-info { background: #fff3cd; padding: 15px; border-radius: 5px; margin: 20px 0; }
             h1 { color: #333; }
             .endpoint { background: #f8f8f8; padding: 10px; margin: 10px 0; border-left: 4px solid #007cba; }
             .example { background: #f8f9fa; padding: 10px; margin: 10px 0; border-left: 4px solid #28a745; font-family: monospace; }
@@ -251,13 +251,6 @@ def home():
                     {{ cache_name }}: {{ cache_stat }}<br>
                 {% endfor %}
             </div>
-            
-            {% if proxy_config %}
-            <div class="proxy-info">
-                <strong>🌐 Configurazione Proxy:</strong><br>
-                {{ proxy_config }}
-            </div>
-            {% endif %}
             
             <h2>📡 Endpoints Disponibili</h2>
             <div class="endpoint">
@@ -300,15 +293,6 @@ def home():
                 <strong>GET /clear-cache</strong><br>
                 Pulisce manualmente tutte le cache
             </div>
-            
-            <h2>🌍 Configurazione Proxy</h2>
-            <p>Per utilizzare proxy, imposta le variabili d'ambiente:</p>
-            <div class="example">
-                export HTTP_PROXY=http://proxy.example.com:8080<br>
-                export HTTPS_PROXY=https://proxy.example.com:8080<br>
-                export SOCKS_PROXY=socks5://proxy.example.com:1080<br>
-                export PROXY_LIST="http://proxy1:8080,socks5://proxy2:1080"
-            </div>
         </div>
     </body>
     </html>
@@ -318,7 +302,6 @@ def home():
                                 memory_mb=f"{memory_mb:.1f}",
                                 cache_stats=cache_stats,
                                 proxy_status=proxy_status,
-                                proxy_config=str(PROXY_CONFIG) if PROXY_CONFIG else None,
                                 timestamp=time.strftime("%Y-%m-%d %H:%M:%S"))
 
 @app.route('/proxy/m3u')
@@ -576,7 +559,7 @@ def proxy():
         m3u_content = response.text
         
         modified_lines = []
-        current_stream_headers_params = [] 
+        current_stream_headers_params = []
 
         for line in m3u_content.splitlines():
             line = line.strip()
@@ -673,8 +656,6 @@ def status():
             "ts_ttl": TS_CACHE.ttl,
             "key_ttl": KEY_CACHE.ttl
         },
-        "proxy_config": PROXY_CONFIG,
-        "proxy_enabled": bool(PROXY_CONFIG),
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
     
