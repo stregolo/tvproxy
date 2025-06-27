@@ -15,11 +15,6 @@ app = Flask(__name__)
 
 # Configurazione
 VERIFY_SSL = False
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-]
 
 # Cache ottimizzate per ridurre consumo memoria
 M3U8_CACHE = TTLCache(maxsize=50, ttl=10)   # Ridotta da 200 a 50, TTL da 5 a 10 secondi
@@ -105,9 +100,6 @@ def before_request():
     if random.random() < 0.05:  # 5% delle richieste
         cleanup_if_needed()
 
-def get_random_user_agent():
-    return random.choice(USER_AGENTS)
-
 def get_proxy_for_request():
     """Restituisce la configurazione proxy per le richieste"""
     return PROXY_CONFIG
@@ -115,7 +107,6 @@ def get_proxy_for_request():
 def create_robust_session():
     session = requests.Session()
     session.headers.update({
-        'User-Agent': get_random_user_agent(),
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept-Encoding': 'gzip, deflate',
