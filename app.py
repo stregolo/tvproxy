@@ -94,7 +94,6 @@ def get_proxy_for_url(url):
     try:
         parsed_url = urlparse(url)
         if 'github.com' in parsed_url.netloc:
-            print(f"Richiesta a GitHub rilevata ({url}), il proxy verrà saltato.")
             return None
     except Exception:
         # In caso di URL non valido, procedi comunque (potrebbe essere un frammento)
@@ -412,6 +411,16 @@ def resolve_m3u8_link(url, headers=None):
         print("Questo problema è spesso legato a un proxy SOCKS5 lento, non funzionante o bloccato.")
         print("CONSIGLI: Controlla che i tuoi proxy siano attivi. Prova ad aumentare il timeout impostando la variabile d'ambiente 'REQUEST_TIMEOUT' (es. a 20 o 30 secondi).")
         return {"resolved_url": clean_url, "headers": current_headers}
+    except requests.exceptions.ConnectionError as e:
+        if "Read timed out" in str(e):
+            print(f"Read timeout durante la risoluzione per {clean_url}")
+            return {"resolved_url": clean_url, "headers": current_headers}
+        else:
+            print(f"Errore di connessione durante la risoluzione: {e}")
+            return {"resolved_url": clean_url, "headers": current_headers}
+    except requests.exceptions.ReadTimeout as e:
+        print(f"Read timeout esplicito per {clean_url}")
+        return {"resolved_url": clean_url, "headers": current_headers}
     except Exception as e:
         print(f"Errore durante la risoluzione: {e}")
         import traceback
@@ -521,7 +530,6 @@ def proxy_m3u():
         print(f"Errore generico nella funzione proxy_m3u: {str(e)}")
         return f"Errore generico durante l'elaborazione: {str(e)}", 500
 
-
 @app.route('/proxy/resolve')
 def proxy_resolve():
     """Proxy per risolvere e restituire un URL M3U8 con metodo DaddyLive 2025"""
@@ -564,7 +572,6 @@ def proxy_resolve():
 
     except Exception as e:
         return f"Errore durante la risoluzione dell'URL: {str(e)}", 500
-
 
 @app.route('/proxy/ts')
 def proxy_ts():
@@ -705,8 +712,7 @@ def proxy():
         return Response(modified_content, content_type="application/vnd.apple.mpegurl", headers={'Content-Disposition': f'attachment; filename="{original_filename}"'})
         
     except requests.RequestException as e:
-        proxy_used = proxy_for_request['http'] if proxy_for_request else "Nessuno"
-        print(f"ERRORE: Fallito il download di '{m3u_url}' usando il proxy.")
+        print(f"ERRORE: Fallito il download di '{m3u_url}'.")
         return f"Errore durante il download della lista M3U: {str(e)}", 500
     except Exception as e:
         return f"Errore generico: {str(e)}", 500
