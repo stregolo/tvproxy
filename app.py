@@ -1,4 +1,4 @@
-from flask import Flask, request, Response
+from flask import Flask, request, Response, jsonify
 import requests
 from urllib.parse import urlparse, urljoin, quote, unquote
 import re
@@ -13,6 +13,8 @@ from cachetools import TTLCache, LRUCache
 from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import psutil
+from threading import Thread
 
 app = Flask(__name__)
 
@@ -28,6 +30,62 @@ if not VERIFY_SSL:
 # Timeout aumentato per gestire meglio i segmenti TS di grandi dimensioni
 REQUEST_TIMEOUT = int(os.environ.get('REQUEST_TIMEOUT', 30))
 print(f"Timeout per le richieste impostato a {REQUEST_TIMEOUT} secondi.")
+
+# --- Variabili globali per monitoraggio sistema ---
+system_stats = {
+    'ram_usage': 0,
+    'ram_used_gb': 0,
+    'ram_total_gb': 0,
+    'network_sent': 0,
+    'network_recv': 0,
+    'bandwidth_usage': 0
+}
+
+def get_system_stats():
+    """Ottiene le statistiche di sistema in tempo reale"""
+    global system_stats
+    
+    # Memoria RAM
+    memory = psutil.virtual_memory()
+    system_stats['ram_usage'] = memory.percent
+    system_stats['ram_used_gb'] = memory.used / (1024**3)  # GB
+    system_stats['ram_total_gb'] = memory.total / (1024**3)  # GB
+    
+    # Utilizzo di rete
+    net_io = psutil.net_io_counters()
+    system_stats['network_sent'] = net_io.bytes_sent / (1024**2)  # MB
+    system_stats['network_recv'] = net_io.bytes_recv / (1024**2)  # MB
+    
+    return system_stats
+
+def monitor_bandwidth():
+    """Monitora la banda di rete in background"""
+    global system_stats
+    prev_sent = 0
+    prev_recv = 0
+    
+    while True:
+        try:
+            net_io = psutil.net_io_counters()
+            current_sent = net_io.bytes_sent
+            current_recv = net_io.bytes_recv
+            
+            if prev_sent > 0 and prev_recv > 0:
+                # Calcola la banda utilizzata nell'ultimo secondo (in KB/s)
+                sent_per_sec = (current_sent - prev_sent) / 1024
+                recv_per_sec = (current_recv - prev_recv) / 1024
+                system_stats['bandwidth_usage'] = sent_per_sec + recv_per_sec
+            
+            prev_sent = current_sent
+            prev_recv = current_recv
+        except Exception as e:
+            print(f"Errore nel monitoraggio banda: {e}")
+        
+        time.sleep(1)
+
+# Avvia il monitoraggio in background
+bandwidth_thread = Thread(target=monitor_bandwidth, daemon=True)
+bandwidth_thread.start()
 
 # --- Configurazione Proxy ---
 PROXY_LIST = []
@@ -408,6 +466,89 @@ def resolve_m3u8_link(url, headers=None):
         print(f"Traceback: {traceback.format_exc()}")
         return {"resolved_url": clean_url, "headers": current_headers}
 
+@app.route('/stats')
+def get_stats():
+    """Endpoint per ottenere le statistiche di sistema"""
+    stats = get_system_stats()
+    return jsonify(stats)
+
+@app.route('/dashboard')
+def dashboard():
+    """Dashboard con statistiche di sistema"""
+    stats = get_system_stats()
+    daddy_base_url = get_daddylive_base_url()
+    
+    dashboard_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Proxy Dashboard</title>
+        <meta http-equiv="refresh" content="5">
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }}
+            .container {{ max-width: 1200px; margin: 0 auto; }}
+            .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }}
+            .stat-card {{ background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+            .stat-title {{ font-size: 18px; font-weight: bold; color: #333; margin-bottom: 10px; }}
+            .stat-value {{ font-size: 24px; color: #007bff; }}
+            .status {{ padding: 10px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; margin: 20px 0; }}
+            .progress-bar {{ width: 100%; height: 20px; background-color: #e9ecef; border-radius: 10px; overflow: hidden; }}
+            .progress-fill {{ height: 100%; background-color: #007bff; transition: width 0.3s ease; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🚀 Proxy Monitoring Dashboard</h1>
+            
+            <div class="status">
+                <strong>Status:</strong> Proxy ONLINE - Base URL: {daddy_base_url}
+            </div>
+            
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-title">💾 Utilizzo RAM</div>
+                    <div class="stat-value">{stats['ram_usage']:.1f}%</div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: {stats['ram_usage']}%"></div>
+                    </div>
+                    <small>{stats['ram_used_gb']:.2f} GB / {stats['ram_total_gb']:.2f} GB</small>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="stat-title">🌐 Banda di Rete</div>
+                    <div class="stat-value">{stats['bandwidth_usage']:.1f} KB/s</div>
+                    <small>Utilizzo corrente della banda</small>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="stat-title">📤 Dati Inviati</div>
+                    <div class="stat-value">{stats['network_sent']:.1f} MB</div>
+                    <small>Totale dalla partenza</small>
+                </div>
+                
+                <div class="stat-card">
+                    <div class="stat-title">📥 Dati Ricevuti</div>
+                    <div class="stat-value">{stats['network_recv']:.1f} MB</div>
+                    <small>Totale dalla partenza</small>
+                </div>
+            </div>
+            
+            <div style="margin-top: 30px;">
+                <h3>🔗 Endpoints Disponibili:</h3>
+                <ul>
+                    <li><a href="/proxy?url=URL_M3U">/proxy</a> - Proxy per liste M3U</li>
+                    <li><a href="/proxy/m3u?url=URL_M3U8">/proxy/m3u</a> - Proxy per file M3U8</li>
+                    <li><a href="/proxy/resolve?url=URL">/proxy/resolve</a> - Risoluzione URL DaddyLive</li>
+                    <li><a href="/stats">/stats</a> - API JSON delle statistiche</li>
+                </ul>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return dashboard_html
+
 @app.route('/proxy/m3u')
 def proxy_m3u():
     """Proxy per file M3U e M3U8 con supporto DaddyLive 2025 e caching"""
@@ -739,9 +880,24 @@ def proxy_key():
 
 @app.route('/')
 def index():
-    """Pagina principale che mostra un messaggio di benvenuto"""
+    """Pagina principale con statistiche di sistema"""
+    stats = get_system_stats()
     base_url = get_daddylive_base_url()
-    return f"Proxy ONLINE"
+    
+    return f"""
+    <h1>🚀 Proxy ONLINE</h1>
+    <p><strong>Base URL DaddyLive:</strong> {base_url}</p>
+    
+    <h2>📊 Statistiche Sistema</h2>
+    <ul>
+        <li><strong>RAM:</strong> {stats['ram_usage']:.1f}% ({stats['ram_used_gb']:.2f} GB / {stats['ram_total_gb']:.2f} GB)</li>
+        <li><strong>Banda:</strong> {stats['bandwidth_usage']:.1f} KB/s</li>
+        <li><strong>Dati Inviati:</strong> {stats['network_sent']:.1f} MB</li>
+        <li><strong>Dati Ricevuti:</strong> {stats['network_recv']:.1f} MB</li>
+    </ul>
+    
+    <p><a href="/dashboard">📈 Dashboard Completo</a> | <a href="/stats">📊 API JSON</a></p>
+    """
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
