@@ -1,4 +1,4 @@
-from flask import Flask, request, Response, jsonify
+from flask import Flask, request, Response, jsonify, render_template_string, session, redirect, url_for
 import requests
 from urllib.parse import urlparse, urljoin, quote, unquote
 import re
@@ -16,10 +16,40 @@ from urllib3.util.retry import Retry
 import psutil
 from threading import Thread, Lock
 import weakref
+import hashlib
+from functools import wraps
 
 app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this')
 
 load_dotenv()
+
+# --- Configurazione Autenticazione ---
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'password123')
+ALLOWED_IPS = os.environ.get('ALLOWED_IPS', '').split(',') if os.environ.get('ALLOWED_IPS') else []
+
+def check_auth(username, password):
+    """Verifica le credenziali di accesso"""
+    return username == ADMIN_USERNAME and password == ADMIN_PASSWORD
+
+def check_ip_allowed():
+    """Verifica se l'IP è nella lista degli IP consentiti"""
+    if not ALLOWED_IPS or ALLOWED_IPS == ['']:
+        return True
+    client_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR'))
+    return client_ip in ALLOWED_IPS
+
+def login_required(f):
+    """Decorator per richiedere il login"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not check_ip_allowed():
+            return "Accesso negato: IP non autorizzato", 403
+        if 'logged_in' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
 
 # --- Configurazione Generale ---
 VERIFY_SSL = os.environ.get('VERIFY_SSL', 'false').lower() not in ('false', '0', 'no')
@@ -456,7 +486,7 @@ def resolve_m3u8_link(url, headers=None):
         response = requests.get(stream_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(stream_url), verify=VERIFY_SSL)
         response.raise_for_status()
 
-        iframes = re.findall(r'<a[^>]*href="([^"]+)"[^>]*>\s*<button[^>]*>\s*Player\s*2\s*<\/button>', response.text)
+        iframes = re.findall(r'<a[^>]*href="([^"]+)"[^>]*>\s*<button[^>]*>\s*Player\s*2\s*</button>', response.text)
         if not iframes:
             print("Nessun link Player 2 trovato")
             return {"resolved_url": clean_url, "headers": current_headers}
@@ -570,93 +600,676 @@ def resolve_m3u8_link(url, headers=None):
         print(f"Traceback: {traceback.format_exc()}")
         return {"resolved_url": clean_url, "headers": current_headers}
 
+# --- Template HTML ---
+
+LOGIN_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login - Proxy Dashboard</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-container {
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 400px;
+        }
+        .login-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .login-header h1 {
+            color: #333;
+            margin: 0;
+            font-size: 28px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+            box-sizing: border-box;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .btn-login {
+            width: 100%;
+            padding: 12px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .btn-login:hover {
+            transform: translateY(-2px);
+        }
+        .error {
+            color: #e74c3c;
+            text-align: center;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <h1>🚀 Proxy Dashboard</h1>
+            <p>Accedi per continuare</p>
+        </div>
+        <form method="post">
+            <div class="form-group">
+                <label for="username">Username:</label>
+                <input type="text" id="username" name="username" required>
+            </div>
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            <button type="submit" class="btn-login">Accedi</button>
+        </form>
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+    </div>
+</body>
+</html>
+"""
+
+DASHBOARD_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Proxy Dashboard - Amministrazione</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta http-equiv="refresh" content="10">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f8f9fa;
+            color: #333;
+        }
+        .navbar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .navbar h1 {
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .navbar .nav-links {
+            display: flex;
+            gap: 20px;
+        }
+        .navbar a {
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: background 0.3s;
+        }
+        .navbar a:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        .status-banner {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(40,167,69,0.3);
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 25px;
+            margin: 30px 0;
+        }
+        .stat-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+        }
+        .stat-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .stat-icon {
+            font-size: 24px;
+            margin-right: 10px;
+        }
+        .stat-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            color: #667eea;
+            margin: 10px 0;
+        }
+        .stat-subtitle {
+            color: #666;
+            font-size: 14px;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e9ecef;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 15px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            transition: width 0.5s ease;
+            border-radius: 4px;
+        }
+        .endpoints-section {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+            margin-top: 30px;
+        }
+        .endpoints-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .endpoint-card {
+            padding: 20px;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            transition: all 0.3s;
+        }
+        .endpoint-card:hover {
+            border-color: #667eea;
+            background: #f8f9ff;
+        }
+        .endpoint-card h4 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        .refresh-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #667eea;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 25px;
+            font-size: 14px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <h1>🚀 Proxy Dashboard</h1>
+        <div class="nav-links">
+            <a href="/admin">⚙️ Admin</a>
+            <a href="/stats">📊 API</a>
+            <a href="/logout">🚪 Logout</a>
+        </div>
+    </nav>
+
+    <div class="refresh-indicator">
+        🔄 Auto-refresh: 10s
+    </div>
+
+    <div class="container">
+        <div class="status-banner">
+            <h2>✅ Sistema Operativo</h2>
+            <p><strong>Base URL DaddyLive:</strong> {{ daddy_base_url }}</p>
+            <p><strong>Proxy Configurati:</strong> {{ proxy_count }} | <strong>Sessioni Attive:</strong> {{ session_count }}</p>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span class="stat-icon">💾</span>
+                    <span class="stat-title">Utilizzo RAM</span>
+                </div>
+                <div class="stat-value">{{ "%.1f"|format(stats.ram_usage) }}%</div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: {{ stats.ram_usage }}%"></div>
+                </div>
+                <div class="stat-subtitle">{{ "%.2f"|format(stats.ram_used_gb) }} GB / {{ "%.2f"|format(stats.ram_total_gb) }} GB</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span class="stat-icon">🌐</span>
+                    <span class="stat-title">Banda di Rete</span>
+                </div>
+                <div class="stat-value">{{ "%.2f"|format(stats.bandwidth_usage) }}</div>
+                <div class="stat-subtitle">MB/s - Utilizzo corrente</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span class="stat-icon">📤</span>
+                    <span class="stat-title">Dati Inviati</span>
+                </div>
+                <div class="stat-value">{{ "%.1f"|format(stats.network_sent) }}</div>
+                <div class="stat-subtitle">MB - Totale dalla partenza</div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <span class="stat-icon">📥</span>
+                    <span class="stat-title">Dati Ricevuti</span>
+                </div>
+                <div class="stat-value">{{ "%.1f"|format(stats.network_recv) }}</div>
+                <div class="stat-subtitle">MB - Totale dalla partenza</div>
+            </div>
+        </div>
+
+        <div class="endpoints-section">
+            <h3>🔗 Endpoints Disponibili</h3>
+            <div class="endpoints-grid">
+                <div class="endpoint-card">
+                    <h4>/proxy</h4>
+                    <p>Proxy per liste M3U con header personalizzati</p>
+                </div>
+                <div class="endpoint-card">
+                    <h4>/proxy/m3u</h4>
+                    <p>Proxy per file M3U8 con risoluzione DaddyLive</p>
+                </div>
+                <div class="endpoint-card">
+                    <h4>/proxy/resolve</h4>
+                    <p>Risoluzione diretta URL DaddyLive</p>
+                </div>
+                <div class="endpoint-card">
+                    <h4>/proxy/ts</h4>
+                    <p>Proxy per segmenti TS con caching</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+ADMIN_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Pannello Amministrazione</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f8f9fa;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .admin-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 25px;
+        }
+        .admin-card {
+            padding: 25px;
+            border: 2px solid #e9ecef;
+            border-radius: 12px;
+            text-align: center;
+        }
+        .admin-card h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin: 10px;
+            transition: transform 0.2s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        .back-link {
+            display: block;
+            text-align: center;
+            margin-top: 30px;
+            color: #667eea;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚙️ Pannello di Amministrazione</h1>
+        
+        <div class="admin-grid">
+            <div class="admin-card">
+                <h3>📊 Monitoraggio Sistema</h3>
+                <p>Visualizza statistiche dettagliate del sistema</p>
+                <a href="/dashboard" class="btn">Vai alla Dashboard</a>
+            </div>
+            
+            <div class="admin-card">
+                <h3>🔧 Configurazioni</h3>
+                <p>Gestisci le impostazioni del proxy</p>
+                <button class="btn" onclick="alert('Funzionalità in sviluppo')">Configura</button>
+            </div>
+            
+            <div class="admin-card">
+                <h3>📝 Log Sistema</h3>
+                <p>Visualizza i log delle attività</p>
+                <button class="btn" onclick="alert('Funzionalità in sviluppo')">Visualizza Log</button>
+            </div>
+            
+            <div class="admin-card">
+                <h3>🔄 Gestione Cache</h3>
+                <p>Pulisci e gestisci la cache</p>
+                <button class="btn" onclick="clearCache()">Pulisci Cache</button>
+            </div>
+        </div>
+        
+        <a href="/dashboard" class="back-link">← Torna alla Dashboard</a>
+    </div>
+    
+    <script>
+        function clearCache() {
+            if(confirm('Sei sicuro di voler pulire la cache?')) {
+                fetch('/admin/clear-cache', {method: 'POST'})
+                    .then(() => alert('Cache pulita con successo!'))
+                    .catch(() => alert('Errore durante la pulizia della cache'));
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
+INDEX_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Proxy Server - Benvenuto</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            color: white;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            text-align: center;
+        }
+        .hero {
+            margin-bottom: 50px;
+        }
+        .hero h1 {
+            font-size: 48px;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .hero p {
+            font-size: 20px;
+            opacity: 0.9;
+            margin-bottom: 30px;
+        }
+        .status-card {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            padding: 30px;
+            border-radius: 20px;
+            margin: 30px 0;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .stats-mini {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
+        }
+        .stat-mini {
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+        }
+        .stat-mini h3 {
+            margin: 0 0 10px 0;
+            font-size: 24px;
+        }
+        .stat-mini p {
+            margin: 0;
+            opacity: 0.8;
+        }
+        .cta-buttons {
+            margin: 40px 0;
+        }
+        .btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 15px 30px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50px;
+            text-decoration: none;
+            margin: 10px;
+            display: inline-block;
+            transition: all 0.3s;
+            backdrop-filter: blur(10px);
+        }
+        .btn:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-2px);
+        }
+        .footer {
+            margin-top: 50px;
+            opacity: 0.7;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="hero">
+            <h1>🚀 Proxy Server</h1>
+            <p>Sistema di proxy avanzato per streaming e contenuti multimediali</p>
+        </div>
+        
+        <div class="status-card">
+            <h2>✅ Sistema Operativo</h2>
+            <p><strong>Base URL:</strong> {{ base_url }}</p>
+            <p><strong>Sessioni Attive:</strong> {{ session_count }}</p>
+        </div>
+        
+        <div class="stats-mini">
+            <div class="stat-mini">
+                <h3>{{ "%.1f"|format(stats.ram_usage) }}%</h3>
+                <p>Utilizzo RAM</p>
+            </div>
+            <div class="stat-mini">
+                <h3>{{ "%.2f"|format(stats.bandwidth_usage) }}</h3>
+                <p>MB/s Banda</p>
+            </div>
+            <div class="stat-mini">
+                <h3>{{ "%.1f"|format(stats.network_sent) }}</h3>
+                <p>MB Inviati</p>
+            </div>
+            <div class="stat-mini">
+                <h3>{{ "%.1f"|format(stats.network_recv) }}</h3>
+                <p>MB Ricevuti</p>
+            </div>
+        </div>
+        
+        <div class="cta-buttons">
+            <a href="/login" class="btn">🔐 Accedi alla Dashboard</a>
+            <a href="/stats" class="btn">📊 API Statistiche</a>
+        </div>
+        
+        <div class="footer">
+            <p>Proxy Server v2.0 - Sistema di monitoraggio avanzato</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+# --- Route di Autenticazione ---
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Pagina di login"""
+    if not check_ip_allowed():
+        return "Accesso negato: IP non autorizzato", 403
+        
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        if check_auth(username, password):
+            session['logged_in'] = True
+            return redirect(url_for('dashboard'))
+        else:
+            error = 'Credenziali non valide'
+            return render_template_string(LOGIN_TEMPLATE, error=error)
+    
+    return render_template_string(LOGIN_TEMPLATE)
+
+@app.route('/logout')
+def logout():
+    """Logout"""
+    session.pop('logged_in', None)
+    return redirect(url_for('index'))
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    """Dashboard avanzata con statistiche di sistema"""
+    stats = get_system_stats()
+    daddy_base_url = get_daddylive_base_url()
+    
+    return render_template_string(DASHBOARD_TEMPLATE, 
+                                stats=stats, 
+                                daddy_base_url=daddy_base_url,
+                                session_count=len(SESSION_POOL),
+                                proxy_count=len(PROXY_LIST))
+
+@app.route('/admin')
+@login_required
+def admin_panel():
+    """Pannello di amministrazione"""
+    return render_template_string(ADMIN_TEMPLATE)
+
+@app.route('/admin/clear-cache', methods=['POST'])
+@login_required
+def clear_cache():
+    """Pulisce tutte le cache"""
+    M3U8_CACHE.clear()
+    TS_CACHE.clear()
+    KEY_CACHE.clear()
+    cleanup_sessions()
+    return jsonify({"status": "success", "message": "Cache pulita con successo"})
+
 @app.route('/stats')
 def get_stats():
     """Endpoint per ottenere le statistiche di sistema"""
     stats = get_system_stats()
     return jsonify(stats)
 
-@app.route('/dashboard')
-def dashboard():
-    """Dashboard con statistiche di sistema"""
+@app.route('/')
+def index():
+    """Pagina principale migliorata"""
     stats = get_system_stats()
-    daddy_base_url = get_daddylive_base_url()
+    base_url = get_daddylive_base_url()
     
-    dashboard_html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Proxy Dashboard</title>
-        <meta http-equiv="refresh" content="5">
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }}
-            .container {{ max-width: 1200px; margin: 0 auto; }}
-            .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }}
-            .stat-card {{ background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-            .stat-title {{ font-size: 18px; font-weight: bold; color: #333; margin-bottom: 10px; }}
-            .stat-value {{ font-size: 24px; color: #007bff; }}
-            .status {{ padding: 10px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; margin: 20px 0; }}
-            .progress-bar {{ width: 100%; height: 20px; background-color: #e9ecef; border-radius: 10px; overflow: hidden; }}
-            .progress-fill {{ height: 100%; background-color: #007bff; transition: width 0.3s ease; }}
-            .connection-stats {{ background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 10px 0; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🚀 Proxy Monitoring Dashboard</h1>
-            
-            <div class="status">
-                <strong>Status:</strong> Proxy ONLINE - Base URL: {daddy_base_url}
-            </div>
-            
-            <div class="connection-stats">
-                <strong>Connessioni Persistenti:</strong> {len(SESSION_POOL)} sessioni attive nel pool
-            </div>
-            
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-title">💾 Utilizzo RAM</div>
-                    <div class="stat-value">{stats['ram_usage']:.1f}%</div>
-                    <div class="progress-bar">
-                        <div class="progress-fill" style="width: {stats['ram_usage']}%"></div>
-                    </div>
-                    <small>{stats['ram_used_gb']:.2f} GB / {stats['ram_total_gb']:.2f} GB</small>
-                </div>
-                
-                <div class="stat-card">
-                    <div class="stat-title">🌐 Banda di Rete</div>
-                    <div class="stat-value">{stats['bandwidth_usage']:.2f} MB/s</div>
-                    <small>Utilizzo corrente della banda</small>
-                </div>
-                
-                <div class="stat-card">
-                    <div class="stat-title">📤 Dati Inviati</div>
-                    <div class="stat-value">{stats['network_sent']:.1f} MB</div>
-                    <small>Totale dalla partenza</small>
-                </div>
-                
-                <div class="stat-card">
-                    <div class="stat-title">📥 Dati Ricevuti</div>
-                    <div class="stat-value">{stats['network_recv']:.1f} MB</div>
-                    <small>Totale dalla partenza</small>
-                </div>
-            </div>
-            
-            <div style="margin-top: 30px;">
-                <h3>🔗 Endpoints Disponibili:</h3>
-                <ul>
-                    <li><a href="/proxy?url=URL_M3U">/proxy</a> - Proxy per liste M3U</li>
-                    <li><a href="/proxy/m3u?url=URL_M3U8">/proxy/m3u</a> - Proxy per file M3U8</li>
-                    <li><a href="/proxy/resolve?url=URL">/proxy/resolve</a> - Risoluzione URL DaddyLive</li>
-                    <li><a href="/stats">/stats</a> - API JSON delle statistiche</li>
-                </ul>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-    
-    return dashboard_html
+    return render_template_string(INDEX_TEMPLATE, 
+                                stats=stats, 
+                                base_url=base_url,
+                                session_count=len(SESSION_POOL))
+
+# --- Route Proxy (tutte le route proxy esistenti rimangono identiche) ---
 
 @app.route('/proxy/m3u')
 def proxy_m3u():
@@ -895,7 +1508,7 @@ def proxy():
         m3u_content = response.text
         
         modified_lines = []
-        current_stream_headers_params = [] 
+        current_stream_headers_params = []
 
         for line in m3u_content.splitlines():
             line = line.strip()
@@ -1012,29 +1625,11 @@ def proxy_key():
     except requests.RequestException as e:
         return f"Errore durante il download della chiave AES-128: {str(e)}", 500
 
-@app.route('/')
-def index():
-    """Pagina principale con statistiche di sistema"""
-    stats = get_system_stats()
-    base_url = get_daddylive_base_url()
-    
-    return f"""
-    <h1>🚀 Proxy ONLINE</h1>
-    <p><strong>Base URL DaddyLive:</strong> {base_url}</p>
-    
-    <h2>📊 Statistiche Sistema</h2>
-    <ul>
-        <li><strong>RAM:</strong> {stats['ram_usage']:.1f}% ({stats['ram_used_gb']:.2f} GB / {stats['ram_total_gb']:.2f} GB)</li>
-        <li><strong>Banda:</strong> {stats['bandwidth_usage']:.2f} MB/s</li>
-        <li><strong>Dati Inviati:</strong> {stats['network_sent']:.1f} MB</li>
-        <li><strong>Dati Ricevuti:</strong> {stats['network_recv']:.1f} MB</li>
-        <li><strong>Connessioni Persistenti:</strong> {len(SESSION_POOL)} sessioni attive</li>
-    </ul>
-    
-    <p><a href="/dashboard">📈 Dashboard Completo</a> | <a href="/stats">📊 API JSON</a></p>
-    """
-
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
     print(f"Proxy ONLINE - In ascolto su porta {port}")
+    print(f"Admin Username: {ADMIN_USERNAME}")
+    print(f"Admin Password: {ADMIN_PASSWORD}")
+    if ALLOWED_IPS:
+        print(f"IP consentiti: {ALLOWED_IPS}")
     app.run(host="0.0.0.0", port=port, debug=False)
