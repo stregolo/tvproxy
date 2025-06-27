@@ -4,5 +4,3 @@ gunicorn[gevent]
 python-dotenv
 cachetools
 PySocks
-psutil
-gevent
