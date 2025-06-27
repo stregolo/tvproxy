@@ -12,6 +12,8 @@ import gc
 from collections import defaultdict
 import urllib3
 import warnings
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Disabilita i warning SSL di urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -21,16 +23,11 @@ app = Flask(__name__)
 
 # Configurazione
 VERIFY_SSL = False
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-]
 
-# Cache ottimizzate per ridurre consumo memoria
-M3U8_CACHE = TTLCache(maxsize=50, ttl=10)   # Ridotta da 200 a 50, TTL da 5 a 10 secondi
-TS_CACHE = TTLCache(maxsize=200, ttl=60)    # Ridotta da 1000 a 200, TTL da 300 a 60 secondi
-KEY_CACHE = TTLCache(maxsize=50, ttl=120)   # Ridotta da 200 a 50, TTL da 300 a 120 secondi
+# Cache ottimizzate - aumentate per migliori prestazioni
+M3U8_CACHE = TTLCache(maxsize=200, ttl=5)    # Aumentata da 50 a 200, ridotto TTL da 10 a 5
+TS_CACHE = TTLCache(maxsize=1000, ttl=300)   # Aumentata da 200 a 1000, TTL da 60 a 300
+KEY_CACHE = TTLCache(maxsize=200, ttl=300)   # Aumentata da 50 a 200, TTL da 120 a 300
 
 # Sistema di cache condivisa e monitoraggio
 ACTIVE_DOWNLOADS = {}
@@ -47,7 +44,7 @@ def get_memory_usage():
 def cleanup_if_needed():
     """Pulisce la memoria se necessario"""
     memory_mb = get_memory_usage()
-    if memory_mb > 800:  # Se supera 800MB
+    if memory_mb > 1200:  # Aumentata soglia da 800MB a 1200MB
         print(f"⚠️ Memoria alta: {memory_mb:.1f}MB - Pulizia in corso...")
         # Pulisci solo la cache TS (più pesante)
         TS_CACHE.clear()
@@ -111,17 +108,45 @@ def before_request():
     if random.random() < 0.05:  # 5% delle richieste
         cleanup_if_needed()
 
-def get_random_user_agent():
-    return random.choice(USER_AGENTS)
-
-def get_proxy_for_request():
-    """Restituisce la configurazione proxy per le richieste"""
+def get_proxy_for_url(url):
+    """Seleziona proxy ma lo salta per domini GitHub"""
+    if not PROXY_CONFIG:
+        return None
+    
+    try:
+        parsed_url = urlparse(url)
+        if 'github.com' in parsed_url.netloc:
+            return None
+    except Exception:
+        pass
+    
     return PROXY_CONFIG
 
 def create_robust_session():
+    """Crea una sessione con configurazione robusta per gestire timeout e retry"""
     session = requests.Session()
+    
+    retry_strategy = Retry(
+        total=3,
+        read=2,
+        connect=2,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "OPTIONS"]
+    )
+    
+    adapter = HTTPAdapter(
+        max_retries=retry_strategy,
+        pool_connections=10,
+        pool_maxsize=20
+    )
+    
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    
+    # User-Agent fisso invece di casuale
     session.headers.update({
-        'User-Agent': get_random_user_agent(),
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
         'Accept': '*/*',
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept-Encoding': 'gzip, deflate',
@@ -135,14 +160,14 @@ def create_robust_session():
     
     return session
 
-def get_dynamic_timeout(url):
-    """Timeout dinamico basato sul tipo di risorsa"""
-    if '.ts' in url:
-        return 15  # Ridotto da 30 a 15 per segmenti TS
-    elif '.m3u8' in url:
-        return 10  # Ridotto da 20 a 10 per playlist
+def get_dynamic_timeout(url, base_timeout=30):
+    """Timeout dinamico basato sul tipo di risorsa - aumentati"""
+    if '.ts' in url.lower():
+        return base_timeout * 2  # 60 secondi invece di 15
+    elif '.m3u8' in url.lower():
+        return base_timeout * 1.5  # 45 secondi invece di 10
     else:
-        return 20
+        return base_timeout
 
 def extract_channel_id(url):
     """Estrae un identificativo del canale dall'URL per il monitoraggio"""
@@ -198,19 +223,19 @@ def preload_next_segments(m3u8_content, base_url, headers):
                         segment_url, 
                         headers=headers, 
                         timeout=10,
-                        proxies=get_proxy_for_request(),
+                        proxies=get_proxy_for_url(segment_url),
                         verify=VERIFY_SSL
                     )
                     if response.status_code == 200:
                         content = response.content
-                        if len(content) < 3 * 1024 * 1024:  # < 3MB
+                        if len(content) < 6 * 1024 * 1024:  # Aumentato da 3MB a 6MB
                             TS_CACHE[segment_url] = content
                             print(f"Segmento precaricato: {len(content)} bytes")
                 except:
                     pass  # Ignora errori di precaricamento
     
     # Avvia precaricamento in background solo se cache non piena
-    if len(TS_CACHE) < 150:  # Solo se cache non quasi piena
+    if len(TS_CACHE) < 800:  # Aumentato da 150 a 800
         threading.Thread(target=background_preload, daemon=True).start()
 
 @app.route('/')
@@ -332,7 +357,7 @@ def proxy_m3u():
     }
 
     m3u_timeout = get_dynamic_timeout(m3u_url)
-    max_retries = 2  # Ridotto da 3 a 2
+    max_retries = 3  # Riportato da 2 a 3
 
     for attempt in range(max_retries):
         try:
@@ -341,7 +366,7 @@ def proxy_m3u():
                 m3u_url, 
                 headers=current_headers_for_proxy, 
                 timeout=m3u_timeout,
-                proxies=get_proxy_for_request(),
+                proxies=get_proxy_for_url(m3u_url),
                 verify=VERIFY_SSL
             )
             response.raise_for_status()
@@ -367,13 +392,13 @@ def proxy_m3u():
         except requests.exceptions.ConnectionError as e:
             if "timed out" in str(e).lower() and attempt < max_retries - 1:
                 print(f"Timeout M3U8 (tentativo {attempt + 1}/{max_retries}): {m3u_url}")
-                time.sleep(1)
+                time.sleep(2 ** attempt)  # Backoff esponenziale
                 continue
             return f"Errore di connessione: {str(e)}", 500
         except requests.exceptions.ReadTimeout as e:
             if attempt < max_retries - 1:
                 print(f"Read timeout M3U8 (tentativo {attempt + 1}/{max_retries}): {m3u_url}")
-                time.sleep(1)
+                time.sleep(2 ** attempt)  # Backoff esponenziale
                 continue
             return f"Errore timeout: {str(e)}", 504
         except requests.RequestException as e:
@@ -465,7 +490,7 @@ def proxy_ts():
         }
 
         ts_timeout = get_dynamic_timeout(ts_url)
-        max_retries = 2  # Ridotto da 3 a 2
+        max_retries = 3  # Riportato da 2 a 3
         
         for attempt in range(max_retries):
             try:
@@ -474,15 +499,15 @@ def proxy_ts():
                     ts_url, 
                     headers=headers, 
                     timeout=ts_timeout,
-                    proxies=get_proxy_for_request(),
+                    proxies=get_proxy_for_url(ts_url),
                     verify=VERIFY_SSL
                 )
                 response.raise_for_status()
 
                 content = response.content
                 
-                # Cache solo segmenti di dimensione ragionevole
-                if len(content) < 3 * 1024 * 1024:  # < 3MB invece di qualsiasi dimensione
+                # Cache segmenti più grandi
+                if len(content) < 6 * 1024 * 1024:  # Aumentato da 3MB a 6MB
                     TS_CACHE[ts_url] = content
                     print(f"Segmento cachato per tutti gli utenti: {len(content)} bytes")
                 else:
@@ -493,13 +518,13 @@ def proxy_ts():
             except requests.exceptions.ConnectionError as e:
                 if "timed out" in str(e).lower() and attempt < max_retries - 1:
                     print(f"Timeout TS (tentativo {attempt + 1}/{max_retries}): {ts_url}")
-                    time.sleep(1)
+                    time.sleep(2 ** attempt)  # Backoff esponenziale
                     continue
                 return f"Errore di connessione: {str(e)}", 500
             except requests.exceptions.ReadTimeout as e:
                 if attempt < max_retries - 1:
                     print(f"Read timeout TS (tentativo {attempt + 1}/{max_retries}): {ts_url}")
-                    time.sleep(1)
+                    time.sleep(2 ** attempt)  # Backoff esponenziale
                     continue
                 return f"Errore timeout: {str(e)}", 504
             except requests.RequestException as e:
@@ -530,8 +555,8 @@ def proxy_key():
         response = session.get(
             key_url, 
             headers=headers, 
-            timeout=10,
-            proxies=get_proxy_for_request(),
+            timeout=get_dynamic_timeout(key_url),
+            proxies=get_proxy_for_url(key_url),
             verify=VERIFY_SSL
         )
         response.raise_for_status()
@@ -557,8 +582,8 @@ def proxy():
         session = create_robust_session()
         response = session.get(
             m3u_url, 
-            timeout=20,
-            proxies=get_proxy_for_request(),
+            timeout=get_dynamic_timeout(m3u_url),
+            proxies=get_proxy_for_url(m3u_url),
             verify=VERIFY_SSL
         )
         response.raise_for_status()
