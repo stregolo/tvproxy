@@ -28,12 +28,11 @@ if not VERIFY_SSL:
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Timeout aumentato per gestire meglio i segmenti TS di grandi dimensioni
 REQUEST_TIMEOUT = int(os.environ.get('REQUEST_TIMEOUT', 30))
 print(f"Timeout per le richieste impostato a {REQUEST_TIMEOUT} secondi.")
 
 # Configurazioni Keep-Alive
-KEEP_ALIVE_TIMEOUT = int(os.environ.get('KEEP_ALIVE_TIMEOUT', 300))  # 5 minuti
+KEEP_ALIVE_TIMEOUT = int(os.environ.get('KEEP_ALIVE_TIMEOUT', 300))
 MAX_KEEP_ALIVE_REQUESTS = int(os.environ.get('MAX_KEEP_ALIVE_REQUESTS', 1000))
 POOL_CONNECTIONS = int(os.environ.get('POOL_CONNECTIONS', 20))
 POOL_MAXSIZE = int(os.environ.get('POOL_MAXSIZE', 50))
@@ -54,6 +53,160 @@ system_stats = {
 SESSION_POOL = {}
 SESSION_LOCK = Lock()
 
+# --- Configurazione Proxy Avanzata ---
+PROXY_LIST = []
+DOWNLOADED_PROXIES = []
+PROXY_REFRESH_INTERVAL = 3600  # 1 ora
+LAST_PROXY_FETCH = 0
+
+def download_proxies_from_github():
+    """Scarica la lista di proxy HTTP da GitHub"""
+    global DOWNLOADED_PROXIES, LAST_PROXY_FETCH
+    
+    current_time = time.time()
+    if DOWNLOADED_PROXIES and (current_time - LAST_PROXY_FETCH < PROXY_REFRESH_INTERVAL):
+        return DOWNLOADED_PROXIES
+    
+    try:
+        print("Scaricando proxy da GitHub...")
+        proxy_url = 'https://raw.githubusercontent.com/nzo66/tvproxy/refs/heads/main/proxy_http.txt'
+        
+        response = requests.get(proxy_url, timeout=30, verify=VERIFY_SSL)
+        response.raise_for_status()
+        
+        proxy_lines = response.text.strip().split('\n')
+        proxies = []
+        
+        for line in proxy_lines:
+            line = line.strip()
+            if line and not line.startswith('#'):
+                # Formato IP:PORT
+                if ':' in line:
+                    ip_port = line.split(':')
+                    if len(ip_port) == 2:
+                        ip, port = ip_port
+                        proxy_url = f"http://{ip}:{port}"
+                        proxies.append(proxy_url)
+        
+        DOWNLOADED_PROXIES = proxies
+        LAST_PROXY_FETCH = current_time
+        
+        print(f"Scaricati {len(proxies)} proxy da GitHub")
+        return proxies
+        
+    except Exception as e:
+        print(f"Errore nel download dei proxy da GitHub: {e}")
+        return []
+
+def setup_proxies():
+    """Configura i proxy secondo la logica:
+    - Se FREE_PROXY=yes: usa SOLO i proxy da GitHub
+    - Se FREE_PROXY non è yes ma ci sono proxy nelle variabili d'ambiente: usa quelli
+    - Se il file env è vuoto: non usare proxy
+    """
+    global PROXY_LIST
+    proxies_found = []
+    
+    # Controlla se i proxy gratuiti sono abilitati
+    use_free_proxies = os.environ.get('FREE_PROXY', 'no').lower() in ('yes', '1', 'true')
+    
+    if use_free_proxies:
+        print("FREE_PROXY=yes rilevato. Utilizzo SOLO proxy da GitHub...")
+        
+        # Usa SOLO i proxy da GitHub quando FREE_PROXY=yes
+        github_proxies = download_proxies_from_github()
+        if github_proxies:
+            proxies_found.extend(github_proxies)
+            print(f"Utilizzando {len(github_proxies)} proxy scaricati da GitHub")
+        else:
+            print("Nessun proxy scaricato da GitHub disponibile")
+        
+        PROXY_LIST = proxies_found
+        
+        if PROXY_LIST:
+            print(f"Totale di {len(PROXY_LIST)} proxy da GitHub configurati")
+        else:
+            print("Nessun proxy da GitHub configurato. Il servizio funzionerà senza proxy.")
+        
+        return
+    
+    # Se FREE_PROXY non è yes, controlla se ci sono proxy nelle variabili d'ambiente
+    print("FREE_PROXY non è yes. Controllo proxy dalle variabili d'ambiente...")
+    
+    # SOCKS5 Proxies dalle variabili d'ambiente
+    socks_proxy_list_str = os.environ.get('SOCKS5_PROXY')
+    if socks_proxy_list_str:
+        raw_socks_list = [p.strip() for p in socks_proxy_list_str.split(',') if p.strip()]
+        if raw_socks_list:
+            print(f"Trovati {len(raw_socks_list)} proxy SOCKS5 dalle variabili d'ambiente")
+            for proxy in raw_socks_list:
+                final_proxy_url = proxy
+                if proxy.startswith('socks5://'):
+                    final_proxy_url = 'socks5h' + proxy[len('socks5'):]
+                    print(f"Proxy SOCKS5 convertito per garantire la risoluzione DNS remota")
+                elif not proxy.startswith('socks5h://'):
+                    print(f"ATTENZIONE: Formato SOCKS5 non valido: {proxy}")
+                proxies_found.append(final_proxy_url)
+    
+    # HTTP Proxies dalle variabili d'ambiente
+    http_proxy_list_str = os.environ.get('HTTP_PROXY')
+    if http_proxy_list_str:
+        http_proxies = [p.strip() for p in http_proxy_list_str.split(',') if p.strip()]
+        if http_proxies:
+            print(f"Trovati {len(http_proxies)} proxy HTTP dalle variabili d'ambiente")
+            proxies_found.extend(http_proxies)
+    
+    # HTTPS Proxies dalle variabili d'ambiente
+    https_proxy_list_str = os.environ.get('HTTPS_PROXY')
+    if https_proxy_list_str:
+        https_proxies = [p.strip() for p in https_proxy_list_str.split(',') if p.strip()]
+        if https_proxies:
+            print(f"Trovati {len(https_proxies)} proxy HTTPS dalle variabili d'ambiente")
+            proxies_found.extend(https_proxies)
+    
+    PROXY_LIST = proxies_found
+    
+    if PROXY_LIST:
+        print(f"Totale di {len(PROXY_LIST)} proxy dalle variabili d'ambiente configurati")
+    else:
+        print("Nessun proxy configurato nelle variabili d'ambiente. Il servizio funzionerà senza proxy.")
+
+def refresh_proxies_periodically():
+    """Thread per aggiornare periodicamente i proxy da GitHub solo se FREE_PROXY=yes"""
+    while True:
+        try:
+            time.sleep(PROXY_REFRESH_INTERVAL)
+            
+            # Controlla se i proxy gratuiti sono ancora abilitati
+            use_free_proxies = os.environ.get('FREE_PROXY', 'no').lower() in ('yes', '1', 'true')
+            if not use_free_proxies:
+                print("FREE_PROXY non è yes - aggiornamento periodico saltato")
+                continue
+                
+            print("Aggiornamento periodico dei proxy da GitHub...")
+            old_count = len(PROXY_LIST)
+            setup_proxies()
+            new_count = len(PROXY_LIST)
+            print(f"Proxy aggiornati: {old_count} -> {new_count}")
+        except Exception as e:
+            print(f"Errore nell'aggiornamento periodico dei proxy: {e}")
+
+def get_proxy_for_url(url):
+    """Seleziona un proxy casuale dalla lista, ma lo salta per i domini GitHub"""
+    if not PROXY_LIST:
+        return None
+
+    try:
+        parsed_url = urlparse(url)
+        # Salta proxy per GitHub per evitare problemi di connessione
+        if 'github.com' in parsed_url.netloc or 'githubusercontent.com' in parsed_url.netloc:
+            return None
+    except Exception:
+        pass
+
+    chosen_proxy = random.choice(PROXY_LIST)
+    return {'http': chosen_proxy, 'https': chosen_proxy}
+
 def get_system_stats():
     """Ottiene le statistiche di sistema in tempo reale"""
     global system_stats
@@ -61,13 +214,13 @@ def get_system_stats():
     # Memoria RAM
     memory = psutil.virtual_memory()
     system_stats['ram_usage'] = memory.percent
-    system_stats['ram_used_gb'] = memory.used / (1024**3)  # GB
-    system_stats['ram_total_gb'] = memory.total / (1024**3)  # GB
+    system_stats['ram_used_gb'] = memory.used / (1024**3)
+    system_stats['ram_total_gb'] = memory.total / (1024**3)
     
     # Utilizzo di rete
     net_io = psutil.net_io_counters()
-    system_stats['network_sent'] = net_io.bytes_sent / (1024**2)  # MB
-    system_stats['network_recv'] = net_io.bytes_recv / (1024**2)  # MB
+    system_stats['network_sent'] = net_io.bytes_sent / (1024**2)
+    system_stats['network_recv'] = net_io.bytes_recv / (1024**2)
     
     return system_stats
 
@@ -84,9 +237,8 @@ def monitor_bandwidth():
             current_recv = net_io.bytes_recv
             
             if prev_sent > 0 and prev_recv > 0:
-                # Calcola la banda utilizzata nell'ultimo secondo (in MB/s)
-                sent_per_sec = (current_sent - prev_sent) / (1024 * 1024)  # Convertito in MB/s
-                recv_per_sec = (current_recv - prev_recv) / (1024 * 1024)  # Convertito in MB/s
+                sent_per_sec = (current_sent - prev_sent) / (1024 * 1024)
+                recv_per_sec = (current_recv - prev_recv) / (1024 * 1024)
                 system_stats['bandwidth_usage'] = sent_per_sec + recv_per_sec
             
             prev_sent = current_sent
@@ -100,15 +252,13 @@ def connection_manager():
     """Thread per gestire le connessioni persistenti"""
     while True:
         try:
-            time.sleep(300)  # Controlla ogni 5 minuti
+            time.sleep(300)
             
-            # Statistiche connessioni
             with SESSION_LOCK:
                 active_sessions = len(SESSION_POOL)
                 print(f"Sessioni attive nel pool: {active_sessions}")
                 
-                # Pulizia periodica delle sessioni inattive
-                if active_sessions > 10:  # Se troppe sessioni, pulisci
+                if active_sessions > 10:
                     cleanup_sessions()
                     
         except Exception as e:
@@ -134,70 +284,14 @@ bandwidth_thread.start()
 connection_thread = Thread(target=connection_manager, daemon=True)
 connection_thread.start()
 
-# --- Configurazione Proxy ---
-PROXY_LIST = []
-
-def setup_proxies():
-    """Carica la lista di proxy SOCKS5, HTTP e HTTPS dalle variabili d'ambiente."""
-    global PROXY_LIST
-    proxies_found = []
-
-    socks_proxy_list_str = os.environ.get('SOCKS5_PROXY')
-    if socks_proxy_list_str:
-        raw_socks_list = [p.strip() for p in socks_proxy_list_str.split(',') if p.strip()]
-        if raw_socks_list:
-            print(f"Trovati {len(raw_socks_list)} proxy SOCKS5. Verranno usati a rotazione.")
-            for proxy in raw_socks_list:
-                final_proxy_url = proxy
-                if proxy.startswith('socks5://'):
-                    final_proxy_url = 'socks5h' + proxy[len('socks5'):]
-                    print(f"Proxy SOCKS5 convertito per garantire la risoluzione DNS remota")
-                elif not proxy.startswith('socks5h://'):
-                    print(f"ATTENZIONE: L'URL del proxy SOCKS5 non è un formato SOCKS5 valido (es. socks5:// o socks5h://). Potrebbe non funzionare.")
-                proxies_found.append(final_proxy_url)
-            print("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
-
-    http_proxy_list_str = os.environ.get('HTTP_PROXY')
-    if http_proxy_list_str:
-        http_proxies = [p.strip() for p in http_proxy_list_str.split(',') if p.strip()]
-        if http_proxies:
-            print(f"Trovati {len(http_proxies)} proxy HTTP. Verranno usati a rotazione.")
-            proxies_found.extend(http_proxies)
-
-    https_proxy_list_str = os.environ.get('HTTPS_PROXY')
-    if https_proxy_list_str:
-        https_proxies = [p.strip() for p in https_proxy_list_str.split(',') if p.strip()]
-        if https_proxies:
-            print(f"Trovati {len(https_proxies)} proxy HTTPS. Verranno usati a rotazione.")
-            proxies_found.extend(https_proxies)
-
-    PROXY_LIST = proxies_found
-
-    if PROXY_LIST:
-        print(f"Totale di {len(PROXY_LIST)} proxy configurati. Verranno usati a rotazione per ogni richiesta.")
-    else:
-        print("Nessun proxy (SOCKS5, HTTP, HTTPS) configurato.")
-
-def get_proxy_for_url(url):
-    """Seleziona un proxy casuale dalla lista, ma lo salta per i domini GitHub."""
-    if not PROXY_LIST:
-        return None
-
-    try:
-        parsed_url = urlparse(url)
-        if 'github.com' in parsed_url.netloc:
-            return None
-    except Exception:
-        pass
-
-    chosen_proxy = random.choice(PROXY_LIST)
-    return {'http': chosen_proxy, 'https': chosen_proxy}
+# Avvia il thread per l'aggiornamento periodico dei proxy
+proxy_refresh_thread = Thread(target=refresh_proxies_periodically, daemon=True)
+proxy_refresh_thread.start()
 
 def create_robust_session():
-    """Crea una sessione con configurazione robusta e keep-alive per connessioni persistenti."""
+    """Crea una sessione con configurazione robusta e keep-alive"""
     session = requests.Session()
     
-    # Configurazione Keep-Alive
     session.headers.update({
         'Connection': 'keep-alive',
         'Keep-Alive': f'timeout={KEEP_ALIVE_TIMEOUT}, max={MAX_KEEP_ALIVE_REQUESTS}'
@@ -228,14 +322,12 @@ def get_persistent_session(proxy_url=None):
     """Ottiene una sessione persistente dal pool o ne crea una nuova"""
     global SESSION_POOL, SESSION_LOCK
     
-    # Usa proxy_url come chiave, o 'default' se non c'è proxy
     pool_key = proxy_url if proxy_url else 'default'
     
     with SESSION_LOCK:
         if pool_key not in SESSION_POOL:
             session = create_robust_session()
             
-            # Configura proxy se fornito
             if proxy_url:
                 session.proxies.update({'http': proxy_url, 'https': proxy_url})
             
@@ -248,7 +340,6 @@ def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, **k
     """Effettua una richiesta usando connessioni persistenti"""
     session = get_persistent_session(proxy_url)
     
-    # Headers per keep-alive
     request_headers = {
         'Connection': 'keep-alive',
         'Keep-Alive': f'timeout={KEEP_ALIVE_TIMEOUT}, max={MAX_KEEP_ALIVE_REQUESTS}'
@@ -268,21 +359,21 @@ def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, **k
         return response
     except Exception as e:
         print(f"Errore nella richiesta persistente: {e}")
-        # In caso di errore, rimuovi la sessione dal pool
         with SESSION_LOCK:
             if proxy_url in SESSION_POOL:
                 del SESSION_POOL[proxy_url]
         raise
 
 def get_dynamic_timeout(url, base_timeout=REQUEST_TIMEOUT):
-    """Calcola timeout dinamico basato sul tipo di risorsa."""
+    """Calcola timeout dinamico basato sul tipo di risorsa"""
     if '.ts' in url.lower():
-        return base_timeout * 2  # Timeout doppio per segmenti TS
+        return base_timeout * 2
     elif '.m3u8' in url.lower():
-        return base_timeout * 1.5  # Timeout aumentato per playlist
+        return base_timeout * 1.5
     else:
         return base_timeout
 
+# Inizializza i proxy
 setup_proxies()
 
 # --- Configurazione Cache ---
@@ -570,6 +661,34 @@ def resolve_m3u8_link(url, headers=None):
         print(f"Traceback: {traceback.format_exc()}")
         return {"resolved_url": clean_url, "headers": current_headers}
 
+@app.route('/proxy/status')
+def proxy_status():
+    """Endpoint per verificare lo stato dei proxy"""
+    use_free_proxies = os.environ.get('FREE_PROXY', 'no').lower() in ('yes', '1', 'true')
+    
+    if use_free_proxies:
+        github_count = len(DOWNLOADED_PROXIES)
+        env_count = 0
+        proxy_source = "GitHub (FREE_PROXY=yes)"
+    else:
+        github_count = 0
+        env_count = len(PROXY_LIST)
+        proxy_source = "Variabili d'ambiente"
+    
+    total_count = len(PROXY_LIST)
+    
+    status = {
+        'free_proxy_enabled': use_free_proxies,
+        'proxy_source': proxy_source,
+        'total_proxies': total_count,
+        'github_proxies': github_count,
+        'env_proxies': env_count,
+        'last_github_fetch': time.ctime(LAST_PROXY_FETCH) if LAST_PROXY_FETCH > 0 and use_free_proxies else 'N/A',
+        'next_refresh_in': max(0, PROXY_REFRESH_INTERVAL - (time.time() - LAST_PROXY_FETCH)) if use_free_proxies else 'N/A'
+    }
+    
+    return jsonify(status)
+
 @app.route('/stats')
 def get_stats():
     """Endpoint per ottenere le statistiche di sistema"""
@@ -581,6 +700,17 @@ def dashboard():
     """Dashboard con statistiche di sistema"""
     stats = get_system_stats()
     daddy_base_url = get_daddylive_base_url()
+    use_free_proxies = os.environ.get('FREE_PROXY', 'no').lower() in ('yes', '1', 'true')
+    
+    if use_free_proxies:
+        proxy_status_text = "GITHUB (FREE_PROXY=yes)"
+        proxy_color = "#28a745"
+    elif len(PROXY_LIST) > 0:
+        proxy_status_text = "VARIABILI D'AMBIENTE"
+        proxy_color = "#17a2b8"
+    else:
+        proxy_status_text = "DISABILITATI"
+        proxy_color = "#dc3545"
     
     dashboard_html = f"""
     <!DOCTYPE html>
@@ -596,6 +726,7 @@ def dashboard():
             .stat-title {{ font-size: 18px; font-weight: bold; color: #333; margin-bottom: 10px; }}
             .stat-value {{ font-size: 24px; color: #007bff; }}
             .status {{ padding: 10px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; margin: 20px 0; }}
+            .proxy-status {{ padding: 10px; background: #f8f9fa; border: 2px solid {proxy_color}; border-radius: 4px; margin: 20px 0; }}
             .progress-bar {{ width: 100%; height: 20px; background-color: #e9ecef; border-radius: 10px; overflow: hidden; }}
             .progress-fill {{ height: 100%; background-color: #007bff; transition: width 0.3s ease; }}
             .connection-stats {{ background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 10px 0; }}
@@ -609,8 +740,18 @@ def dashboard():
                 <strong>Status:</strong> Proxy ONLINE - Base URL: {daddy_base_url}
             </div>
             
+            <div class="proxy-status">
+                <strong>🔧 Proxy Status:</strong> <span style="color: {proxy_color}; font-weight: bold;">{proxy_status_text}</span>
+                <br><small>
+                    FREE_PROXY=yes → Solo GitHub | 
+                    FREE_PROXY≠yes → Variabili d'ambiente | 
+                    Vuoto → Nessun proxy
+                </small>
+            </div>
+            
             <div class="connection-stats">
-                <strong>Connessioni Persistenti:</strong> {len(SESSION_POOL)} sessioni attive nel pool
+                <strong>Connessioni Persistenti:</strong> {len(SESSION_POOL)} sessioni attive nel pool<br>
+                <strong>Proxy Configurati:</strong> {len(PROXY_LIST)} proxy attivi
             </div>
             
             <div class="stats-grid">
@@ -648,6 +789,7 @@ def dashboard():
                     <li><a href="/proxy?url=URL_M3U">/proxy</a> - Proxy per liste M3U</li>
                     <li><a href="/proxy/m3u?url=URL_M3U8">/proxy/m3u</a> - Proxy per file M3U8</li>
                     <li><a href="/proxy/resolve?url=URL">/proxy/resolve</a> - Risoluzione URL DaddyLive</li>
+                    <li><a href="/proxy/status">/proxy/status</a> - Stato dei proxy</li>
                     <li><a href="/stats">/stats</a> - API JSON delle statistiche</li>
                 </ul>
             </div>
@@ -895,7 +1037,7 @@ def proxy():
         m3u_content = response.text
         
         modified_lines = []
-        current_stream_headers_params = [] 
+        current_stream_headers_params = []
 
         for line in m3u_content.splitlines():
             line = line.strip()
@@ -1017,10 +1159,19 @@ def index():
     """Pagina principale con statistiche di sistema"""
     stats = get_system_stats()
     base_url = get_daddylive_base_url()
+    use_free_proxies = os.environ.get('FREE_PROXY', 'no').lower() in ('yes', '1', 'true')
+    
+    if use_free_proxies:
+        proxy_info = f"GitHub ({len(PROXY_LIST)} proxy)"
+    elif len(PROXY_LIST) > 0:
+        proxy_info = f"Variabili d'ambiente ({len(PROXY_LIST)} proxy)"
+    else:
+        proxy_info = "Nessun proxy configurato"
     
     return f"""
     <h1>🚀 Proxy ONLINE</h1>
     <p><strong>Base URL DaddyLive:</strong> {base_url}</p>
+    <p><strong>Proxy Status:</strong> {proxy_info}</p>
     
     <h2>📊 Statistiche Sistema</h2>
     <ul>
@@ -1031,10 +1182,27 @@ def index():
         <li><strong>Connessioni Persistenti:</strong> {len(SESSION_POOL)} sessioni attive</li>
     </ul>
     
-    <p><a href="/dashboard">📈 Dashboard Completo</a> | <a href="/stats">📊 API JSON</a></p>
+    <h3>Configurazione Proxy:</h3>
+    <ul>
+        <li><strong>FREE_PROXY=yes</strong> → Usa solo proxy da GitHub</li>
+        <li><strong>FREE_PROXY≠yes + HTTP_PROXY/HTTPS_PROXY/SOCKS5_PROXY</strong> → Usa proxy dalle variabili d'ambiente</li>
+        <li><strong>Nessuna configurazione</strong> → Nessun proxy</li>
+    </ul>
+    
+    <p><a href="/dashboard">📈 Dashboard Completo</a> | <a href="/stats">📊 API JSON</a> | <a href="/proxy/status">🔧 Stato Proxy</a></p>
     """
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
     print(f"Proxy ONLINE - In ascolto su porta {port}")
+    print(f"Proxy configurati: {len(PROXY_LIST)}")
+    
+    use_free_proxies = os.environ.get('FREE_PROXY', 'no').lower() in ('yes', '1', 'true')
+    if use_free_proxies:
+        print("Modalità: FREE_PROXY=yes - Solo proxy da GitHub")
+    elif len(PROXY_LIST) > 0:
+        print("Modalità: Proxy dalle variabili d'ambiente")
+    else:
+        print("Modalità: Nessun proxy configurato")
+    
     app.run(host="0.0.0.0", port=port, debug=False)
