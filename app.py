@@ -570,14 +570,6 @@ def resolve_m3u8_link(url, headers=None):
     if not url:
         app.logger.error("Errore: URL non fornito.")
         return {"resolved_url": None, "headers": {}}
-        
-        # All'inizio della funzione resolve_m3u8_link(), dopo il controllo dell'URL vuoto:
-    if 'vavoo.to' in url.lower():
-        app.logger.info(f"URL Vavoo.to rilevato, passaggio diretto: {url}")
-        return {
-            "resolved_url": url,
-            "headers": headers or {}
-        }
 
     current_headers = headers.copy() if headers else {}
     
@@ -607,6 +599,16 @@ def resolve_m3u8_link(url, headers=None):
                 except Exception as e:
                     app.logger.error(f"Errore nell'estrazione dell'header {param}: {e}")
 
+    # **AGGIUNTA: Controllo per URL Vavoo.to DOPO l'estrazione degli header**
+    if 'vavoo.to' in clean_url.lower():
+        app.logger.info(f"URL Vavoo.to rilevato, passaggio diretto: {clean_url}")
+        final_headers = {**current_headers, **extracted_headers}
+        return {
+            "resolved_url": clean_url,
+            "headers": final_headers
+        }
+
+    # Continua con la logica DaddyLive per altri URL...
     app.logger.info(f"Tentativo di risoluzione URL (DaddyLive): {clean_url}")
 
     daddy_base_url = get_daddylive_base_url()
