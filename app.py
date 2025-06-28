@@ -1291,7 +1291,7 @@ ADMIN_TEMPLATE = """
 </html>
 """
 
-CONFIG_TEMPLATE = """
+CONFIG_TEMPLATE = r"""
 <!DOCTYPE html>
 <html>
 <head>
