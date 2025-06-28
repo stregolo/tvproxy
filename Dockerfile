@@ -7,7 +7,7 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y \
     git \
     ca-certificates \
-		curl \
+	curl \
     && rm -rf /var/lib/apt/lists/*
 
 # 3. Imposta la directory di lavoro
