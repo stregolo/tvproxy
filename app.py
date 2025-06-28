@@ -791,7 +791,7 @@ LOGIN_TEMPLATE = r"""
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
             margin: 0;
             padding: 0;
             min-height: 100vh;
@@ -841,7 +841,7 @@ LOGIN_TEMPLATE = r"""
         .btn-login {
             width: 100%;
             padding: 12px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
             color: white;
             border: none;
             border-radius: 8px;
@@ -900,7 +900,7 @@ DASHBOARD_TEMPLATE = r"""
             color: #333;
         }
         .navbar {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
             color: white;
             padding: 1rem 2rem;
             display: flex;
@@ -1175,7 +1175,7 @@ ADMIN_TEMPLATE = r"""
             margin-bottom: 15px;
         }
         .btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
             color: white;
             padding: 12px 24px;
             border: none;
@@ -1197,7 +1197,7 @@ ADMIN_TEMPLATE = r"""
             text-decoration: none;
         }
         .navbar {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
             color: white;
             padding: 1rem 2rem;
             display: flex;
@@ -1306,7 +1306,7 @@ CONFIG_TEMPLATE = r"""
             padding: 0;
         }
         .navbar {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
             color: white;
             padding: 1rem 2rem;
             display: flex;
@@ -1379,7 +1379,7 @@ CONFIG_TEMPLATE = r"""
             padding-bottom: 10px;
         }
         .btn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
             color: white;
             padding: 12px 24px;
             border: none;
@@ -1830,7 +1830,7 @@ LOG_TEMPLATE = r"""
             padding: 0;
         }
         .navbar {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
             color: white;
             padding: 1rem 2rem;
             display: flex;
@@ -2189,7 +2189,7 @@ INDEX_TEMPLATE = r"""
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
             margin: 0;
             padding: 0;
             min-height: 100vh;
