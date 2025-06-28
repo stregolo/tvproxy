@@ -7,7 +7,7 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y \
     git \
     ca-certificates \
-	  curl \
+		curl \
     && rm -rf /var/lib/apt/lists/*
 
 # 3. Imposta la directory di lavoro
@@ -15,7 +15,7 @@ WORKDIR /app
 
 # 4. Clona il repository (o copia il codice direttamente) nella working directory
 #    Se vuoi usare il tuo repository remoto, decommenta la riga git clone:
-#RUN git clone https://github.com/nzo66/tvproxy .
+# RUN git clone https://github.com/nzo66/tvproxy .
 COPY . .
 
 # 5. Pre-crea la directory per i log e rendila scrivibile
