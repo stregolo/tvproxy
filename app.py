@@ -1710,7 +1710,7 @@ CONFIG_TEMPLATE = """
                     if (data.status === 'INFO') {
                         document.getElementById('test-status').textContent = data.message;
                         // Estrai il numero totale se presente
-                        const match = data.message.match(/(\d+) proxy/);
+                        const match = data.message.match(/(\\d+) proxy/);
                         if (match) {
                             totalCount = parseInt(match[1]);
                         }
