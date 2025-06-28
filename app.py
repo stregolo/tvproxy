@@ -2039,7 +2039,7 @@ LOG_TEMPLATE = r"""
     </div>
     
     <button class="auto-scroll" id="autoScrollBtn" onclick="toggleAutoScroll()">📜 Auto-scroll</button>
-
+    
     <script>
         let eventSource = null;
         let isPaused = false;
