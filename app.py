@@ -2256,7 +2256,7 @@ def test_config():
         
         # Test DaddyLive URL
         try:
-            daddy_url = get_daddylive_base_url()
+            daddy_url = "https://new.newkso.ru/wind/"
             response = requests.get(daddy_url, timeout=10)
             if response.status_code == 200:
                 results.append(f"✅ DaddyLive URL: OK ({daddy_url})")
