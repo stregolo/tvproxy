@@ -2294,7 +2294,7 @@ def test_config():
             ]
             proc = subprocess.run(cmd, capture_output=True, text=True)
             if proc.returncode == 0:
-                results.append(f"✅ DaddyLive CURL: OK ({daddy_url})")
+                results.append(f"✅ DaddyLive CURL: OK")
             else:
                 results.append(f"❌ DaddyLive CURL: Errore (code {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}")
         except Exception as e:
@@ -2311,7 +2311,7 @@ def test_config():
             ]
             proc2 = subprocess.run(cmd2, capture_output=True, text=True)
             if proc2.returncode == 0:
-                results.append(f"✅ Vavoo CURL: OK ({vavoo_url})")
+                results.append(f"✅ Vavoo CURL: OK")
             else:
                 results.append(f"❌ Vavoo CURL: Errore (code {proc2.returncode}): {proc2.stderr.strip() or proc2.stdout.strip()}")
         except Exception as e:
