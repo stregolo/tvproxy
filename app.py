@@ -884,7 +884,7 @@ LOGIN_TEMPLATE = """
 </html>
 """
 
-DASHBOARD_TEMPLATE = """
+DASHBOARD_TEMPLATE = r"""
 <!DOCTYPE html>
 <html>
 <head>
