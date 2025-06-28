@@ -1525,12 +1525,10 @@ CONFIG_TEMPLATE = """
                         </div>
                     </div>
                 </div>
-            </div>
-
-            <div style="margin-top: 30px;">
-                <button type="submit" class="btn">💾 Salva Configurazioni</button>
-                <button type="button" class="btn btn-secondary" onclick="resetForm()">🔄 Ripristina Default</button>
-                <button type="button" class="btn btn-secondary" onclick="testConnection()">🔍 Test Connessioni</button>
+                <div style="margin-top:20px; color:#e67e22; font-size:15px;">
+                    ⚠️ Il pulsante <b>Test Connessioni</b> verifica <b>solo i proxy già salvati</b> nella configurazione.<br>
+                    Se modifichi i proxy, premi prima <b>Salva Configurazioni</b> per testarli.
+                </div>
             </div>
         </form>
     </div>
