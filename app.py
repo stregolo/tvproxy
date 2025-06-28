@@ -1604,16 +1604,31 @@ CONFIG_TEMPLATE = """
         
         function testConnection() {
             showAlert('Test delle connessioni in corso...', 'success');
-            
+            // Disabilita i pulsanti durante il test
+            setButtonsDisabled(true);
+
             fetch('/admin/config/test', {
                 method: 'POST'
             })
             .then(response => response.json())
             .then(data => {
-                showAlert(data.message, data.status === 'success' ? 'success' : 'error');
+                // Mostra il risultato dopo almeno 1 secondo
+                setTimeout(() => {
+                    showAlert(data.message, data.status === 'success' ? 'success' : 'error');
+                    setButtonsDisabled(false);
+                }, 1000);
             })
             .catch(error => {
-                showAlert('Errore nel test delle connessioni', 'error');
+                setTimeout(() => {
+                    showAlert('Errore nel test delle connessioni', 'error');
+                    setButtonsDisabled(false);
+                }, 1000);
+            });
+        }
+
+        function setButtonsDisabled(disabled) {
+            document.querySelectorAll('.btn, .btn-secondary').forEach(btn => {
+                btn.disabled = disabled;
             });
         }
     </script>
