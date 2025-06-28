@@ -2352,7 +2352,7 @@ def index():
 
 @app.route('/proxy/m3u')
 def proxy_m3u():
-    """Proxy per file M3U e M3U8 con supporto DaddyLive 2025 e caching"""
+    """Proxy per file M3U e M3U8 con supporto DaddyLive 2025 e caching intelligente"""
     m3u_url = request.args.get('url', '').strip()
     if not m3u_url:
         return "Errore: Parametro 'url' mancante", 400
@@ -2360,11 +2360,12 @@ def proxy_m3u():
     cache_key_headers = "&".join(sorted([f"{k}={v}" for k, v in request.args.items() if k.lower().startswith("h_")]))
     cache_key = f"{m3u_url}|{cache_key_headers}"
 
+    # Se è in cache, restituisci subito la cache
     if cache_key in M3U8_CACHE:
         app.logger.info(f"Cache HIT per M3U8: {m3u_url}")
         cached_response = M3U8_CACHE[cache_key]
         return Response(cached_response, content_type="application/vnd.apple.mpegurl")
-    app.logger.info(f"Cache MISS per M3U8: {m3u_url}")
+    app.logger.info(f"Cache MISS per M3U8: {m3u_url} (primo avvio, risposta diretta)")
 
     daddy_base_url = get_daddylive_base_url()
     daddy_origin = urlparse(daddy_base_url).scheme + "://" + urlparse(daddy_base_url).netloc
@@ -2437,7 +2438,16 @@ def proxy_m3u():
             modified_m3u8.append(line)
 
         modified_m3u8_content = "\n".join(modified_m3u8)
-        M3U8_CACHE[cache_key] = modified_m3u8_content
+
+        # Salva la cache in background dopo aver risposto
+        def cache_later():
+            try:
+                M3U8_CACHE[cache_key] = modified_m3u8_content
+                app.logger.info(f"M3U8 cache salvata per {m3u_url}")
+            except Exception as e:
+                app.logger.error(f"Errore nel salvataggio cache M3U8: {e}")
+
+        Thread(target=cache_later, daemon=True).start()
 
         return Response(modified_m3u8_content, content_type="application/vnd.apple.mpegurl")
 
