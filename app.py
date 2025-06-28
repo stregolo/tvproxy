@@ -22,6 +22,9 @@ from functools import wraps
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
+import subprocess
+import concurrent.futures
+
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
@@ -2219,56 +2222,105 @@ def reset_config():
 @app.route('/admin/config/test', methods=['POST'])
 @login_required
 def test_config():
-    """Testa le configurazioni proxy"""
+    """Testa le configurazioni proxy e i link DaddyLive/Vavoo con tutti i protocolli in parallelo"""
     try:
         config = config_manager.load_config()
         results = []
-        
-        # Test proxy SOCKS5
+
+        def test_proxy(proxy, proto, url, headers=None):
+            try:
+                proxies = {proto.lower(): proxy}
+                response = requests.get(url, headers=headers, proxies=proxies, timeout=10, verify=VERIFY_SSL)
+                if response.status_code == 200:
+                    return f"✅ {url} {proto} {proxy}: OK"
+                else:
+                    return f"❌ {url} {proto} {proxy}: Status {response.status_code}"
+            except Exception as e:
+                return f"❌ {url} {proto} {proxy}: {str(e)}"
+
+        # Test proxy SOCKS5, HTTP, HTTPS su httpbin
+        proxy_tests = []
         if config.get('SOCKS5_PROXY'):
             proxies = [p.strip() for p in config['SOCKS5_PROXY'].split(',') if p.strip()]
-            for proxy in proxies[:3]:  # Testa solo i primi 3
-                try:
-                    response = requests.get('https://httpbin.org/ip', 
-                                          proxies={'http': proxy, 'https': proxy}, 
-                                          timeout=10)
-                    if response.status_code == 200:
-                        results.append(f"✅ SOCKS5 {proxy}: OK")
-                    else:
-                        results.append(f"❌ SOCKS5 {proxy}: Status {response.status_code}")
-                except Exception as e:
-                    results.append(f"❌ SOCKS5 {proxy}: {str(e)}")
-        
-        # Test HTTP proxy
+            for proxy in proxies:
+                proxy_tests.append(('SOCKS5', proxy, 'https://httpbin.org/ip', None))
         if config.get('HTTP_PROXY'):
             proxies = [p.strip() for p in config['HTTP_PROXY'].split(',') if p.strip()]
-            for proxy in proxies[:2]:  # Testa solo i primi 2
-                try:
-                    response = requests.get('http://httpbin.org/ip', 
-                                          proxies={'http': proxy}, 
-                                          timeout=10)
-                    if response.status_code == 200:
-                        results.append(f"✅ HTTP {proxy}: OK")
-                    else:
-                        results.append(f"❌ HTTP {proxy}: Status {response.status_code}")
-                except Exception as e:
-                    results.append(f"❌ HTTP {proxy}: {str(e)}")
-        
-        # Test DaddyLive URL
+            for proxy in proxies:
+                proxy_tests.append(('HTTP', proxy, 'http://httpbin.org/ip', None))
+        if config.get('HTTPS_PROXY'):
+            proxies = [p.strip() for p in config['HTTPS_PROXY'].split(',') if p.strip()]
+            for proxy in proxies:
+                proxy_tests.append(('HTTPS', proxy, 'https://httpbin.org/ip', None))
+
+        # DaddyLive e Vavoo URLs
+        daddy_url = "https://new.newkso.ru/wind/"
+        vavoo_url = 'https://vavoo.to/play/1534161807/index.m3u8'
+        vavoo_headers = {
+            'user-agent': 'VAVOO/2.6',
+            'referer': 'https://vavoo.to/',
+            'origin': 'https://vavoo.to'
+        }
+
+        # Test DaddyLive con tutti i proxy
+        for proto, key in [('SOCKS5', 'SOCKS5_PROXY'), ('HTTP', 'HTTP_PROXY'), ('HTTPS', 'HTTPS_PROXY')]:
+            if config.get(key):
+                proxies = [p.strip() for p in config[key].split(',') if p.strip()]
+                for proxy in proxies:
+                    proxy_tests.append((proto, proxy, daddy_url, None))
+
+        # Test Vavoo con tutti i proxy
+        for proto, key in [('SOCKS5', 'SOCKS5_PROXY'), ('HTTP', 'HTTP_PROXY'), ('HTTPS', 'HTTPS_PROXY')]:
+            if config.get(key):
+                proxies = [p.strip() for p in config[key].split(',') if p.strip()]
+                for proxy in proxies:
+                    proxy_tests.append((proto, proxy, vavoo_url, vavoo_headers))
+
+        # Esegui tutti i test in parallelo (max 50 thread)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+            future_to_test = {
+                executor.submit(test_proxy, proxy, proto, url, headers): (proto, proxy, url)
+                for proto, proxy, url, headers in proxy_tests
+            }
+            for future in concurrent.futures.as_completed(future_to_test):
+                result = future.result()
+                results.append(result)
+
+        # Test DaddyLive diretto (senza proxy)
         try:
-            daddy_url = "https://new.newkso.ru/wind/"
-            response = requests.get(daddy_url, timeout=10)
-            if response.status_code == 200:
-                results.append(f"✅ DaddyLive URL: OK ({daddy_url})")
+            cmd = [
+                'curl', '-k', '--max-time', '10', '--silent', '--show-error',
+                '--connect-timeout', '7', daddy_url
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode == 0:
+                results.append(f"✅ DaddyLive CURL: OK ({daddy_url})")
             else:
-                results.append(f"❌ DaddyLive URL: Status {response.status_code}")
+                results.append(f"❌ DaddyLive CURL: Errore (code {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}")
         except Exception as e:
-            results.append(f"❌ DaddyLive URL: {str(e)}")
-        
+            results.append(f"❌ DaddyLive CURL: {str(e)}")
+
+        # Test Vavoo diretto (senza proxy)
+        try:
+            cmd2 = [
+                'curl', '-k', '--max-time', '10', '--silent', '--show-error', '--connect-timeout', '7',
+                '-H', 'user-agent: VAVOO/2.6',
+                '-H', 'referer: https://vavoo.to/',
+                '-H', 'origin: https://vavoo.to',
+                vavoo_url
+            ]
+            proc2 = subprocess.run(cmd2, capture_output=True, text=True)
+            if proc2.returncode == 0:
+                results.append(f"✅ Vavoo CURL: OK ({vavoo_url})")
+            else:
+                results.append(f"❌ Vavoo CURL: Errore (code {proc2.returncode}): {proc2.stderr.strip() or proc2.stdout.strip()}")
+        except Exception as e:
+            results.append(f"❌ Vavoo CURL: {str(e)}")
+
         app.logger.info("Test configurazioni eseguito")
         message = "Test completato:\n" + "\n".join(results)
         return jsonify({"status": "success", "message": message})
-        
+
     except Exception as e:
         app.logger.error(f"Errore nel test configurazioni: {e}")
         return jsonify({"status": "error", "message": f"Errore nel test: {str(e)}"})
