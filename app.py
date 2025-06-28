@@ -781,7 +781,7 @@ def resolve_m3u8_link(url, headers=None):
 
 # --- Template HTML ---
 
-LOGIN_TEMPLATE = """
+LOGIN_TEMPLATE = r"""
 <!DOCTYPE html>
 <html>
 <head>
@@ -1132,7 +1132,7 @@ DASHBOARD_TEMPLATE = r"""
 </html>
 """
 
-ADMIN_TEMPLATE = """
+ADMIN_TEMPLATE = r"""
 <!DOCTYPE html>
 <html>
 <head>
@@ -1814,7 +1814,7 @@ CONFIG_TEMPLATE = r"""
             }
         }
 
-LOG_TEMPLATE = """
+LOG_TEMPLATE = r"""
 <!DOCTYPE html>
 <html>
 <head>
@@ -2179,7 +2179,7 @@ LOG_TEMPLATE = """
 </html>
 """
 
-INDEX_TEMPLATE = """
+INDEX_TEMPLATE = r"""
 <!DOCTYPE html>
 <html>
 <head>
