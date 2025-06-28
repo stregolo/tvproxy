@@ -1441,9 +1441,6 @@ CONFIG_TEMPLATE = """
             <a href="/logout">🚪 Logout</a>
         </div>
     </nav>
-    
-    <div class="container">
-        <div id="alert" class="alert"></div>
         
         <form id="configForm">
             <!-- Sezione Proxy -->
@@ -1547,17 +1544,22 @@ CONFIG_TEMPLATE = """
                         </div>
                     </div>
                 </div>
-                <!-- Box separata per azioni -->
-                <div class="action-box">
-                    <div class="action-buttons">
-                        <button type="submit" class="btn">💾 Salva Configurazioni</button>
-                        <button type="button" class="btn btn-secondary" onclick="resetForm()">🔄 Ripristina Default</button>
-                        <button type="button" class="btn btn-secondary" onclick="testConnection()">🔍 Test Connessioni</button>
-                    </div>
-                    <div class="action-warning">
-                        ⚠️ Il test connessioni verifica <b>solo i proxy già salvati</b> nella configurazione.<br>
-                        Se modifichi i proxy, premi prima <b>Salva Configurazioni</b> per testarli.
-                    </div>
+            </div>
+
+            <div class="alert-container">
+                <div id="alert" class="alert"></div>
+            </div>
+
+            <!-- Box separata per azioni -->
+            <div class="action-box">
+                <div class="action-buttons">
+                    <button type="submit" class="btn">💾 Salva Configurazioni</button>
+                    <button type="button" class="btn btn-secondary" onclick="resetForm()">🔄 Ripristina Default</button>
+                    <button type="button" class="btn btn-secondary" onclick="testConnection()">🔍 Test Connessioni</button>
+                </div>
+                <div class="action-warning">
+                    ⚠️ Il test connessioni verifica <b>solo i proxy già salvati</b> nella configurazione.<br>
+                    Se modifichi i proxy, premi prima <b>Salva Configurazioni</b> per testarli.
                 </div>
             </div>
         </form>
