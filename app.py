@@ -1408,6 +1408,28 @@ CONFIG_TEMPLATE = """
         .col {
             flex: 1;
         }
+        .action-box {
+            margin-top: 35px;
+            padding: 22px 25px;
+            background: #fdf6e3;
+            border: 2px solid #ffe0b2;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(255, 193, 7, 0.06);
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 12px;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+        .action-warning {
+            color: #e67e22;
+            font-size: 15px;
+            margin-top: 2px;
+        }
     </style>
 </head>
 <body>
@@ -1525,12 +1547,14 @@ CONFIG_TEMPLATE = """
                         </div>
                     </div>
                 </div>
-                <!-- Pulsanti azione sotto la sezione Sicurezza -->
-                <div style="margin-top:30px;">
-                    <button type="submit" class="btn">💾 Salva Configurazioni</button>
-                    <button type="button" class="btn btn-secondary" onclick="resetForm()">🔄 Ripristina Default</button>
-                    <button type="button" class="btn btn-secondary" onclick="testConnection()">🔍 Test Connessioni</button>
-                    <div style="margin-top:10px; color:#e67e22; font-size:15px;">
+                <!-- Box separata per azioni -->
+                <div class="action-box">
+                    <div class="action-buttons">
+                        <button type="submit" class="btn">💾 Salva Configurazioni</button>
+                        <button type="button" class="btn btn-secondary" onclick="resetForm()">🔄 Ripristina Default</button>
+                        <button type="button" class="btn btn-secondary" onclick="testConnection()">🔍 Test Connessioni</button>
+                    </div>
+                    <div class="action-warning">
                         ⚠️ Il test connessioni verifica <b>solo i proxy già salvati</b> nella configurazione.<br>
                         Se modifichi i proxy, premi prima <b>Salva Configurazioni</b> per testarli.
                     </div>
