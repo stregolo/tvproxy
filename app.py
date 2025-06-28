@@ -1417,18 +1417,30 @@ CONFIG_TEMPLATE = """
             box-shadow: 0 2px 8px rgba(255, 193, 7, 0.06);
             display: flex;
             flex-direction: column;
-            align-items: flex-start;
+            width: 100%;
             gap: 12px;
         }
         .action-buttons {
             display: flex;
             gap: 12px;
             margin-bottom: 8px;
+            flex-wrap: wrap;
         }
-        .action-warning {
-            color: #e67e22;
-            font-size: 15px;
-            margin-top: 2px;
+        @media (max-width: 600px) {
+            .action-box {
+                padding: 15px 8px;
+            }
+            .action-buttons {
+                flex-direction: column;
+                gap: 10px;
+                width: 100%;
+            }
+            .action-buttons .btn,
+            .action-buttons .btn-secondary {
+                width: 100%;
+                box-sizing: border-box;
+                margin-right: 0;
+            }
         }
     </style>
 </head>
