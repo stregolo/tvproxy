@@ -1,3 +1,4 @@
+
 from flask import Flask, request, Response, jsonify, render_template_string, session, redirect, url_for
 import requests
 from urllib.parse import urlparse, urljoin, quote, unquote
@@ -21,20 +22,6 @@ from functools import wraps
 import logging
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
-import subprocess
-import uuid
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
-
-# Pool di thread per gestire test simultanei (se non esiste già)
-if 'executor' not in globals():
-    executor = ThreadPoolExecutor(max_workers=10)
-
-# Dizionario thread-safe per tracciare i test attivi (se non esiste già)
-if 'active_tests' not in globals():
-    active_tests = {}
-    active_tests_lock = threading.Lock()
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
@@ -781,7 +768,7 @@ def resolve_m3u8_link(url, headers=None):
 
 # --- Template HTML ---
 
-LOGIN_TEMPLATE = r"""
+LOGIN_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -791,7 +778,7 @@ LOGIN_TEMPLATE = r"""
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             margin: 0;
             padding: 0;
             min-height: 100vh;
@@ -841,7 +828,7 @@ LOGIN_TEMPLATE = r"""
         .btn-login {
             width: 100%;
             padding: 12px;
-            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
             border-radius: 8px;
@@ -884,7 +871,7 @@ LOGIN_TEMPLATE = r"""
 </html>
 """
 
-DASHBOARD_TEMPLATE = r"""
+DASHBOARD_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -900,7 +887,7 @@ DASHBOARD_TEMPLATE = r"""
             color: #333;
         }
         .navbar {
-            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             padding: 1rem 2rem;
             display: flex;
@@ -1132,7 +1119,7 @@ DASHBOARD_TEMPLATE = r"""
 </html>
 """
 
-ADMIN_TEMPLATE = r"""
+ADMIN_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -1175,7 +1162,7 @@ ADMIN_TEMPLATE = r"""
             margin-bottom: 15px;
         }
         .btn {
-            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             padding: 12px 24px;
             border: none;
@@ -1197,7 +1184,7 @@ ADMIN_TEMPLATE = r"""
             text-decoration: none;
         }
         .navbar {
-            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             padding: 1rem 2rem;
             display: flex;
@@ -1291,7 +1278,7 @@ ADMIN_TEMPLATE = r"""
 </html>
 """
 
-CONFIG_TEMPLATE = r"""
+CONFIG_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -1306,7 +1293,7 @@ CONFIG_TEMPLATE = r"""
             padding: 0;
         }
         .navbar {
-            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             padding: 1rem 2rem;
             display: flex;
@@ -1379,7 +1366,7 @@ CONFIG_TEMPLATE = r"""
             padding-bottom: 10px;
         }
         .btn {
-            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             padding: 12px 24px;
             border: none;
@@ -1609,22 +1596,7 @@ CONFIG_TEMPLATE = r"""
         }
         
         function testConnection() {
-            const testBtn = event.target;
-            const originalText = testBtn.textContent;
-            
-            // Chiedi all'utente se vuole il test avanzato
-            const useAdvanced = confirm('Vuoi usare il test parallelo avanzato?\n\n• Sì: Test parallelo con risultati in tempo reale\n• No: Test semplice tradizionale');
-            
-            if (useAdvanced) {
-                testConnectionAdvanced(testBtn, originalText);
-            } else {
-                testConnectionSimple(testBtn, originalText);
-            }
-        }
-        
-        function testConnectionSimple(testBtn, originalText) {
-            testBtn.textContent = '🔍 Test in corso...';
-            testBtn.disabled = true;
+            showAlert('Test delle connessioni in corso...', 'success');
             
             fetch('/admin/config/test', {
                 method: 'POST'
@@ -1635,186 +1607,14 @@ CONFIG_TEMPLATE = r"""
             })
             .catch(error => {
                 showAlert('Errore nel test delle connessioni', 'error');
-            })
-            .finally(() => {
-                testBtn.textContent = originalText;
-                testBtn.disabled = false;
             });
         }
-        
-        function testConnectionAdvanced(testBtn, originalText) {
-            testBtn.textContent = '⚡ Test Parallelo...';
-            testBtn.disabled = true;
-            
-            // Crea l'area dei risultati se non esiste
-            let resultsArea = document.getElementById('test-results-area');
-            if (!resultsArea) {
-                resultsArea = document.createElement('div');
-                resultsArea.id = 'test-results-area';
-                resultsArea.innerHTML = `
-                    <div style="margin-top: 20px; padding: 20px; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #007bff;">
-                        <h4>🔍 Risultati Test Connessioni in Tempo Reale</h4>
-                        <div id="test-progress" style="margin: 10px 0;">
-                            <div style="background: #e9ecef; height: 8px; border-radius: 4px; overflow: hidden;">
-                                <div id="test-progress-bar" style="background: #007bff; height: 100%; width: 0%; transition: width 0.3s;"></div>
-                            </div>
-                            <small id="test-status">Preparazione test...</small>
-                        </div>
-                        <div style="display: flex; gap: 15px; margin-top: 15px;">
-                            <div style="flex: 1;">
-                                <h5 style="color: #28a745; margin: 0 0 10px 0;">✅ Funzionanti (<span id="working-count">0</span>)</h5>
-                                <div id="working-list" style="max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px;"></div>
-                            </div>
-                            <div style="flex: 1;">
-                                <h5 style="color: #dc3545; margin: 0 0 10px 0;">❌ Non Funzionanti (<span id="failed-count">0</span>)</h5>
-                                <div id="failed-list" style="max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px;"></div>
-                            </div>
-                        </div>
-                        <div style="margin-top: 15px;">
-                            <button id="stop-test-btn" onclick="stopConfigTest()" style="background: #dc3545; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">⏹️ Stop Test</button>
-                            <button id="download-results-btn" onclick="downloadConfigResults()" disabled style="background: #28a745; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-left: 10px;">📥 Scarica Funzionanti</button>
-                        </div>
-                    </div>
-                `;
-                document.querySelector('.container').appendChild(resultsArea);
-            }
-            
-            // Reset UI
-            document.getElementById('working-list').innerHTML = '';
-            document.getElementById('failed-list').innerHTML = '';
-            document.getElementById('working-count').textContent = '0';
-            document.getElementById('failed-count').textContent = '0';
-            document.getElementById('test-progress-bar').style.width = '0%';
-            document.getElementById('test-status').textContent = 'Avvio test parallelo...';
-            document.getElementById('stop-test-btn').disabled = false;
-            document.getElementById('download-results-btn').disabled = true;
-            
-            let workingCount = 0;
-            let failedCount = 0;
-            let totalCount = 0;
-            let completedCount = 0;
-            
-            // Avvia test streaming
-            const eventSource = new EventSource('/admin/config/test', {
-                headers: {
-                    'Accept': 'text/event-stream'
-                }
-            });
-            
-            window.configTestEventSource = eventSource;
-            
-            eventSource.onmessage = function(event) {
-                try {
-                    const data = JSON.parse(event.data);
-                    
-                    if (data.status === 'INFO') {
-                        document.getElementById('test-status').textContent = data.message;
-                        // Estrai il numero totale se presente
-                        const match = data.message.match(/(\\d+) proxy/);
-                        if (match) {
-                            totalCount = parseInt(match[1]);
-                        }
-                    } else if (data.status === 'SUCCESS') {
-                        workingCount++;
-                        completedCount++;
-                        
-                        const workingList = document.getElementById('working-list');
-                        const item = document.createElement('div');
-                        item.style.cssText = 'padding: 3px; border-bottom: 1px solid #ddd; color: #28a745;';
-                        item.innerHTML = `✅ ${data.proxy} <small style="color: #666;">(${data.protocol_used})</small>`;
-                        workingList.appendChild(item);
-                        
-                        document.getElementById('working-count').textContent = workingCount;
-                        document.getElementById('download-results-btn').disabled = false;
-                        
-                        updateTestProgress();
-                        
-                    } else if (data.status === 'FAIL') {
-                        failedCount++;
-                        completedCount++;
-                        
-                        const failedList = document.getElementById('failed-list');
-                        const item = document.createElement('div');
-                        item.style.cssText = 'padding: 3px; border-bottom: 1px solid #ddd; color: #dc3545;';
-                        item.innerHTML = `❌ ${data.proxy} <small style="color: #666;">${data.details}</small>`;
-                        failedList.appendChild(item);
-                        
-                        document.getElementById('failed-count').textContent = failedCount;
-                        
-                        updateTestProgress();
-                        
-                    } else if (data.status === 'COMPLETED') {
-                        document.getElementById('test-status').textContent = '✅ Test completato!';
-                        document.getElementById('stop-test-btn').disabled = true;
-                        testBtn.textContent = originalText;
-                        testBtn.disabled = false;
-                        eventSource.close();
-                        
-                    } else if (data.status === 'ERROR') {
-                        showAlert(`Errore durante il test: ${data.message}`, 'error');
-                        testBtn.textContent = originalText;
-                        testBtn.disabled = false;
-                        eventSource.close();
-                    }
-                    
-                } catch (e) {
-                    console.error('Errore parsing risultato test:', e);
-                }
-            };
-            
-            eventSource.onerror = function(event) {
-                console.error('Errore EventSource:', event);
-                showAlert('Errore di connessione durante il test', 'error');
-                testBtn.textContent = originalText;
-                testBtn.disabled = false;
-                eventSource.close();
-            };
-            
-            function updateTestProgress() {
-                if (totalCount > 0) {
-                    const percentage = (completedCount / totalCount) * 100;
-                    document.getElementById('test-progress-bar').style.width = percentage + '%';
-                    document.getElementById('test-status').textContent = 
-                        `Test in corso: ${completedCount}/${totalCount} (${workingCount} ✅, ${failedCount} ❌)`;
-                }
-            }
-        }
-        
-        function stopConfigTest() {
-            if (window.configTestEventSource) {
-                window.configTestEventSource.close();
-                document.getElementById('test-status').textContent = '⏹️ Test interrotto';
-                document.getElementById('stop-test-btn').disabled = true;
-                // Riabilita il pulsante principale
-                const testBtn = document.querySelector('button[onclick="testConnection()"]');
-                if (testBtn) {
-                    testBtn.textContent = '🔍 Test Connessioni';
-                    testBtn.disabled = false;
-                }
-            }
-        }
-        
-        function downloadConfigResults() {
-            const workingItems = document.querySelectorAll('#working-list div');
-            const proxies = Array.from(workingItems).map(item => {
-                const text = item.textContent;
-                return text.substring(2, text.indexOf(' (')); // Rimuovi ✅ e la parte del protocollo
-            }).join('\n');
-            
-            if (proxies) {
-                const blob = new Blob([proxies], {type: 'text/plain'});
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'proxy_configurazioni_funzionanti.txt';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-            }
-        }
+    </script>
+</body>
+</html>
+"""
 
-LOG_TEMPLATE = r"""
+LOG_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -1830,7 +1630,7 @@ LOG_TEMPLATE = r"""
             padding: 0;
         }
         .navbar {
-            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             padding: 1rem 2rem;
             display: flex;
@@ -2039,7 +1839,7 @@ LOG_TEMPLATE = r"""
     </div>
     
     <button class="auto-scroll" id="autoScrollBtn" onclick="toggleAutoScroll()">📜 Auto-scroll</button>
-    
+
     <script>
         let eventSource = null;
         let isPaused = false;
@@ -2179,7 +1979,7 @@ LOG_TEMPLATE = r"""
 </html>
 """
 
-INDEX_TEMPLATE = r"""
+INDEX_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -2189,7 +1989,7 @@ INDEX_TEMPLATE = r"""
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, rgb(102, 126, 234) 0%, rgb(118, 75, 162) 100%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             margin: 0;
             padding: 0;
             min-height: 100vh;
@@ -2419,215 +2219,60 @@ def reset_config():
 @app.route('/admin/config/test', methods=['POST'])
 @login_required
 def test_config():
-    """Testa le configurazioni proxy con sistema parallelo avanzato"""
+    """Testa le configurazioni proxy"""
     try:
         config = config_manager.load_config()
+        results = []
         
-        # Controlla se è una richiesta per streaming
-        if request.headers.get('Accept') == 'text/event-stream':
-            return test_config_stream(config)
+        # Test proxy SOCKS5
+        if config.get('SOCKS5_PROXY'):
+            proxies = [p.strip() for p in config['SOCKS5_PROXY'].split(',') if p.strip()]
+            for proxy in proxies[:3]:  # Testa solo i primi 3
+                try:
+                    response = requests.get('https://httpbin.org/ip', 
+                                          proxies={'http': proxy, 'https': proxy}, 
+                                          timeout=10)
+                    if response.status_code == 200:
+                        results.append(f"✅ SOCKS5 {proxy}: OK")
+                    else:
+                        results.append(f"❌ SOCKS5 {proxy}: Status {response.status_code}")
+                except Exception as e:
+                    results.append(f"❌ SOCKS5 {proxy}: {str(e)}")
         
-        # Altrimenti usa il test semplice (per compatibilità)
-        return test_config_simple(config)
-            
+        # Test HTTP proxy
+        if config.get('HTTP_PROXY'):
+            proxies = [p.strip() for p in config['HTTP_PROXY'].split(',') if p.strip()]
+            for proxy in proxies[:2]:  # Testa solo i primi 2
+                try:
+                    response = requests.get('http://httpbin.org/ip', 
+                                          proxies={'http': proxy}, 
+                                          timeout=10)
+                    if response.status_code == 200:
+                        results.append(f"✅ HTTP {proxy}: OK")
+                    else:
+                        results.append(f"❌ HTTP {proxy}: Status {response.status_code}")
+                except Exception as e:
+                    results.append(f"❌ HTTP {proxy}: {str(e)}")
+        
+        # Test DaddyLive URL
+        try:
+            daddy_url = get_daddylive_base_url()
+            response = requests.get(daddy_url, timeout=10)
+            if response.status_code == 200:
+                results.append(f"✅ DaddyLive URL: OK ({daddy_url})")
+            else:
+                results.append(f"❌ DaddyLive URL: Status {response.status_code}")
+        except Exception as e:
+            results.append(f"❌ DaddyLive URL: {str(e)}")
+        
+        app.logger.info("Test configurazioni eseguito")
+        message = "Test completato:\n" + "\n".join(results)
+        return jsonify({"status": "success", "message": message})
+        
     except Exception as e:
         app.logger.error(f"Errore nel test configurazioni: {e}")
         return jsonify({"status": "error", "message": f"Errore nel test: {str(e)}"})
 
-def test_config_simple(config):
-    """Test semplice per compatibilità"""
-    results = []
-    
-    # Test basic per SOCKS5
-    if config.get('SOCKS5_PROXY'):
-        proxies = [p.strip() for p in config['SOCKS5_PROXY'].split(',') if p.strip()]
-        for proxy in proxies[:3]:
-            try:
-                response = requests.get('https://httpbin.org/ip', 
-                                      proxies={'http': proxy, 'https': proxy}, 
-                                      timeout=10)
-                if response.status_code == 200:
-                    results.append(f"✅ SOCKS5 {proxy}: OK")
-                else:
-                    results.append(f"❌ SOCKS5 {proxy}: Status {response.status_code}")
-            except Exception as e:
-                results.append(f"❌ SOCKS5 {proxy}: {str(e)}")
-    
-    # Test basic per HTTP
-    if config.get('HTTP_PROXY'):
-        proxies = [p.strip() for p in config['HTTP_PROXY'].split(',') if p.strip()]
-        for proxy in proxies[:2]:
-            try:
-                response = requests.get('http://httpbin.org/ip', 
-                                      proxies={'http': proxy}, 
-                                      timeout=10)
-                if response.status_code == 200:
-                    results.append(f"✅ HTTP {proxy}: OK")
-                else:
-                    results.append(f"❌ HTTP {proxy}: Status {response.status_code}")
-            except Exception as e:
-                results.append(f"❌ HTTP {proxy}: {str(e)}")
-    
-    app.logger.info("Test configurazioni semplice eseguito")
-    message = "Test completato:\n" + "\n".join(results)
-    return jsonify({"status": "success", "message": message})
-
-def test_config_stream(config):
-    """Test avanzato con streaming per configurazioni proxy"""
-    session_id = str(uuid.uuid4())
-    
-    # Raccogli tutti i proxy dalle configurazioni
-    all_proxies = []
-    
-    if config.get('SOCKS5_PROXY'):
-        socks_proxies = [p.strip() for p in config['SOCKS5_PROXY'].split(',') if p.strip()]
-        all_proxies.extend(socks_proxies)
-    
-    if config.get('HTTP_PROXY'):
-        http_proxies = [p.strip() for p in config['HTTP_PROXY'].split(',') if p.strip()]
-        all_proxies.extend(http_proxies)
-        
-    if config.get('HTTPS_PROXY'):
-        https_proxies = [p.strip() for p in config['HTTPS_PROXY'].split(',') if p.strip()]
-        all_proxies.extend(https_proxies)
-    
-    if not all_proxies:
-        def no_proxies():
-            yield f"data: {json.dumps({'status': 'INFO', 'message': 'Nessun proxy configurato da testare'})}\n\n"
-        return Response(no_proxies(), mimetype='text/event-stream')
-    
-    # Registra il test attivo
-    with active_tests_lock:
-        active_tests[session_id] = {
-            'running': True,
-            'start_time': datetime.now(),
-            'total_proxies': len(all_proxies),
-            'completed_count': 0,
-            'max_workers': min(len(all_proxies), 10)  # Max 10 worker per i test di configurazione
-        }
-    
-    def generate_config_test_results():
-        try:
-            max_workers = min(10, len(all_proxies))  # Limitato a 10 per i test di configurazione
-            
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Invia tutti i proxy per il testing parallelo
-                future_to_proxy = {
-                    executor.submit(test_config_single_proxy, proxy, session_id): proxy 
-                    for proxy in all_proxies
-                }
-                
-                yield f"data: {json.dumps({'status': 'INFO', 'message': f'Avvio test di {len(all_proxies)} proxy con {max_workers} thread...'})}\n\n"
-                
-                for future in as_completed(future_to_proxy):
-                    # Controlla se il test è stato fermato
-                    with active_tests_lock:
-                        if session_id not in active_tests or not active_tests[session_id]['running']:
-                            for f in future_to_proxy:
-                                f.cancel()
-                            break
-                    
-                    result = future.result()
-                    if result and result['status'] != 'STOPPED':
-                        # Aggiorna il contatore
-                        with active_tests_lock:
-                            if session_id in active_tests:
-                                active_tests[session_id]['completed_count'] += 1
-                        
-                        yield f"data: {json.dumps(result)}\n\n"
-                        
-        except Exception as e:
-            yield f"data: {json.dumps({'status': 'ERROR', 'message': f'Errore durante il test: {str(e)}'})}\n\n"
-        finally:
-            # Pulisci sempre il test attivo
-            with active_tests_lock:
-                if session_id in active_tests:
-                    active_tests[session_id]['running'] = False
-                    del active_tests[session_id]
-            
-            yield f"data: {json.dumps({'status': 'COMPLETED', 'message': 'Test delle configurazioni completato'})}\n\n"
-    
-    return Response(generate_config_test_results(), mimetype='text/event-stream')
-
-def test_config_single_proxy(proxy_line, session_id):
-    """Test di un singolo proxy per le configurazioni"""
-    try:
-        # Controlla se il test è stato fermato
-        with active_tests_lock:
-            if session_id not in active_tests or not active_tests[session_id]['running']:
-                return {'status': 'STOPPED', 'details': 'Test fermato', 'is_protocol_error': False}
-
-        # Determina il tipo di proxy
-        if proxy_line.startswith(('socks5h://', 'socks5://')):
-            proxy_type = 'socks5'
-            address_for_curl = proxy_line.split('//', 1)[1] if '//' in proxy_line else proxy_line
-        elif proxy_line.startswith(('http://', 'https://')):
-            proxy_type = 'http'
-            address_for_curl = proxy_line
-        else:
-            # Prova come HTTP per default
-            proxy_type = 'http'
-            address_for_curl = proxy_line
-
-        # Test con httpbin.org
-        if proxy_type == 'socks5':
-            cmd = ['curl', '-k', '--max-time', '10', '--silent', '--show-error', 
-                   '--connect-timeout', '7', '--socks5-hostname', address_for_curl, 
-                   'https://httpbin.org/ip']
-        else:
-            cmd = ['curl', '-k', '--max-time', '10', '--silent', '--show-error', 
-                   '--connect-timeout', '7', '--proxy', address_for_curl, 
-                   'https://httpbin.org/ip']
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        
-        # Controlla di nuovo se fermato
-        with active_tests_lock:
-            if session_id not in active_tests or not active_tests[session_id]['running']:
-                return {'status': 'STOPPED', 'details': 'Test fermato', 'is_protocol_error': False}
-        
-        if result.returncode == 0 and result.stdout.strip():
-            try:
-                # Verifica che la risposta sia JSON valido
-                import json
-                json.loads(result.stdout)
-                return {
-                    'status': 'SUCCESS',
-                    'proxy': proxy_line,
-                    'proxy_to_save': proxy_line,
-                    'protocol_used': proxy_type.upper(),
-                    'details': 'Connessione riuscita'
-                }
-            except:
-                return {
-                    'status': 'FAIL',
-                    'proxy': proxy_line,
-                    'details': 'Risposta non valida',
-                    'is_protocol_error': False
-                }
-        else:
-            return {
-                'status': 'FAIL',
-                'proxy': proxy_line,
-                'details': f'Errore: {result.stderr.strip() if result.stderr else "Timeout o connessione fallita"}',
-                'is_protocol_error': False
-            }
-            
-    except subprocess.TimeoutExpired:
-        return {
-            'status': 'FAIL',
-            'proxy': proxy_line,
-            'details': 'Timeout durante il test',
-            'is_protocol_error': False
-        }
-    except Exception as e:
-        return {
-            'status': 'FAIL',
-            'proxy': proxy_line,
-            'details': f'Errore: {str(e)}',
-            'is_protocol_error': False
-        }
-        
 @app.route('/admin/logs')
 @login_required
 def admin_logs():
