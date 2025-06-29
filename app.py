@@ -42,11 +42,38 @@ def check_auth(username, password):
     return username == ADMIN_USERNAME and password == ADMIN_PASSWORD
 
 def check_ip_allowed():
-    """Verifica se l'IP è nella lista degli IP consentiti"""
-    if not ALLOWED_IPS or ALLOWED_IPS == ['']:
+    """Verifica se l'IP è nella lista degli IP consentiti - Lettura dinamica"""
+    try:
+        # Leggi dinamicamente dalla configurazione salvata
+        config = config_manager.load_config()
+        allowed_ips_str = config.get('ALLOWED_IPS', '')
+        
+        # Se non ci sono IP configurati, consenti tutto
+        if not allowed_ips_str or allowed_ips_str.strip() == '':
+            return True
+        
+        # Parsing della lista IP
+        allowed_ips = [ip.strip() for ip in allowed_ips_str.split(',') if ip.strip()]
+        
+        # Se la lista è vuota dopo il parsing, consenti tutto
+        if not allowed_ips:
+            return True
+        
+        # Ottieni l'IP del client
+        client_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR'))
+        
+        # Verifica se l'IP è nella lista
+        is_allowed = client_ip in allowed_ips
+        
+        if not is_allowed:
+            app.logger.warning(f"IP non autorizzato: {client_ip}. IP consentiti: {allowed_ips}")
+        
+        return is_allowed
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella verifica IP: {e}")
+        # In caso di errore, consenti l'accesso per evitare lockout
         return True
-    client_ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR'))
-    return client_ip in ALLOWED_IPS
 
 def login_required(f):
     """Decorator per richiedere il login"""
