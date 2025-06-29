@@ -776,7 +776,7 @@ LOGIN_TEMPLATE = """
 <head>
     <title>Login - Proxy Dashboard</title>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -879,7 +879,7 @@ DASHBOARD_TEMPLATE = """
 <head>
     <title>Proxy Dashboard - Amministrazione</title>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta http-equiv="refresh" content="10">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1127,7 +1127,7 @@ ADMIN_TEMPLATE = """
 <head>
     <title>Pannello Amministrazione</title>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -1286,7 +1286,7 @@ CONFIG_TEMPLATE = """
 <head>
     <title>Gestione Configurazioni - Proxy</title>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -1439,6 +1439,47 @@ CONFIG_TEMPLATE = """
                 width: 100%;
                 box-sizing: border-box;
                 margin-right: 0;
+            }
+        /* Media query per dispositivi mobili */
+        @media (max-width: 768px) {
+            .row {
+                flex-direction: column;
+                gap: 15px;
+            }
+            
+            .col {
+                flex: none;
+                width: 100%;
+            }
+            
+            .config-section {
+                padding: 15px;
+                margin-bottom: 25px;
+            }
+            
+            .form-group input, 
+            .form-group textarea, 
+            .form-group select {
+                font-size: 16px; /* Previene lo zoom automatico su iOS */
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .container {
+                margin: 10px;
+                padding: 15px;
+            }
+            
+            .navbar {
+                padding: 0.5rem 1rem;
+                flex-direction: column;
+                gap: 10px;
+            }
+            
+            .navbar .nav-links {
+                flex-direction: column;
+                gap: 5px;
+                width: 100%;
             }
         }
     </style>
@@ -1699,8 +1740,15 @@ LOG_TEMPLATE = """
 <head>
     <title>Sistema Log - Proxy</title>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
+        *, *:before, *:after {
+            -webkit-box-sizing: border-box;
+            -moz-box-sizing: border-box;
+            box-sizing: border-box;
+            max-width: 100%;
+        }
+
         body {
             font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
             background: #1e1e1e;
@@ -2064,7 +2112,7 @@ INDEX_TEMPLATE = """
 <head>
     <title>Proxy Server - Benvenuto</title>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
