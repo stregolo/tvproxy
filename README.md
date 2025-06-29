@@ -1,45 +1,45 @@
-# tvproxy ðŸ“º
+# 📺 tvproxy
 
 Un server proxy leggero e dockerizzato basato su **Flask** e **Requests**, progettato per superare restrizioni e accedere a flussi M3U/M3U8 senza interruzioni.
 
-- ðŸ“¥ **Scarica e modifica** flussi `.m3u` e `.m3u8` al volo.
-- ðŸ” **Proxa i segmenti** `.ts` mantenendo header personalizzati.
-- ðŸš« **Supera restrizioni** comuni come `Referer`, `User-Agent`, ecc.
-- ðŸ³ **Facilmente dockerizzabile** su qualsiasi macchina, server o piattaforma cloud.
-- ðŸŽ›ï¸ **Dashboard web completa** per amministrazione e monitoraggio in tempo reale.
+- 📥 **Scarica e modifica** flussi `.m3u` e `.m3u8` al volo.  
+- 🔁 **Proxa i segmenti** `.ts` mantenendo header personalizzati.  
+- 🚫 **Supera restrizioni** comuni come `Referer`, `User-Agent`, ecc.  
+- 🐳 **Facilmente dockerizzabile** su qualsiasi macchina, server o piattaforma cloud.  
+- 🧰 **Dashboard web completa** per amministrazione e monitoraggio in tempo reale.
 
 ---
 
-## ðŸ“š Indice
+## 📚 Indice
 
-- Configurazione Autenticazione
-- Configurazione per Server con 1 GB di RAM
-- Piattaforme di Deploy
-  - Render
-  - HuggingFace
-- Setup Locale
-  - Docker
-  - Termux (Android)
-  - Python
-- Dashboard di Amministrazione
-- Utilizzo del Proxy
-- Configurazione Proxy
+- Configurazione Autenticazione  
+- Configurazione per Server con 1 GB di RAM  
+- Piattaforme di Deploy  
+  - Render  
+  - HuggingFace  
+- Setup Locale  
+  - Docker  
+  - Termux (Android)  
+  - Python  
+- Dashboard di Amministrazione  
+- Utilizzo del Proxy  
+- Configurazione Proxy  
 - Gestione Docker
 
 ---
 
-## ðŸ” Configurazione Autenticazione (OBBLIGATORIA)
+## 🔐 Configurazione Autenticazione (OBBLIGATORIA)
 
 ### Variabili d'Ambiente di Sicurezza
 
 | Variabile        | Descrizione                                                        | Obbligatoria | Default       |
 |------------------|--------------------------------------------------------------------|--------------|---------------|
-| `ADMIN_PASSWORD` | Password per accedere alla dashboard di amministrazione           | **SÃŒ**       | `password123` |
+| `ADMIN_PASSWORD` | Password per accedere alla dashboard di amministrazione           | **SÌ**       | `password123` |
 | `ADMIN_USERNAME` | Username per l'accesso (configurabile dalla web UI)               | No           | `admin`       |
 | `SECRET_KEY`     | Chiave segreta per le sessioni Flask (configurabile dalla web UI) | No           | Auto-generata |
 | `ALLOWED_IPS`    | Lista di IP autorizzati separati da virgola                       | No           | Tutti gli IP  |
 
-> âš ï¸  **Minimo necessario**: impostare `ADMIN_PASSWORD`.
+> ⚠️  **Minimo necessario**: impostare `ADMIN_PASSWORD`.
 
 ```bash
 # Esempio Docker
@@ -51,18 +51,15 @@ echo "ADMIN_PASSWORD=tua_password_sicura" > .env
 
 ---
 
-## ðŸ’¾ Configurazione per Server con RAM Limitata (1 GB)
+## 💾 Configurazione per Server con RAM Limitata (1 GB)
 
-Se il tuo server dispone di **solo 1 GB di RAM**, usa la seguente configurazione ottimizzata.
-
-### ðŸ“‹ `.env` ottimizzato
+### 📋 `.env` ottimizzato
 
 ```dotenv
 # OBBLIGATORIO
 ADMIN_PASSWORD="tua_password_sicura"
 
 # Ottimizzazioni memoria 
-# Settabili anche dalla pagina web 
 REQUEST_TIMEOUT=15
 KEEP_ALIVE_TIMEOUT=120
 MAX_KEEP_ALIVE_REQUESTS=100
@@ -70,7 +67,6 @@ POOL_CONNECTIONS=5
 POOL_MAXSIZE=10
 
 # Cache ridotta
-# Settabili anche dalla pagina web 
 CACHE_TTL_M3U8=3
 CACHE_TTL_TS=60
 CACHE_TTL_KEY=60
@@ -79,34 +75,32 @@ CACHE_MAXSIZE_TS=200
 CACHE_MAXSIZE_KEY=50
 ```
 
-### ðŸ”§ Gunicorn light
-
 ---
 
-## â˜ï¸ Piattaforme di Deploy
+## ☁️ Piattaforme di Deploy
 
-### â–¶ï¸ Render
+### ▶️ Render
 
-1. Projects â†’ **New â†’ Web Service** â†’ *Public Git Repo*.
-2. Repository: `https://github.com/nzo66/tvproxy` â†’ **Connect**.
-3. Scegli un nome, **Instance Type** `Free` (o superiore).
-4. Aggiungi la variabile `ADMIN_PASSWORD` nell'area **Environment**.
-5. (Opzionale) Aggiungi `SOCKS5_PROXY`, `HTTP_PROXY`, `HTTPS_PROXY`.
+1. Projects → **New → Web Service** → *Public Git Repo*.  
+2. Repository: `https://github.com/nzo66/tvproxy` → **Connect**.  
+3. Scegli un nome, **Instance Type** `Free` (o superiore).  
+4. Aggiungi la variabile `ADMIN_PASSWORD` in **Environment**.  
+5. (Opzionale) Aggiungi `SOCKS5_PROXY`, `HTTP_PROXY`, `HTTPS_PROXY`.  
 6. **Create Web Service**.
 
-### ðŸ¤— HuggingFace Spaces
+### 🧠 HuggingFace Spaces
 
-1. Crea un nuovo **Space** (SDK: *Docker*).
-2. Carica `DockerfileHF` come `Dockerfile`.
-3. Vai in **Settings â†’ Secrets** e aggiungi `ADMIN_PASSWORD`.
-4. (Opzionale) Aggiungi `HTTP_PROXY` + `HTTPS_PROXY` (SOCKS5 non supportato su HF).
+1. Crea un nuovo **Space** (SDK: *Docker*).  
+2. Carica `DockerfileHF` come `Dockerfile`.  
+3. Vai in **Settings → Secrets** e aggiungi `ADMIN_PASSWORD`.  
+4. (Opzionale) Aggiungi `HTTP_PROXY` + `HTTPS_PROXY` (SOCKS5 non supportato).  
 5. Dopo ogni modifica alle variabili fai **Factory Rebuild**.
 
 ---
 
-## ðŸ’» Setup Locale
+## 💻 Setup Locale
 
-### ðŸ³ Docker
+### 🐳 Docker
 
 ```bash
 git clone https://github.com/nzo66/tvproxy.git
@@ -116,7 +110,7 @@ docker build -t tvproxy .
 docker run -d -p 7860:7860 -e ADMIN_PASSWORD="tua_password_sicura" --name tvproxy tvproxy
 ```
 
-### ðŸ§ Termux (Android)
+### 📱 Termux (Android)
 
 ```bash
 pkg update && pkg upgrade
@@ -131,7 +125,7 @@ echo "ADMIN_PASSWORD=tua_password_sicura" > .env
 gunicorn app:app -w 4 --worker-class gevent -b 0.0.0.0:7860
 ```
 
-### ðŸ Python
+### 🐍 Python
 
 ```bash
 git clone https://github.com/nzo66/tvproxy.git
@@ -147,30 +141,30 @@ gunicorn app:app -w 4 --worker-class gevent --worker-connections 100 \
 
 ---
 
-## ðŸŽ›ï¸ Dashboard di Amministrazione
+## 🧰 Dashboard di Amministrazione
 
-- **ðŸ  Home**: `http://<server-ip>:7860/`
-- **ðŸ” Login**: `http://<server-ip>:7860/login`
-- **ðŸ“Š Dashboard**: `http://<server-ip>:7860/dashboard`
-- **âš™ï¸ Config**: `http://<server-ip>:7860/admin/config`
-- **ðŸ“ Log**: `http://<server-ip>:7860/admin/logs`
-- **ðŸ“ˆ API Stats**: `http://<server-ip>:7860/stats`
+- 🏠 Home: `http://<server-ip>:7860/`  
+- 🔐 Login: `http://<server-ip>:7860/login`  
+- 📊 Dashboard: `http://<server-ip>:7860/dashboard`  
+- ⚙️ Config: `http://<server-ip>:7860/admin/config`  
+- 📜 Log: `http://<server-ip>:7860/admin/logs`  
+- 📈 API Stats: `http://<server-ip>:7860/stats`
 
-Tutte le impostazioni (timeout, cache, proxy, sicurezza) possono essere modificate dalla web-UI **senza riavviare** il server.
+Modifiche **senza riavvio** dal pannello web!
 
 ---
 
-## ðŸ› ï¸ Utilizzo del Proxy
+## 📡 Utilizzo del Proxy
 
 Sostituisci `<server-ip>` con l'indirizzo del tuo server.
 
-### ðŸ“¡ Liste M3U
+### 💡 Liste M3U
 
 ```
 http://<server-ip>:7860/proxy?url=<URL_LISTA_M3U>
 ```
 
-### ðŸ“º Flussi M3U8 con headers
+### 📺 Flussi M3U8 con headers
 
 ```
 http://<server-ip>:7860/proxy/m3u?url=<URL_FLUSSO_M3U8>&h_<HEADER>=<VALORE>
@@ -180,13 +174,13 @@ Esempio:
 .../proxy/m3u?url=https://example.com/stream.m3u8&h_user-agent=VLC/3.0.20&h_referer=https://example.com/
 ```
 
-### ðŸ” Risoluzione DaddyLive 2025
+### 🔍 Risoluzione DaddyLive 2025
 
 ```
 http://<server-ip>:7860/proxy/resolve?url=<URL_DADDYLIVE>
 ```
 
-### ðŸ”‘ Chiavi AES-128
+### 🔑 Chiavi AES-128
 
 ```
 http://<server-ip>:7860/proxy/key?url=<URL_CHIAVE>&h_<HEADER>=<VALORE>
@@ -194,11 +188,11 @@ http://<server-ip>:7860/proxy/key?url=<URL_CHIAVE>&h_<HEADER>=<VALORE>
 
 ---
 
-## ðŸ”’ Configurazione Proxy (Opzionale)
+## 🔧 Configurazione Proxy (Opzionale)
 
 | Variabile      | Descrizione                                              | Esempio                                   |
 |----------------|----------------------------------------------------------|-------------------------------------------|
-| `SOCKS5_PROXY` | Uno o piÃ¹ proxy SOCKS5, separati da virgola              | `socks5://user:pass@host:port,...`        |
+| `SOCKS5_PROXY` | Uno o più proxy SOCKS5, separati da virgola              | `socks5://user:pass@host:port,...`        |
 | `HTTP_PROXY`   | Proxy HTTP (usare in coppia con `HTTPS_PROXY`)           | `http://user:pass@host:port,...`          |
 | `HTTPS_PROXY`  | Proxy HTTPS (di solito uguale a `HTTP_PROXY`)            | `http://user:pass@host:port,...`          |
 
@@ -213,7 +207,7 @@ ADMIN_PASSWORD="tua_password_sicura"
 
 ---
 
-## ðŸ³ Gestione Docker Rapida
+## 🐳 Gestione Docker Rapida
 
 ```bash
 docker logs -f tvproxy      # log in tempo reale
@@ -224,7 +218,7 @@ docker rm -f tvproxy        # rimuovi il container
 
 ---
 
-## âœ… Caratteristiche Principali
+## ✅ Caratteristiche Principali
 
 - Supporto automatico `.m3u` / `.m3u8`
 - Headers personalizzati (`Authorization`, `Referer`, ...)
@@ -239,6 +233,6 @@ docker rm -f tvproxy        # rimuovi il container
 
 ---
 
-## ðŸŽ‰ Enjoy the Stream!
+## 🎉 Enjoy the Stream!
 
 > Goditi i tuoi flussi preferiti ovunque, senza restrizioni, con controllo completo e monitoraggio avanzato.
