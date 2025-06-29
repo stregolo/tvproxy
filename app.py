@@ -1,4 +1,3 @@
-
 from flask import Flask, request, Response, jsonify, render_template_string, session, redirect, url_for
 import requests
 from urllib.parse import urlparse, urljoin, quote, unquote
@@ -1497,9 +1496,29 @@ CONFIG_TEMPLATE = """
                             <small>Timeout per connessioni persistenti</small>
                         </div>
                     </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="max_keep_alive_requests">Max Keep-Alive Requests:</label>
+                            <input type="number" id="max_keep_alive_requests" name="MAX_KEEP_ALIVE_REQUESTS" value="{{ config.MAX_KEEP_ALIVE_REQUESTS }}" min="1" max="10000">
+                            <small>Numero massimo di richieste per connessione persistente (default: 1000)</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="pool_connections">Pool Connections:</label>
+                            <input type="number" id="pool_connections" name="POOL_CONNECTIONS" value="{{ config.POOL_CONNECTIONS }}" min="1" max="1000">
+                            <small>Numero di pool di connessioni per host (default: 20)</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="pool_maxsize">Pool Max Size:</label>
+                            <input type="number" id="pool_maxsize" name="POOL_MAXSIZE" value="{{ config.POOL_MAXSIZE }}" min="1" max="1000">
+                            <small>Numero massimo di connessioni contemporanee per pool (default: 50)</small>
+                        </div>
+                    </div>
                 </div>
             </div>
-
             <!-- Sezione Cache -->
             <div class="config-section">
                 <h3>💾 Configurazioni Cache</h3>
@@ -1587,7 +1606,7 @@ CONFIG_TEMPLATE = """
             for (let [key, value] of formData.entries()) {
                 if (key === 'VERIFY_SSL') {
                     config[key] = value === 'true';
-                } else if (['REQUEST_TIMEOUT', 'KEEP_ALIVE_TIMEOUT', 'CACHE_TTL_M3U8', 'CACHE_TTL_TS', 'CACHE_MAXSIZE_M3U8', 'CACHE_MAXSIZE_TS'].includes(key)) {
+                } else if (['REQUEST_TIMEOUT', 'KEEP_ALIVE_TIMEOUT', 'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'CACHE_TTL_M3U8', 'CACHE_TTL_TS', 'CACHE_MAXSIZE_M3U8', 'CACHE_MAXSIZE_TS'].includes(key)) {
                     config[key] = parseInt(value);
                 } else {
                     config[key] = value;
