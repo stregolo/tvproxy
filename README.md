@@ -1,29 +1,29 @@
-# 📺 tvproxy
+# tvproxy 📺
 
 Un server proxy leggero e dockerizzato basato su **Flask** e **Requests**, progettato per superare restrizioni e accedere a flussi M3U/M3U8 senza interruzioni.
 
-- 📥 **Scarica e modifica** flussi `.m3u` e `.m3u8` al volo.  
-- 🔁 **Proxa i segmenti** `.ts` mantenendo header personalizzati.  
-- 🚫 **Supera restrizioni** comuni come `Referer`, `User-Agent`, ecc.  
-- 🐳 **Facilmente dockerizzabile** su qualsiasi macchina, server o piattaforma cloud.  
-- 🧰 **Dashboard web completa** per amministrazione e monitoraggio in tempo reale.
+- 📥 **Scarica e modifica** flussi `.m3u` e `.m3u8` al volo.
+- 🔁 **Proxa i segmenti** `.ts` mantenendo header personalizzati.
+- 🚫 **Supera restrizioni** comuni come `Referer`, `User-Agent`, ecc.
+- 🐳 **Facilmente dockerizzabile** su qualsiasi macchina, server o piattaforma cloud.
+- 🧪 **Dashboard web completa** per amministrazione e monitoraggio in tempo reale.
 
 ---
 
 ## 📚 Indice
 
-- Configurazione Autenticazione  
-- Configurazione per Server con 1 GB di RAM  
-- Piattaforme di Deploy  
-  - Render  
-  - HuggingFace  
-- Setup Locale  
-  - Docker  
-  - Termux (Android)  
-  - Python  
-- Dashboard di Amministrazione  
-- Utilizzo del Proxy  
-- Configurazione Proxy  
+- Configurazione Autenticazione
+- Configurazione per Server con 1 GB di RAM
+- Piattaforme di Deploy
+  - Render
+  - HuggingFace
+- Setup Locale
+  - Docker
+  - Termux (Android)
+  - Python
+- Dashboard di Amministrazione
+- Utilizzo del Proxy
+- Configurazione Proxy
 - Gestione Docker
 
 ---
@@ -32,34 +32,51 @@ Un server proxy leggero e dockerizzato basato su **Flask** e **Requests**, proge
 
 ### Variabili d'Ambiente di Sicurezza
 
-| Variabile        | Descrizione                                                        | Obbligatoria | Default       |
-|------------------|--------------------------------------------------------------------|--------------|---------------|
-| `ADMIN_PASSWORD` | Password per accedere alla dashboard di amministrazione           | **SÌ**       | `password123` |
-| `ADMIN_USERNAME` | Username per l'accesso (configurabile dalla web UI)               | No           | `admin`       |
-| `SECRET_KEY`     | Chiave segreta per le sessioni Flask (configurabile dalla web UI) | No           | Auto-generata |
-| `ALLOWED_IPS`    | Lista di IP autorizzati separati da virgola                       | No           | Tutti gli IP  |
+| Variabile        | Descrizione                                                         | Obbligatoria | Default       |
+|------------------|---------------------------------------------------------------------|--------------|---------------|
+| `ADMIN_PASSWORD` | Password per accedere alla dashboard di amministrazione            | **SÌ**       | `password123` |
+| `SECRET_KEY`     | Chiave segreta per le sessioni Flask (deve essere univoca e sicura) | **SÌ**       | Nessuna       |
+| `ADMIN_USERNAME` | Username per l'accesso (configurabile dalla web UI)                | No           | `admin`       |
+| `ALLOWED_IPS`    | Lista di IP autorizzati separati da virgola                        | No           | Tutti gli IP  |
 
-> ⚠️  **Minimo necessario**: impostare `ADMIN_PASSWORD`.
+> ⚠️  **Obbligatorio**: impostare `ADMIN_PASSWORD` **e** `SECRET_KEY`.  
+> 🔑 Usa un valore univoco per `SECRET_KEY`, ad esempio generato con:  
+> `openssl rand -hex 32`  
+> oppure:  
+> `python -c 'import secrets; print(secrets.token_hex(32))'`
+
+---
+
+### 🐳 Esempio Docker
 
 ```bash
-# Esempio Docker
-docker run -d -p 7860:7860 -e ADMIN_PASSWORD="tua_password_sicura" --name tvproxy tvproxy
+docker run -d -p 7860:7860 \
+  -e ADMIN_PASSWORD="tua_password_sicura" \
+  -e SECRET_KEY="1f4d8e9a6c57bd2eec914d93cfb7a3efb9ae67f2643125c89cc3c50e75c4d4c3" \
+  --name tvproxy tvproxy
+```
 
-# Esempio .env (Termux/Python)
-echo "ADMIN_PASSWORD=tua_password_sicura" > .env
+---
+
+### 📦 Esempio `.env` (Termux / Python)
+
+```dotenv
+ADMIN_PASSWORD="tua_password_sicura"
+SECRET_KEY="1f4d8e9a6c57bd2eec914d93cfb7a3efb9ae67f2643125c89cc3c50e75c4d4c3"
 ```
 
 ---
 
 ## 💾 Configurazione per Server con RAM Limitata (1 GB)
 
-### 📋 `.env` ottimizzato
+### 📃 `.env` ottimizzato
 
 ```dotenv
 # OBBLIGATORIO
 ADMIN_PASSWORD="tua_password_sicura"
+SECRET_KEY="chiave_segreta_generata"
 
-# Ottimizzazioni memoria 
+# Ottimizzazioni memoria
 REQUEST_TIMEOUT=15
 KEEP_ALIVE_TIMEOUT=120
 MAX_KEEP_ALIVE_REQUESTS=100
@@ -81,19 +98,19 @@ CACHE_MAXSIZE_KEY=50
 
 ### ▶️ Render
 
-1. Projects → **New → Web Service** → *Public Git Repo*.  
-2. Repository: `https://github.com/nzo66/tvproxy` → **Connect**.  
-3. Scegli un nome, **Instance Type** `Free` (o superiore).  
-4. Aggiungi la variabile `ADMIN_PASSWORD` in **Environment**.  
-5. (Opzionale) Aggiungi `SOCKS5_PROXY`, `HTTP_PROXY`, `HTTPS_PROXY`.  
+1. Projects → **New → Web Service** → *Public Git Repo*.
+2. Repository: `https://github.com/nzo66/tvproxy` → **Connect**.
+3. Scegli un nome, **Instance Type** `Free` (o superiore).
+4. Aggiungi le variabili `ADMIN_PASSWORD` e `SECRET_KEY` nell'area **Environment**.
+5. (Opzionale) Aggiungi `SOCKS5_PROXY`, `HTTP_PROXY`, `HTTPS_PROXY`.
 6. **Create Web Service**.
 
-### 🧠 HuggingFace Spaces
+### 🤖 HuggingFace Spaces
 
-1. Crea un nuovo **Space** (SDK: *Docker*).  
-2. Carica `DockerfileHF` come `Dockerfile`.  
-3. Vai in **Settings → Secrets** e aggiungi `ADMIN_PASSWORD`.  
-4. (Opzionale) Aggiungi `HTTP_PROXY` + `HTTPS_PROXY` (SOCKS5 non supportato).  
+1. Crea un nuovo **Space** (SDK: *Docker*).
+2. Carica `DockerfileHF` come `Dockerfile`.
+3. Vai in **Settings → Secrets** e aggiungi `ADMIN_PASSWORD` e `SECRET_KEY`.
+4. (Opzionale) Aggiungi `HTTP_PROXY` + `HTTPS_PROXY` (SOCKS5 non supportato su HF).
 5. Dopo ogni modifica alle variabili fai **Factory Rebuild**.
 
 ---
@@ -107,10 +124,13 @@ git clone https://github.com/nzo66/tvproxy.git
 cd tvproxy
 docker build -t tvproxy .
 
-docker run -d -p 7860:7860 -e ADMIN_PASSWORD="tua_password_sicura" --name tvproxy tvproxy
+docker run -d -p 7860:7860 \
+  -e ADMIN_PASSWORD="tua_password_sicura" \
+  -e SECRET_KEY="chiave_segreta_generata" \
+  --name tvproxy tvproxy
 ```
 
-### 📱 Termux (Android)
+### 🐧 Termux (Android)
 
 ```bash
 pkg update && pkg upgrade
@@ -121,6 +141,7 @@ cd tvproxy
 pip install -r requirements.txt
 
 echo "ADMIN_PASSWORD=tua_password_sicura" > .env
+echo "SECRET_KEY=chiave_segreta_generata" >> .env
 
 gunicorn app:app -w 4 --worker-class gevent -b 0.0.0.0:7860
 ```
@@ -133,6 +154,7 @@ cd tvproxy
 pip install -r requirements.txt
 
 echo "ADMIN_PASSWORD=tua_password_sicura" > .env
+echo "SECRET_KEY=chiave_segreta_generata" >> .env
 
 gunicorn app:app -w 4 --worker-class gevent --worker-connections 100 \
         -b 0.0.0.0:7860 --timeout 120 --keep-alive 5 \
@@ -141,20 +163,18 @@ gunicorn app:app -w 4 --worker-class gevent --worker-connections 100 \
 
 ---
 
-## 🧰 Dashboard di Amministrazione
+## 🎛️ Dashboard di Amministrazione
 
-- 🏠 Home: `http://<server-ip>:7860/`  
-- 🔐 Login: `http://<server-ip>:7860/login`  
-- 📊 Dashboard: `http://<server-ip>:7860/dashboard`  
-- ⚙️ Config: `http://<server-ip>:7860/admin/config`  
-- 📜 Log: `http://<server-ip>:7860/admin/logs`  
-- 📈 API Stats: `http://<server-ip>:7860/stats`
-
-Modifiche **senza riavvio** dal pannello web!
+- **🏠 Home**: `http://<server-ip>:7860/`
+- **🔐 Login**: `http://<server-ip>:7860/login`
+- **📊 Dashboard**: `http://<server-ip>:7860/dashboard`
+- **⚙️ Config**: `http://<server-ip>:7860/admin/config`
+- **📝 Log**: `http://<server-ip>:7860/admin/logs`
+- **📈 API Stats**: `http://<server-ip>:7860/stats`
 
 ---
 
-## 📡 Utilizzo del Proxy
+## 🧰 Utilizzo del Proxy
 
 Sostituisci `<server-ip>` con l'indirizzo del tuo server.
 
@@ -169,6 +189,7 @@ http://<server-ip>:7860/proxy?url=<URL_LISTA_M3U>
 ```
 http://<server-ip>:7860/proxy/m3u?url=<URL_FLUSSO_M3U8>&h_<HEADER>=<VALORE>
 ```
+
 Esempio:
 ```
 .../proxy/m3u?url=https://example.com/stream.m3u8&h_user-agent=VLC/3.0.20&h_referer=https://example.com/
@@ -188,7 +209,7 @@ http://<server-ip>:7860/proxy/key?url=<URL_CHIAVE>&h_<HEADER>=<VALORE>
 
 ---
 
-## 🔧 Configurazione Proxy (Opzionale)
+## 🔁 Configurazione Proxy (Opzionale)
 
 | Variabile      | Descrizione                                              | Esempio                                   |
 |----------------|----------------------------------------------------------|-------------------------------------------|
@@ -200,6 +221,7 @@ Esempio `.env`:
 
 ```dotenv
 ADMIN_PASSWORD="tua_password_sicura"
+SECRET_KEY="chiave_segreta_generata"
 # SOCKS5_PROXY="socks5://user:pass@host1:1080"
 # HTTP_PROXY="http://user:pass@host:8080"
 # HTTPS_PROXY="http://user:pass@host:8080"
