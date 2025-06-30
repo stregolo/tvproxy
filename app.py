@@ -320,9 +320,6 @@ def get_system_stats():
     system_stats['network_recv'] = net_io.bytes_recv / (1024**2)  # MB
     
     return system_stats
-    
-stats_thread = threading.Thread(target=broadcast_stats, daemon=True)
-stats_thread.start()
 
 def monitor_bandwidth():
     """Monitora la banda di rete in background"""
@@ -386,6 +383,9 @@ bandwidth_thread.start()
 
 connection_thread = Thread(target=connection_manager, daemon=True)
 connection_thread.start()
+
+stats_thread = threading.Thread(target=broadcast_stats, daemon=True)
+stats_thread.start()
 
 # --- Configurazione Proxy ---
 PROXY_LIST = []
