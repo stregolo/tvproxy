@@ -384,9 +384,6 @@ bandwidth_thread.start()
 connection_thread = Thread(target=connection_manager, daemon=True)
 connection_thread.start()
 
-stats_thread = threading.Thread(target=broadcast_stats, daemon=True)
-stats_thread.start()
-
 # --- Configurazione Proxy ---
 PROXY_LIST = []
 
@@ -832,6 +829,9 @@ def resolve_m3u8_link(url, headers=None):
         app.logger.error(f"Errore durante la risoluzione: {e}")
         app.logger.error(f"Traceback: {traceback.format_exc()}")
         return {"resolved_url": clean_url, "headers": current_headers}
+
+stats_thread = threading.Thread(target=broadcast_stats, daemon=True)
+stats_thread.start()
 
 # Cache per manifest MPD
 MPD_CACHE = TTLCache(maxsize=100, ttl=30)
