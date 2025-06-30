@@ -20,11 +20,14 @@ import hashlib
 from functools import wraps
 import logging
 from logging.handlers import RotatingFileHandler
-from datetime import datetime
 import subprocess
 import concurrent.futures
 from flask_socketio import SocketIO, emit
 import threading
+import xml.etree.ElementTree as ET
+from mpegdash.parser import MPEGDASHParser
+from datetime import datetime, timedelta
+import math
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
@@ -831,6 +834,378 @@ def resolve_m3u8_link(url, headers=None):
         app.logger.error(f"Traceback: {traceback.format_exc()}")
         return {"resolved_url": clean_url, "headers": current_headers}
 
+# Cache per manifest MPD
+MPD_CACHE = TTLCache(maxsize=100, ttl=30)
+
+def parse_duration(duration_str):
+    """Converte durata ISO 8601 in secondi"""
+    if not duration_str or not duration_str.startswith('PT'):
+        return 0
+    
+    # Rimuovi PT e converti
+    duration_str = duration_str[2:]
+    
+    # Pattern per ore, minuti, secondi
+    pattern = r'(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?'
+    match = re.match(pattern, duration_str)
+    
+    if not match:
+        return 0
+    
+    hours = int(match.group(1) or 0)
+    minutes = int(match.group(2) or 0)
+    seconds = float(match.group(3) or 0)
+    
+    return hours * 3600 + minutes * 60 + seconds
+
+def get_segment_timeline(adaptation_set, representation):
+    """Estrae la timeline dei segmenti da un representation"""
+    segments = []
+    
+    # Trova SegmentTemplate o SegmentList
+    segment_template = representation.find('.//SegmentTemplate')
+    if segment_template is None:
+        segment_template = adaptation_set.find('.//SegmentTemplate')
+    
+    if segment_template is not None:
+        # Gestione SegmentTemplate con SegmentTimeline
+        timeline = segment_template.find('.//SegmentTimeline')
+        if timeline is not None:
+            timescale = int(segment_template.get('timescale', 1))
+            media_template = segment_template.get('media', '')
+            
+            current_time = 0
+            segment_number = int(segment_template.get('startNumber', 1))
+            
+            for s_elem in timeline.findall('.//S'):
+                t = s_elem.get('t')
+                if t is not None:
+                    current_time = int(t)
+                
+                d = int(s_elem.get('d'))
+                r = int(s_elem.get('r', 0))
+                
+                # Genera segmenti per questo elemento S
+                for i in range(r + 1):
+                    segment_url = media_template.replace('$Number$', str(segment_number))
+                    segment_url = segment_url.replace('$Time$', str(current_time))
+                    
+                    segments.append({
+                        'url': segment_url,
+                        'duration': d / timescale,
+                        'number': segment_number,
+                        'time': current_time
+                    })
+                    
+                    current_time += d
+                    segment_number += 1
+        else:
+            # SegmentTemplate senza timeline - usa duration
+            duration = int(segment_template.get('duration', 0))
+            timescale = int(segment_template.get('timescale', 1))
+            start_number = int(segment_template.get('startNumber', 1))
+            media_template = segment_template.get('media', '')
+            
+            # Calcola numero di segmenti basato sulla durata del periodo
+            period_duration = 3600  # Default 1 ora se non specificato
+            segment_duration = duration / timescale
+            num_segments = int(period_duration / segment_duration)
+            
+            for i in range(num_segments):
+                segment_number = start_number + i
+                segment_url = media_template.replace('$Number$', str(segment_number))
+                
+                segments.append({
+                    'url': segment_url,
+                    'duration': segment_duration,
+                    'number': segment_number,
+                    'time': i * duration
+                })
+    
+    return segments
+
+@app.route('/proxy/mpd')
+def proxy_mpd():
+    """Proxy per file MPD MPEG-DASH con supporto proxy e caching"""
+    mpd_url = request.args.get('url', '').strip()
+    if not mpd_url:
+        return "Errore: Parametro 'url' mancante", 400
+
+    # Controlla cache
+    cache_key = f"mpd_{mpd_url}"
+    if cache_key in MPD_CACHE:
+        app.logger.info(f"Cache HIT per MPD: {mpd_url}")
+        return Response(MPD_CACHE[cache_key], content_type="application/dash+xml")
+
+    # Headers personalizzati
+    headers = {
+        unquote(key[2:]).replace("_", "-"): unquote(value).strip()
+        for key, value in request.args.items()
+        if key.lower().startswith("h_")
+    }
+
+    try:
+        proxy_config = get_proxy_for_url(mpd_url)
+        proxy_key = proxy_config['http'] if proxy_config else None
+        
+        response = make_persistent_request(
+            mpd_url,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+            proxy_url=proxy_key,
+            allow_redirects=True
+        )
+        response.raise_for_status()
+        
+        mpd_content = response.text
+        final_url = response.url
+        
+        # Modifica URLs nel manifest MPD
+        modified_mpd = modify_mpd_urls(mpd_content, final_url, headers)
+        
+        # Cache il risultato
+        MPD_CACHE[cache_key] = modified_mpd
+        
+        return Response(modified_mpd, content_type="application/dash+xml")
+        
+    except requests.RequestException as e:
+        app.logger.error(f"Errore durante il download del file MPD: {str(e)}")
+        return f"Errore durante il download del file MPD: {str(e)}", 500
+
+def modify_mpd_urls(mpd_content, base_url, headers):
+    """Modifica gli URL nel manifest MPD per passare attraverso il proxy"""
+    try:
+        # Parse XML
+        root = ET.fromstring(mpd_content)
+        
+        # Namespace DASH
+        ns = {'dash': 'urn:mpeg:dash:schema:mpd:2011'}
+        
+        # Ottieni base URL
+        parsed_base = urlparse(base_url)
+        base_path = f"{parsed_base.scheme}://{parsed_base.netloc}{parsed_base.path.rsplit('/', 1)[0]}/"
+        
+        # Headers query string
+        headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in headers.items()])
+        
+        # Modifica BaseURL elements
+        for base_url_elem in root.findall('.//dash:BaseURL', ns):
+            if base_url_elem.text:
+                original_url = urljoin(base_path, base_url_elem.text)
+                proxied_url = f"/proxy/dash-segment?url={quote(original_url)}&{headers_query}"
+                base_url_elem.text = proxied_url
+        
+        # Modifica SegmentTemplate media URLs
+        for segment_template in root.findall('.//dash:SegmentTemplate', ns):
+            media = segment_template.get('media')
+            if media:
+                # Mantieni il template ma aggiungi base proxy
+                segment_template.set('media', f"/proxy/dash-segment?template={quote(media)}&base={quote(base_path)}&{headers_query}")
+            
+            initialization = segment_template.get('initialization')
+            if initialization:
+                init_url = urljoin(base_path, initialization)
+                segment_template.set('initialization', f"/proxy/dash-segment?url={quote(init_url)}&{headers_query}")
+        
+        # Modifica SegmentList
+        for segment_list in root.findall('.//dash:SegmentList', ns):
+            for segment_url in segment_list.findall('.//dash:SegmentURL', ns):
+                media = segment_url.get('media')
+                if media:
+                    original_url = urljoin(base_path, media)
+                    proxied_url = f"/proxy/dash-segment?url={quote(original_url)}&{headers_query}"
+                    segment_url.set('media', proxied_url)
+        
+        # Converti back to string
+        return ET.tostring(root, encoding='unicode', method='xml')
+        
+    except ET.ParseError as e:
+        app.logger.error(f"Errore nel parsing XML MPD: {e}")
+        return mpd_content  # Restituisci originale se parsing fallisce
+
+@app.route('/proxy/dash-segment')
+def proxy_dash_segment():
+    """Proxy per segmenti DASH con supporto template e caching"""
+    segment_url = request.args.get('url', '').strip()
+    template = request.args.get('template', '').strip()
+    base = request.args.get('base', '').strip()
+    
+    # Se è un template, costruisci l'URL
+    if template and base:
+        # Estrai parametri del template dalla query string
+        number = request.args.get('Number', '1')
+        time = request.args.get('Time', '0')
+        bandwidth = request.args.get('Bandwidth', '1000000')
+        representation_id = request.args.get('RepresentationID', 'video')
+        
+        # Sostituisci placeholder nel template
+        segment_url = template.replace('$Number$', number)
+        segment_url = segment_url.replace('$Time$', time)
+        segment_url = segment_url.replace('$Bandwidth$', bandwidth)
+        segment_url = segment_url.replace('$RepresentationID$', representation_id)
+        segment_url = urljoin(base, segment_url)
+    
+    if not segment_url:
+        return "Errore: URL segmento mancante", 400
+
+    # Controlla cache per segmenti
+    cache_key = f"dash_segment_{segment_url}"
+    if cache_key in TS_CACHE:  # Riusa cache TS per segmenti DASH
+        app.logger.info(f"Cache HIT per segmento DASH: {segment_url}")
+        return Response(TS_CACHE[cache_key], content_type="video/mp4")
+
+    # Headers personalizzati
+    headers = {
+        unquote(key[2:]).replace("_", "-"): unquote(value).strip()
+        for key, value in request.args.items()
+        if key.lower().startswith("h_")
+    }
+
+    try:
+        proxy_config = get_proxy_for_url(segment_url)
+        proxy_key = proxy_config['http'] if proxy_config else None
+        
+        # Timeout dinamico per segmenti grandi
+        segment_timeout = get_dynamic_timeout(segment_url) * 2  # Timeout doppio per DASH
+        
+        response = make_persistent_request(
+            segment_url,
+            headers=headers,
+            timeout=segment_timeout,
+            proxy_url=proxy_key,
+            stream=True,
+            allow_redirects=True
+        )
+        response.raise_for_status()
+
+        def generate_and_cache():
+            content_parts = []
+            total_size = 0
+            max_cache_size = 50 * 1024 * 1024  # 50MB max per cache
+            
+            try:
+                for chunk in response.iter_content(chunk_size=16384):  # Chunk più grandi per DASH
+                    if chunk:
+                        content_parts.append(chunk)
+                        total_size += len(chunk)
+                        yield chunk
+                        
+                        # Non cachare file troppo grandi
+                        if total_size > max_cache_size:
+                            content_parts = []  # Libera memoria
+                            
+            except Exception as e:
+                app.logger.error(f"Errore durante streaming segmento DASH: {e}")
+                return
+            finally:
+                # Cache solo se dimensione ragionevole
+                if content_parts and total_size <= max_cache_size:
+                    segment_content = b"".join(content_parts)
+                    TS_CACHE[cache_key] = segment_content
+                    app.logger.info(f"Segmento DASH cachato ({total_size} bytes): {segment_url}")
+
+        # Determina content type
+        content_type = "video/mp4"
+        if segment_url.endswith('.m4s'):
+            content_type = "video/iso.segment"
+        elif segment_url.endswith('.webm'):
+            content_type = "video/webm"
+
+        return Response(generate_and_cache(), content_type=content_type)
+
+    except requests.RequestException as e:
+        app.logger.error(f"Errore durante il download del segmento DASH: {str(e)}")
+        return f"Errore durante il download del segmento DASH: {str(e)}", 500
+
+@app.route('/proxy/dash-master')
+def proxy_dash_master():
+    """Crea un master manifest DASH simile al metodo M3U8"""
+    stream_id = request.args.get('stream', '').strip()
+    if not stream_id:
+        return "Errore: Parametro 'stream' mancante", 400
+
+    try:
+        # Template MPD base
+        mpd_template = '''<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" 
+     profiles="urn:mpeg:dash:profile:isoff-live:2011"
+     type="dynamic"
+     minimumUpdatePeriod="PT30S"
+     suggestedPresentationDelay="PT30S"
+     availabilityStartTime="{start_time}"
+     publishTime="{publish_time}"
+     timeShiftBufferDepth="PT5M"
+     maxSegmentDuration="PT10S">
+  
+  <Period start="PT0S">
+    <AdaptationSet mimeType="video/mp4" segmentAlignment="true">
+      <Representation id="video" bandwidth="{bandwidth}" width="{width}" height="{height}" codecs="avc1.640028">
+        <SegmentTemplate media="/proxy/dash-segment?template=$Number$.m4s&amp;base={base_url}&amp;stream={stream_id}" 
+                        initialization="/proxy/dash-segment?url={init_url}&amp;stream={stream_id}"
+                        duration="10" 
+                        startNumber="1" />
+      </Representation>
+    </AdaptationSet>
+    
+    <AdaptationSet mimeType="audio/mp4" segmentAlignment="true">
+      <Representation id="audio" bandwidth="128000" codecs="mp4a.40.2">
+        <SegmentTemplate media="/proxy/dash-segment?template=audio_$Number$.m4s&amp;base={base_url}&amp;stream={stream_id}"
+                        initialization="/proxy/dash-segment?url={audio_init_url}&amp;stream={stream_id}"
+                        duration="10" 
+                        startNumber="1" />
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>'''
+
+        # Valori di default o da database/configurazione
+        now = datetime.utcnow()
+        start_time = now.isoformat() + 'Z'
+        publish_time = start_time
+        
+        # Parametri stream (dovrebbero venire dal tuo database)
+        bandwidth = request.args.get('bandwidth', '2000000')
+        width = request.args.get('width', '1280')
+        height = request.args.get('height', '720')
+        base_url = request.args.get('base_url', 'https://example.com/stream/')
+        init_url = urljoin(base_url, 'init.mp4')
+        audio_init_url = urljoin(base_url, 'audio_init.mp4')
+        
+        mpd_content = mpd_template.format(
+            start_time=start_time,
+            publish_time=publish_time,
+            bandwidth=bandwidth,
+            width=width,
+            height=height,
+            base_url=quote(base_url),
+            stream_id=stream_id,
+            init_url=quote(init_url),
+            audio_init_url=quote(audio_init_url)
+        )
+        
+        return Response(mpd_content, content_type="application/dash+xml")
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella creazione master MPD: {str(e)}")
+        return f"Errore nella creazione master MPD: {str(e)}", 500
+
+# Aggiorna la cache configuration per includere MPD
+def setup_dash_cache():
+    """Configura cache specifiche per DASH"""
+    global MPD_CACHE
+    config = config_manager.load_config()
+    
+    # Cache MPD con TTL più breve per live streams
+    mpd_ttl = config.get('CACHE_TTL_MPD', 30)
+    mpd_maxsize = config.get('CACHE_MAXSIZE_MPD', 100)
+    
+    MPD_CACHE = TTLCache(maxsize=mpd_maxsize, ttl=mpd_ttl)
+    app.logger.info(f"Cache DASH configurata: TTL={mpd_ttl}s, MaxSize={mpd_maxsize}")
+
+# Aggiungi questa chiamata all'inizializzazione
+setup_dash_cache()
+
+
 # --- Template HTML ---
 
 LOGIN_TEMPLATE = """
@@ -1353,6 +1728,19 @@ DASHBOARD_TEMPLATE = """
                 <div class="stat-value" id="networkRecv">{{ "%.1f"|format(stats.network_recv) }}</div>
                 <div class="stat-subtitle">MB - Totale dalla partenza</div>
             </div>
+        </div>
+        
+        <div class="endpoint-card touchable" onclick="copyToClipboard('/proxy/mpd')">
+            <h4>/proxy/mpd</h4>
+            <p>Proxy per manifest MPEG-DASH con supporto live e VOD</p>
+        </div>
+        <div class="endpoint-card touchable" onclick="copyToClipboard('/proxy/dash-segment')">
+            <h4>/proxy/dash-segment</h4>
+            <p>Proxy per segmenti DASH con caching ottimizzato</p>
+        </div>
+        <div class="endpoint-card touchable" onclick="copyToClipboard('/proxy/dash-master')">
+            <h4>/proxy/dash-master</h4>
+            <p>Generatore master manifest DASH</p>
         </div>
 
         <div class="endpoints-section">
@@ -2051,6 +2439,27 @@ CONFIG_TEMPLATE = """
                             <label for="allowed_ips">IP Consentiti:</label>
                             <input type="text" id="allowed_ips" name="ALLOWED_IPS" value="{{ config.ALLOWED_IPS }}" placeholder="192.168.1.100,10.0.0.1">
                             <small>Lista di IP separati da virgola (lascia vuoto per tutti)</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Sezione Cache DASH -->
+            <div class="config-section">
+                <h3>📺 Configurazioni DASH</h3>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="cache_ttl_mpd">TTL Cache MPD (secondi):</label>
+                            <input type="number" id="cache_ttl_mpd" name="CACHE_TTL_MPD" value="{{ config.CACHE_TTL_MPD or 30 }}" min="5" max="300">
+                            <small>Cache per manifest MPD (default: 30s)</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="cache_maxsize_mpd">Max Size Cache MPD:</label>
+                            <input type="number" id="cache_maxsize_mpd" name="CACHE_MAXSIZE_MPD" value="{{ config.CACHE_MAXSIZE_MPD or 100 }}" min="10" max="500">
+                            <small>Numero massimo di MPD in cache</small>
                         </div>
                     </div>
                 </div>
