@@ -1121,6 +1121,14 @@ def modify_mpd_urls(mpd_content, base_url, headers):
 @app.route('/proxy/dash-segment')
 def proxy_dash_segment():
     """Proxy per segmenti DASH con supporto template migliorato e caching"""
+    segment_url = request.args.get('url', '').strip()
+    template = request.args.get('template', '').strip()
+    base = request.args.get('base', '').strip()
+
+    # Se NON c'è né url né (template e base), restituisci errore
+    if not segment_url and not (template and base):
+        return "Errore: Parametri mancanti (serve 'url' oppure 'template' e 'base')", 400
+
     try:
         segment_url = request.args.get('url', '').strip()
         template = request.args.get('template', '').strip()
