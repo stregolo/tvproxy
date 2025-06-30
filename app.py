@@ -1729,19 +1729,6 @@ DASHBOARD_TEMPLATE = """
                 <div class="stat-subtitle">MB - Totale dalla partenza</div>
             </div>
         </div>
-        
-        <div class="endpoint-card touchable" onclick="copyToClipboard('/proxy/mpd')">
-            <h4>/proxy/mpd</h4>
-            <p>Proxy per manifest MPEG-DASH con supporto live e VOD</p>
-        </div>
-        <div class="endpoint-card touchable" onclick="copyToClipboard('/proxy/dash-segment')">
-            <h4>/proxy/dash-segment</h4>
-            <p>Proxy per segmenti DASH con caching ottimizzato</p>
-        </div>
-        <div class="endpoint-card touchable" onclick="copyToClipboard('/proxy/dash-master')">
-            <h4>/proxy/dash-master</h4>
-            <p>Generatore master manifest DASH</p>
-        </div>
 
         <div class="endpoints-section">
             <h3>🔗 Endpoints Disponibili</h3>
@@ -1761,6 +1748,18 @@ DASHBOARD_TEMPLATE = """
                 <div class="endpoint-card touchable" onclick="copyToClipboard('/proxy/ts')">
                     <h4>/proxy/ts</h4>
                     <p>Proxy per segmenti TS con caching</p>
+                </div>
+                <div class="endpoint-card touchable" onclick="copyToClipboard('/proxy/mpd')">
+                    <h4>/proxy/mpd</h4>
+                    <p>Proxy per manifest MPEG-DASH con supporto live e VOD</p>
+                </div>
+                <div class="endpoint-card touchable" onclick="copyToClipboard('/proxy/dash-segment')">
+                    <h4>/proxy/dash-segment</h4>
+                    <p>Proxy per segmenti DASH con caching ottimizzato</p>
+                </div>
+                <div class="endpoint-card touchable" onclick="copyToClipboard('/proxy/dash-master')">
+                    <h4>/proxy/dash-master</h4>
+                    <p>Generatore master manifest DASH</p>
                 </div>
             </div>
         </div>
@@ -2412,6 +2411,27 @@ CONFIG_TEMPLATE = """
                     </div>
                 </div>
             </div>
+            
+            <!-- Sezione Cache DASH -->
+            <div class="config-section">
+                <h3>📺 Configurazioni DASH</h3>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="cache_ttl_mpd">TTL Cache MPD (secondi):</label>
+                            <input type="number" id="cache_ttl_mpd" name="CACHE_TTL_MPD" value="{{ config.CACHE_TTL_MPD or 30 }}" min="5" max="300">
+                            <small>Cache per manifest MPD (default: 30s)</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="cache_maxsize_mpd">Max Size Cache MPD:</label>
+                            <input type="number" id="cache_maxsize_mpd" name="CACHE_MAXSIZE_MPD" value="{{ config.CACHE_MAXSIZE_MPD or 100 }}" min="10" max="500">
+                            <small>Numero massimo di MPD in cache</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
             <!-- Sezione Sicurezza -->
             <div class="config-section" id="security">
@@ -2439,27 +2459,6 @@ CONFIG_TEMPLATE = """
                             <label for="allowed_ips">IP Consentiti:</label>
                             <input type="text" id="allowed_ips" name="ALLOWED_IPS" value="{{ config.ALLOWED_IPS }}" placeholder="192.168.1.100,10.0.0.1">
                             <small>Lista di IP separati da virgola (lascia vuoto per tutti)</small>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Sezione Cache DASH -->
-            <div class="config-section">
-                <h3>📺 Configurazioni DASH</h3>
-                <div class="row">
-                    <div class="col">
-                        <div class="form-group">
-                            <label for="cache_ttl_mpd">TTL Cache MPD (secondi):</label>
-                            <input type="number" id="cache_ttl_mpd" name="CACHE_TTL_MPD" value="{{ config.CACHE_TTL_MPD or 30 }}" min="5" max="300">
-                            <small>Cache per manifest MPD (default: 30s)</small>
-                        </div>
-                    </div>
-                    <div class="col">
-                        <div class="form-group">
-                            <label for="cache_maxsize_mpd">Max Size Cache MPD:</label>
-                            <input type="number" id="cache_maxsize_mpd" name="CACHE_MAXSIZE_MPD" value="{{ config.CACHE_MAXSIZE_MPD or 100 }}" min="10" max="500">
-                            <small>Numero massimo di MPD in cache</small>
                         </div>
                     </div>
                 </div>
