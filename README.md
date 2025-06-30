@@ -99,7 +99,7 @@ CACHE_MAXSIZE_KEY=50
 ### ▶️ Render
 
 1. Projects → **New → Web Service** → *Public Git Repo*.
-2. Repository: `https://github.com/nzo66/tvproxy` → **Connect**.
+2. Repository: `https://github.com/stregolo/tvproxy` → **Connect**.
 3. Scegli un nome, **Instance Type** `Free` (o superiore).
 4. Aggiungi le variabili `ADMIN_PASSWORD` e `SECRET_KEY` nell'area **Environment**.
 5. (Opzionale) Aggiungi `SOCKS5_PROXY`, `HTTP_PROXY`, `HTTPS_PROXY`.
@@ -120,7 +120,7 @@ CACHE_MAXSIZE_KEY=50
 ### 🐳 Docker
 
 ```bash
-git clone https://github.com/nzo66/tvproxy.git
+git clone https://github.com/stregolo/tvproxy.git
 cd tvproxy
 docker build -t tvproxy .
 
@@ -136,7 +136,7 @@ docker run -d -p 7860:7860 \
 pkg update && pkg upgrade
 pkg install git python nano -y
 
-git clone https://github.com/nzo66/tvproxy.git
+git clone https://github.com/stregolo/tvproxy.git
 cd tvproxy
 pip install -r requirements.txt
 
@@ -149,7 +149,7 @@ gunicorn app:app -w 4 --worker-class gevent -b 0.0.0.0:7860
 ### 🐍 Python
 
 ```bash
-git clone https://github.com/nzo66/tvproxy.git
+git clone https://github.com/stregolo/tvproxy.git
 cd tvproxy
 pip install -r requirements.txt
 
