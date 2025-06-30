@@ -1073,16 +1073,27 @@ def modify_mpd_urls(mpd_content, base_url, headers):
         for segment_template in root.findall('.//dash:SegmentTemplate', ns):
             media = segment_template.get('media')
             if media:
-                # MIGLIORAMENTO: Passa parametri del template
                 timescale = segment_template.get('timescale', '1')
-                duration = segment_template.get('duration', '0')
+                # Verifica se c'è SegmentTimeline
+                has_timeline = segment_template.find('.//dash:SegmentTimeline', ns) is not None
+                if has_timeline:
+                    duration_param = ''
+                else:
+                    duration = segment_template.get('duration', '0')
+                    duration_param = f"&duration={duration}"
                 start_number = segment_template.get('startNumber', '1')
-                
-                new_media = f"/proxy/dash-segment?template={quote(media)}&base={quote(base_path)}&timescale={timescale}&duration={duration}&startNumber={start_number}&{headers_query}"
+        
+                new_media = (
+                    f"/proxy/dash-segment?template={quote(media)}"
+                    f"&base={quote(base_path)}"
+                    f"&timescale={timescale}"
+                    f"{duration_param}"
+                    f"&startNumber={start_number}"
+                    f"&{headers_query}"
+                )
                 segment_template.set('media', new_media)
                 app.logger.info(f"SegmentTemplate media modificato: {media} -> {new_media}")
-                template_count += 1
-            
+        
             initialization = segment_template.get('initialization')
             if initialization:
                 init_url = urljoin(base_path, initialization)
