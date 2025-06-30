@@ -975,8 +975,12 @@ def proxy_mpd():
 def modify_mpd_urls(mpd_content, base_url, headers):
     """Modifica gli URL nel manifest MPD per passare attraverso il proxy"""
     try:
-        # Parse XML
+        app.logger.info(f"Modificando MPD per base URL: {base_url}")
+        app.logger.debug(f"Contenuto MPD (primi 500 caratteri): {mpd_content[:500]}")
+        
+        # Parse XML con gestione errori migliorata
         root = ET.fromstring(mpd_content)
+        app.logger.info("XML parsing completato con successo")
         
         # Namespace DASH
         ns = {'dash': 'urn:mpeg:dash:schema:mpd:2011'}
@@ -988,26 +992,39 @@ def modify_mpd_urls(mpd_content, base_url, headers):
         # Headers query string
         headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in headers.items()])
         
+        app.logger.info(f"Base path calcolato: {base_path}")
+        app.logger.info(f"Headers query: {headers_query}")
+        
         # Modifica BaseURL elements
+        base_url_count = 0
         for base_url_elem in root.findall('.//dash:BaseURL', ns):
             if base_url_elem.text:
                 original_url = urljoin(base_path, base_url_elem.text)
                 proxied_url = f"/proxy/dash-segment?url={quote(original_url)}&{headers_query}"
+                app.logger.info(f"BaseURL modificato: {base_url_elem.text} -> {proxied_url}")
                 base_url_elem.text = proxied_url
+                base_url_count += 1
         
         # Modifica SegmentTemplate media URLs
+        template_count = 0
         for segment_template in root.findall('.//dash:SegmentTemplate', ns):
             media = segment_template.get('media')
             if media:
                 # Mantieni il template ma aggiungi base proxy
-                segment_template.set('media', f"/proxy/dash-segment?template={quote(media)}&base={quote(base_path)}&{headers_query}")
+                new_media = f"/proxy/dash-segment?template={quote(media)}&base={quote(base_path)}&{headers_query}"
+                segment_template.set('media', new_media)
+                app.logger.info(f"SegmentTemplate media modificato: {media} -> {new_media}")
+                template_count += 1
             
             initialization = segment_template.get('initialization')
             if initialization:
                 init_url = urljoin(base_path, initialization)
-                segment_template.set('initialization', f"/proxy/dash-segment?url={quote(init_url)}&{headers_query}")
+                new_init = f"/proxy/dash-segment?url={quote(init_url)}&{headers_query}"
+                segment_template.set('initialization', new_init)
+                app.logger.info(f"SegmentTemplate init modificato: {initialization} -> {new_init}")
         
         # Modifica SegmentList
+        segment_list_count = 0
         for segment_list in root.findall('.//dash:SegmentList', ns):
             for segment_url in segment_list.findall('.//dash:SegmentURL', ns):
                 media = segment_url.get('media')
@@ -1015,23 +1032,37 @@ def modify_mpd_urls(mpd_content, base_url, headers):
                     original_url = urljoin(base_path, media)
                     proxied_url = f"/proxy/dash-segment?url={quote(original_url)}&{headers_query}"
                     segment_url.set('media', proxied_url)
+                    app.logger.info(f"SegmentURL modificato: {media} -> {proxied_url}")
+                    segment_list_count += 1
+        
+        app.logger.info(f"Modifiche completate: {base_url_count} BaseURL, {template_count} SegmentTemplate, {segment_list_count} SegmentURL")
         
         # Converti back to string
-        return ET.tostring(root, encoding='unicode', method='xml')
+        modified_content = ET.tostring(root, encoding='unicode', method='xml')
+        app.logger.info("MPD modificato con successo")
+        
+        return modified_content
         
     except ET.ParseError as e:
         app.logger.error(f"Errore nel parsing XML MPD: {e}")
+        app.logger.error(f"Contenuto MPD problematico: {mpd_content[:1000]}...")
         return mpd_content  # Restituisci originale se parsing fallisce
+    except Exception as e:
+        app.logger.error(f"Errore generico nella modifica MPD: {e}")
+        app.logger.error(f"Traceback: {traceback.format_exc()}")
+        return mpd_content
 
 @app.route('/proxy/dash-segment')
 def proxy_dash_segment():
-    """Proxy per segmenti DASH con supporto template e caching"""
+    """Proxy per segmenti DASH con supporto template migliorato e caching"""
     segment_url = request.args.get('url', '').strip()
     template = request.args.get('template', '').strip()
     base = request.args.get('base', '').strip()
     
     # Se è un template, costruisci l'URL
     if template and base:
+        app.logger.info(f"Processando template DASH: {template} con base: {base}")
+        
         # Estrai parametri del template dalla query string
         number = request.args.get('Number', '1')
         time = request.args.get('Time', '0')
@@ -1039,18 +1070,28 @@ def proxy_dash_segment():
         representation_id = request.args.get('RepresentationID', 'video')
         
         # Sostituisci placeholder nel template
-        segment_url = template.replace('$Number$', number)
-        segment_url = segment_url.replace('$Time$', time)
-        segment_url = segment_url.replace('$Bandwidth$', bandwidth)
-        segment_url = segment_url.replace('$RepresentationID$', representation_id)
+        segment_url = template
+        replacements = {
+            '$Number$': number,
+            '$Time$': time,
+            '$Bandwidth$': bandwidth,
+            '$RepresentationID$': representation_id,
+            '$$': '$'  # Escape per dollaro letterale
+        }
+        
+        for placeholder, value in replacements.items():
+            segment_url = segment_url.replace(placeholder, value)
+        
         segment_url = urljoin(base, segment_url)
+        app.logger.info(f"Template risolto: {template} -> {segment_url}")
     
     if not segment_url:
+        app.logger.error("URL segmento mancante dopo processing template")
         return "Errore: URL segmento mancante", 400
 
     # Controlla cache per segmenti
     cache_key = f"dash_segment_{segment_url}"
-    if cache_key in TS_CACHE:  # Riusa cache TS per segmenti DASH
+    if cache_key in TS_CACHE:
         app.logger.info(f"Cache HIT per segmento DASH: {segment_url}")
         return Response(TS_CACHE[cache_key], content_type="video/mp4")
 
@@ -1066,7 +1107,9 @@ def proxy_dash_segment():
         proxy_key = proxy_config['http'] if proxy_config else None
         
         # Timeout dinamico per segmenti grandi
-        segment_timeout = get_dynamic_timeout(segment_url) * 2  # Timeout doppio per DASH
+        segment_timeout = get_dynamic_timeout(segment_url) * 2
+        
+        app.logger.info(f"Downloading segmento DASH: {segment_url}")
         
         response = make_persistent_request(
             segment_url,
@@ -1084,7 +1127,7 @@ def proxy_dash_segment():
             max_cache_size = 50 * 1024 * 1024  # 50MB max per cache
             
             try:
-                for chunk in response.iter_content(chunk_size=16384):  # Chunk più grandi per DASH
+                for chunk in response.iter_content(chunk_size=16384):
                     if chunk:
                         content_parts.append(chunk)
                         total_size += len(chunk)
@@ -1092,7 +1135,7 @@ def proxy_dash_segment():
                         
                         # Non cachare file troppo grandi
                         if total_size > max_cache_size:
-                            content_parts = []  # Libera memoria
+                            content_parts = []
                             
             except Exception as e:
                 app.logger.error(f"Errore durante streaming segmento DASH: {e}")
