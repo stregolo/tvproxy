@@ -106,10 +106,6 @@ def broadcast_stats():
             app.logger.error(f"Errore nel broadcast statistiche: {e}")
             time.sleep(5)
 
-# Avvia il thread di broadcasting
-stats_thread = threading.Thread(target=broadcast_stats, daemon=True)
-stats_thread.start()
-
 @socketio.on('connect')
 def handle_connect():
     """Gestisce nuove connessioni WebSocket"""
@@ -324,6 +320,9 @@ def get_system_stats():
     system_stats['network_recv'] = net_io.bytes_recv / (1024**2)  # MB
     
     return system_stats
+    
+stats_thread = threading.Thread(target=broadcast_stats, daemon=True)
+stats_thread.start()
 
 def monitor_bandwidth():
     """Monitora la banda di rete in background"""
