@@ -3680,13 +3680,19 @@ def download_log(filename):
 @app.route('/admin/clear-cache', methods=['POST'])
 @login_required
 def clear_cache():
-    """Pulisce tutte le cache"""
-    M3U8_CACHE.clear()
-    TS_CACHE.clear()
-    KEY_CACHE.clear()
-    cleanup_sessions()
-    app.logger.info(f"Cache pulita dall'utente {session.get('username', 'unknown')}")
-    return jsonify({"status": "success", "message": "Cache pulita con successo"})
+    try:
+        # Se usi oggetti TTLCache come M3U8_CACHE, TS_CACHE ecc.
+        for cache in [globals().get('M3U8_CACHE'), globals().get('TS_CACHE'), globals().get('KEY_CACHE'), globals().get('MPD_CACHE')]:
+            if hasattr(cache, 'clear'):
+                cache.clear()
+            elif isinstance(cache, dict):
+                cache.clear()
+        app.logger.info("Tutte le cache sono state svuotate manualmente dall'admin.")
+        return jsonify({"status": "success", "message": "Cache svuotata con successo"})
+    except Exception as e:
+        app.logger.error(f"Errore durante la pulizia cache: {e}")
+        return jsonify({"status": "error", "message": f"Errore durante la pulizia: {str(e)}"})
+
 
 @app.route('/stats')
 def get_stats():
