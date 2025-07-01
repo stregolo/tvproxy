@@ -33,6 +33,11 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+app.config.update(
+    SESSION_COOKIE_SAMESITE=None,
+    SESSION_COOKIE_SECURE=True
+)
+
 load_dotenv()
 
 # --- Configurazione Autenticazione ---
@@ -2367,27 +2372,33 @@ ADMIN_TEMPLATE = """
     
     <script>
         function clearCache() {
-            if(confirm('Sei sicuro di voler pulire la cache del sistema?')) {
-                fetch('/admin/clear-cache', {method: 'POST'})
-                    .then(response => response.json())
-                    .then(data => {
-                        alert(data.message);
-                    })
-                    .catch(() => alert('Errore durante la pulizia della cache'));
+            if (confirm('Sei sicuro di voler pulire la cache del sistema?')) {
+                fetch('/admin/clear-cache', {
+                    method: 'POST',
+                    credentials: 'include'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    alert(data.message);
+                })
+                .catch(() => alert('Errore durante la pulizia della cache'));
             }
         }
         
         function reloadEnvConfig() {
-            if(confirm('Sei sicuro di voler ricaricare la configurazione dalle variabili d\'ambiente?')) {
-                fetch('/admin/config/reload-env', {method: 'POST'})
-                    .then(response => response.json())
-                    .then(data => {
-                        alert(data.message);
-                        if(data.status === 'success') {
-                            setTimeout(() => location.reload(), 1000);
-                        }
-                    })
-                    .catch(() => alert('Errore durante il ricaricamento'));
+            if (confirm('Sei sicuro di voler ricaricare la configurazione dalle variabili d\'ambiente?')) {
+                fetch('/admin/config/reload-env', {
+                    method: 'POST',
+                    credentials: 'include'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    alert(data.message);
+                    if (data.status === 'success') {
+                        setTimeout(() => location.reload(), 1000);
+                    }
+                })
+                .catch(() => alert('Errore durante il ricaricamento'));
             }
         }
     </script>
