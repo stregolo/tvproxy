@@ -1073,27 +1073,40 @@ def debug_env():
     
     return jsonify(env_vars)
 
+# ROTTA MODIFICATA: Ricarica da ENV
 @app.route('/admin/config/reload-env', methods=['POST'])
 @login_required
 def reload_env_config():
-    """Ricarica la configurazione dalle variabili d'ambiente"""
+    """Ricarica la configurazione dal file .env e la applica all'applicazione."""
     try:
-        # Ricarica la configurazione (ora con priorità alle env vars)
+        # FORZA LA RILETTURA DEL FILE .env
+        # L'opzione override=True garantisce che le variabili d'ambiente in memoria
+        # vengano sovrascritte con i nuovi valori letti dal file.
+        load_dotenv(override=True)
+        app.logger.info("File .env ricaricato manualmente tramite pannello admin.")
+        
+        # Ricarica la configurazione dall'ambiente aggiornato
         config = config_manager.load_config()
         
-        # Salva la configurazione aggiornata
+        # Salva e applica la nuova configurazione
         if config_manager.save_config(config):
             config_manager.apply_config_to_app(config)
+            
+            # Riapplica le configurazioni dipendenti dall'ambiente
             setup_proxies()
+            setup_all_caches()
+            
+            app.logger.info("Configurazione applicata con successo dopo ricarica da .env.")
             return jsonify({
                 "status": "success", 
-                "message": "Configurazione ricaricata con priorità alle variabili d'ambiente"
+                "message": "Configurazione ricaricata con successo dal file .env. Le modifiche sono ora attive."
             })
         else:
-            return jsonify({"status": "error", "message": "Errore nel salvataggio"})
+            return jsonify({"status": "error", "message": "Errore nel salvataggio della configurazione aggiornata"})
             
     except Exception as e:
-        return jsonify({"status": "error", "message": f"Errore: {str(e)}"})
+        app.logger.error(f"Errore critico durante il ricaricamento da ENV: {e}")
+        return jsonify({"status": "error", "message": f"Errore durante il ricaricamento: {str(e)}"}), 500
 
 @app.route('/proxy/mpd')
 def proxy_mpd():
@@ -3677,22 +3690,26 @@ def download_log(filename):
         app.logger.error(f"Errore nel download log {filename}: {e}")
         return f"Errore nel download: {str(e)}", 500
 
+# NUOVA ROTTA: Pulisci Cache
 @app.route('/admin/clear-cache', methods=['POST'])
 @login_required
 def clear_cache():
+    """Pulisce tutte le cache di sistema (M3U8, TS, KEY, MPD)."""
     try:
-        # Se usi oggetti TTLCache come M3U8_CACHE, TS_CACHE ecc.
-        for cache in [globals().get('M3U8_CACHE'), globals().get('TS_CACHE'), globals().get('KEY_CACHE'), globals().get('MPD_CACHE')]:
-            if hasattr(cache, 'clear'):
-                cache.clear()
-            elif isinstance(cache, dict):
-                cache.clear()
-        app.logger.info("Tutte le cache sono state svuotate manualmente dall'admin.")
-        return jsonify({"status": "success", "message": "Cache svuotata con successo"})
+        # La funzione setup_all_caches() reinizializza le cache,
+        # che è il modo più efficace per pulirle completamente.
+        setup_all_caches()
+        app.logger.info("Cache di sistema pulita manualmente dall'amministratore.")
+        return jsonify({
+            "status": "success", 
+            "message": "Tutte le cache (M3U8, TS, KEY, MPD) sono state pulite con successo."
+        })
     except Exception as e:
-        app.logger.error(f"Errore durante la pulizia cache: {e}")
-        return jsonify({"status": "error", "message": f"Errore durante la pulizia: {str(e)}"})
-
+        app.logger.error(f"Errore durante la pulizia manuale della cache: {e}")
+        return jsonify({
+            "status": "error", 
+            "message": f"Errore durante la pulizia della cache: {str(e)}"
+        }), 500
 
 @app.route('/stats')
 def get_stats():
