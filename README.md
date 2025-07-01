@@ -77,14 +77,14 @@ ADMIN_PASSWORD="tua_password_sicura"
 SECRET_KEY="chiave_segreta_generata"
 
 # Ottimizzazioni memoria
-REQUEST_TIMEOUT=15
+REQUEST_TIMEOUT=60
 KEEP_ALIVE_TIMEOUT=120
 MAX_KEEP_ALIVE_REQUESTS=100
 POOL_CONNECTIONS=5
 POOL_MAXSIZE=10
 
 # Cache ridotta
-CACHE_TTL_M3U8=3
+CACHE_TTL_M3U8=2
 CACHE_TTL_TS=60
 CACHE_TTL_KEY=60
 CACHE_MAXSIZE_M3U8=50
@@ -112,6 +112,22 @@ CACHE_MAXSIZE_KEY=50
 3. Vai in **Settings → Secrets** e aggiungi `ADMIN_PASSWORD` e `SECRET_KEY`.
 4. (Opzionale) Aggiungi `HTTP_PROXY` + `HTTPS_PROXY` (SOCKS5 non supportato su HF).
 5. Dopo ogni modifica alle variabili fai **Factory Rebuild**.
+
+#### **Configurazione Ottimizzata per HuggingFace**
+
+Per **HuggingFace Spaces**, è consigliato utilizzare questa configurazione ottimizzata. Aggiungi le seguenti variabili nei **Secrets** del tuo Space:
+
+```dotenv
+# OBBLIGATORIO
+ADMIN_PASSWORD="tua_password_sicura"
+SECRET_KEY="chiave_segreta_generata"
+CACHE_TTL_M3U8=5 CACHE_MAXSIZE_M3U8=500 CACHE_TTL_TS=600 CACHE_MAXSIZE_TS=8000 CACHE_TTL_KEY=600 CACHE_MAXSIZE_KEY=1000 POOL_CONNECTIONS=50 POOL_MAXSIZE=300 MAX_KEEP_ALIVE_REQUESTS=5000 KEEP_ALIVE_TIMEOUT=900 REQUEST_TIMEOUT=60
+```
+
+**Perché questa configurazione?**
+- **Cache Ottimizzata**: Valori più elevati per gestire meglio i flussi video frequenti
+- **Pool di Connessioni Potenziato**: Gestisce più connessioni simultanee nell'ambiente cloud
+- **Timeout Bilanciati**: Equilibrio tra stabilità e performance per connessioni di lunga durata
 
 ---
 
