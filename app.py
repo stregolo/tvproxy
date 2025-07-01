@@ -40,6 +40,22 @@ ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'password123')
 ALLOWED_IPS = os.environ.get('ALLOWED_IPS', '').split(',') if os.environ.get('ALLOWED_IPS') else []
 
+def setup_all_caches():
+    global M3U8_CACHE, TS_CACHE, KEY_CACHE, MPD_CACHE
+    config = config_manager.load_config()
+    if config.get('CACHE_ENABLED', True):
+        M3U8_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_M3U8'], ttl=config['CACHE_TTL_M3U8'])
+        TS_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_TS'], ttl=config['CACHE_TTL_TS'])
+        KEY_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_KEY'], ttl=config['CACHE_TTL_KEY'])
+        MPD_CACHE = TTLCache(maxsize=config.get('CACHE_MAXSIZE_MPD', 100), ttl=config.get('CACHE_TTL_MPD', 30))
+        app.logger.info("Cache ABILITATA su tutte le risorse.")
+    else:
+        M3U8_CACHE = {}
+        TS_CACHE = {}
+        KEY_CACHE = {}
+        MPD_CACHE = {}
+        app.logger.warning("TUTTE LE CACHE DISABILITATE: stream diretto attivo.")
+
 def check_auth(username, password):
     """Verifica le credenziali di accesso"""
     return username == ADMIN_USERNAME and password == ADMIN_PASSWORD
@@ -194,14 +210,69 @@ class ConfigManager:
         }
         
     def load_config(self):
-        """Carica la configurazione dal file JSON"""
+        """Carica la configurazione combinando proxy da file e variabili d'ambiente"""
+        # Inizia con i valori di default
+        config = self.default_config.copy()
+        
+        # Carica dal file se esiste (seconda priorità)
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r') as f:
-                    return json.load(f)
+                    file_config = json.load(f)
+                    config.update(file_config)
             except Exception as e:
                 app.logger.error(f"Errore nel caricamento della configurazione: {e}")
-        return self.default_config.copy()
+        
+        # Combina proxy da variabili d'ambiente con quelli del file
+        proxy_keys = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']
+        
+        for key in proxy_keys:
+            env_value = os.environ.get(key)
+            if env_value and env_value.strip():
+                file_value = config.get(key, '')
+                
+                # Combina i proxy: prima quelli del file, poi quelli delle env vars
+                combined_proxies = []
+                
+                # Aggiungi proxy dal file
+                if file_value and file_value.strip():
+                    file_proxies = [p.strip() for p in file_value.split(',') if p.strip()]
+                    combined_proxies.extend(file_proxies)
+                
+                # Aggiungi proxy dalle variabili d'ambiente
+                env_proxies = [p.strip() for p in env_value.split(',') if p.strip()]
+                combined_proxies.extend(env_proxies)
+                
+                # Rimuovi duplicati mantenendo l'ordine
+                unique_proxies = []
+                for proxy in combined_proxies:
+                    if proxy not in unique_proxies:
+                        unique_proxies.append(proxy)
+                
+                # Aggiorna la configurazione con i proxy combinati
+                config[key] = ','.join(unique_proxies)
+                
+                app.logger.info(f"Proxy combinati per {key}: {len(unique_proxies)} totali")
+        
+        # Per le altre variabili, mantieni la priorità alle env vars
+        for key in config.keys():
+            if key not in proxy_keys:  # Salta i proxy che abbiamo già gestito
+                env_value = os.environ.get(key)
+                if env_value is not None:
+                    # Converti il tipo appropriato
+                    if key in ['VERIFY_SSL']:
+                        config[key] = env_value.lower() in ('true', '1', 'yes')
+                    elif key in ['REQUEST_TIMEOUT', 'KEEP_ALIVE_TIMEOUT', 'MAX_KEEP_ALIVE_REQUESTS', 
+                                'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'CACHE_TTL_M3U8', 'CACHE_TTL_TS', 
+                                'CACHE_TTL_KEY', 'CACHE_MAXSIZE_M3U8', 'CACHE_MAXSIZE_TS', 'CACHE_MAXSIZE_KEY']:
+                        try:
+                            config[key] = int(env_value)
+                        except ValueError:
+                            app.logger.warning(f"Valore non valido per {key}: {env_value}")
+                    else:
+                        config[key] = env_value
+        
+        return config
     
     def save_config(self, config):
         """Salva la configurazione nel file JSON"""
@@ -939,6 +1010,86 @@ def setup_dynamic_mpd_cache():
     MPD_CACHE = {}  # Usa dict normale per TTL dinamico
 
 setup_dynamic_mpd_cache()
+
+@app.route('/admin/cache/toggle', methods=['POST'])
+@login_required
+def toggle_cache():
+    config = config_manager.load_config()
+    new_value = not config.get('CACHE_ENABLED', True)
+    config['CACHE_ENABLED'] = new_value
+    config_manager.save_config(config)
+    config_manager.apply_config_to_app(config)
+    setup_all_caches()
+    return jsonify({"status": "success", "cache_enabled": new_value})
+
+@app.route('/admin/debug/proxies')
+@login_required
+def debug_proxies():
+    """Debug dei proxy combinati"""
+    config = config_manager.load_config()
+    
+    proxy_info = {}
+    for proxy_type in ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']:
+        proxy_string = config.get(proxy_type, '')
+        if proxy_string:
+            proxies = [p.strip() for p in proxy_string.split(',') if p.strip()]
+            proxy_info[proxy_type] = {
+                'count': len(proxies),
+                'proxies': proxies,
+                'env_value': os.environ.get(proxy_type, 'NON_IMPOSTATA'),
+                'combined': proxy_string
+            }
+        else:
+            proxy_info[proxy_type] = {
+                'count': 0,
+                'proxies': [],
+                'env_value': os.environ.get(proxy_type, 'NON_IMPOSTATA'),
+                'combined': ''
+            }
+    
+    return jsonify(proxy_info)
+
+@app.route('/admin/debug/env')
+@login_required
+def debug_env():
+    """Debug delle variabili d'ambiente"""
+    env_vars = {}
+    config_keys = [
+        'ADMIN_PASSWORD', 'SECRET_KEY', 'CACHE_TTL_M3U8', 'CACHE_MAXSIZE_M3U8',
+        'CACHE_TTL_TS', 'CACHE_MAXSIZE_TS', 'CACHE_TTL_KEY', 'CACHE_MAXSIZE_KEY',
+        'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'MAX_KEEP_ALIVE_REQUESTS',
+        'KEEP_ALIVE_TIMEOUT', 'REQUEST_TIMEOUT'
+    ]
+    
+    for key in config_keys:
+        env_vars[key] = {
+            'env_value': os.environ.get(key, 'NON_IMPOSTATA'),
+            'current_config': config_manager.load_config().get(key, 'NON_TROVATA')
+        }
+    
+    return jsonify(env_vars)
+
+@app.route('/admin/config/reload-env', methods=['POST'])
+@login_required
+def reload_env_config():
+    """Ricarica la configurazione dalle variabili d'ambiente"""
+    try:
+        # Ricarica la configurazione (ora con priorità alle env vars)
+        config = config_manager.load_config()
+        
+        # Salva la configurazione aggiornata
+        if config_manager.save_config(config):
+            config_manager.apply_config_to_app(config)
+            setup_proxies()
+            return jsonify({
+                "status": "success", 
+                "message": "Configurazione ricaricata con priorità alle variabili d'ambiente"
+            })
+        else:
+            return jsonify({"status": "error", "message": "Errore nel salvataggio"})
+            
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Errore: {str(e)}"})
 
 @app.route('/proxy/mpd')
 def proxy_mpd():
@@ -1821,6 +1972,10 @@ DASHBOARD_TEMPLATE = """
                     <h4>/proxy/ts</h4>
                     <p>Proxy per segmenti TS con caching</p>
                 </div>
+                <div class="endpoint-card touchable" onclick="copyToClipboard('/proxy/key')">
+                    <h4>/proxy/key</h4>
+                    <p>Proxy per chiavi di decrittazione AES-128</p>
+                </div>
                 <div class="endpoint-card touchable" onclick="copyToClipboard('/proxy/mpd')">
                     <h4>/proxy/mpd</h4>
                     <p>Proxy per manifest MPEG-DASH con supporto live e VOD</p>
@@ -1833,10 +1988,26 @@ DASHBOARD_TEMPLATE = """
                     <h4>/proxy/dash-master</h4>
                     <p>Generatore master manifest DASH</p>
                 </div>
+                <div class="endpoint-card touchable" onclick="copyToClipboard('/admin/debug/env')">
+                    <h4>/admin/debug/env</h4>
+                    <p>Debug variabili d'ambiente e configurazioni</p>
+                </div>
+                <div class="endpoint-card touchable" onclick="copyToClipboard('/admin/debug/proxies')">
+                    <h4>/admin/debug/proxies</h4>
+                    <p>Debug proxy combinati da file e variabili d'ambiente</p>
+                </div>
+                <div class="endpoint-card touchable" onclick="copyToClipboard('/admin/config/reload-env')">
+                    <h4>/admin/config/reload-env</h4>
+                    <p>Ricarica configurazione dalle variabili d'ambiente</p>
+                </div>
+                <div class="endpoint-card touchable" onclick="copyToClipboard('/test/mpd-debug')">
+                    <h4>/test/mpd-debug</h4>
+                    <p>Test e debug specifico per manifest MPD</p>
+                </div>
             </div>
         </div>
     </div>
-
+    
     <div class="connection-status" id="connectionStatus">
         <span id="statusIcon">🔄</span>
         <span id="statusText">Connessione in corso...</span>
@@ -2122,42 +2293,66 @@ ADMIN_TEMPLATE = """
     </div>
     
     <div class="container">
-        <div class="admin-grid">
-            <div class="admin-card">
-                <h3>📊 Monitoraggio Sistema</h3>
-                <p>Visualizza statistiche dettagliate del sistema in tempo reale</p>
-                <a href="/dashboard" class="btn">Vai alla Dashboard</a>
-            </div>
-            
-            <div class="admin-card">
-                <h3>🔧 Configurazioni</h3>
-                <p>Gestisci le impostazioni del proxy, timeout, cache e sicurezza</p>
-                <a href="/admin/config" class="btn">Configura Sistema</a>
-            </div>
-            
-            <div class="admin-card">
-                <h3>📝 Log Sistema</h3>
-                <p>Visualizza i log delle attività in tempo reale con streaming</p>
-                <a href="/admin/logs" class="btn">Visualizza Log</a>
-            </div>
-            
-            <div class="admin-card">
-                <h3>🔄 Gestione Cache</h3>
-                <p>Pulisci e gestisci la cache del sistema</p>
-                <button class="btn" onclick="clearCache()">Pulisci Cache</button>
-            </div>
-            
-            <div class="admin-card">
-                <h3>📈 API Statistiche</h3>
-                <p>Accesso alle API JSON per integrazioni esterne</p>
-                <a href="/stats" class="btn">API Endpoint</a>
-            </div>
-            
-            <div class="admin-card">
-                <h3>🛡️ Sicurezza</h3>
-                <p>Gestione IP consentiti e credenziali di accesso</p>
-                <a href="/admin/config#security" class="btn">Impostazioni Sicurezza</a>
-            </div>
+    <div class="admin-grid">
+        <div class="admin-card">
+            <h3>📊 Monitoraggio Sistema</h3>
+            <p>Visualizza statistiche dettagliate del sistema in tempo reale</p>
+            <a href="/dashboard" class="btn">Vai alla Dashboard</a>
+        </div>
+        
+        <div class="admin-card">
+            <h3>🔧 Configurazioni</h3>
+            <p>Gestisci le impostazioni del proxy, timeout, cache e sicurezza</p>
+            <a href="/admin/config" class="btn">Configura Sistema</a>
+        </div>
+        
+        <div class="admin-card">
+            <h3>📝 Log Sistema</h3>
+            <p>Visualizza i log delle attività in tempo reale con streaming</p>
+            <a href="/admin/logs" class="btn">Visualizza Log</a>
+        </div>
+        
+        <div class="admin-card">
+            <h3>🔄 Gestione Cache</h3>
+            <p>Pulisci e gestisci la cache del sistema</p>
+            <button class="btn" onclick="clearCache()">Pulisci Cache</button>
+        </div>
+        
+        <div class="admin-card">
+            <h3>📈 API Statistiche</h3>
+            <p>Accesso alle API JSON per integrazioni esterne</p>
+            <a href="/stats" class="btn">API Endpoint</a>
+        </div>
+        
+        <div class="admin-card">
+            <h3>🛡️ Sicurezza</h3>
+            <p>Gestione IP consentiti e credenziali di accesso</p>
+            <a href="/admin/config#security" class="btn">Impostazioni Sicurezza</a>
+        </div>
+        
+        <!-- NUOVE CARD PER DEBUG -->
+        <div class="admin-card">
+            <h3>🔍 Debug Variabili</h3>
+            <p>Verifica variabili d'ambiente e configurazioni attive</p>
+            <a href="/admin/debug/env" class="btn">Debug Env</a>
+        </div>
+        
+        <div class="admin-card">
+            <h3>🌐 Debug Proxy</h3>
+            <p>Visualizza proxy combinati da file e variabili d'ambiente</p>
+            <a href="/admin/debug/proxies" class="btn">Debug Proxy</a>
+        </div>
+        
+        <div class="admin-card">
+            <h3>🔄 Ricarica Config</h3>
+            <p>Ricarica configurazione dalle variabili d'ambiente</p>
+            <button class="btn" onclick="reloadEnvConfig()">Ricarica da ENV</button>
+        </div>
+        
+        <div class="admin-card">
+            <h3>📺 Test MPD</h3>
+            <p>Test e debug specifico per manifest MPEG-DASH</p>
+            <a href="/test/mpd-debug" class="btn">Test MPD</a>
         </div>
     </div>
     
@@ -2170,6 +2365,20 @@ ADMIN_TEMPLATE = """
                         alert(data.message);
                     })
                     .catch(() => alert('Errore durante la pulizia della cache'));
+            }
+        }
+        
+        function reloadEnvConfig() {
+            if(confirm('Sei sicuro di voler ricaricare la configurazione dalle variabili d\'ambiente?')) {
+                fetch('/admin/config/reload-env', {method: 'POST'})
+                    .then(response => response.json())
+                    .then(data => {
+                        alert(data.message);
+                        if(data.status === 'success') {
+                            setTimeout(() => location.reload(), 1000);
+                        }
+                    })
+                    .catch(() => alert('Errore durante il ricaricamento'));
             }
         }
     </script>
@@ -2462,6 +2671,14 @@ CONFIG_TEMPLATE = """
                 <h3>💾 Configurazioni Cache</h3>
                 <div class="row">
                     <div class="col">
+                    <div class="form-group">
+                        <label for="cache_enabled"><b>Cache Abilitata:</b></label>
+                        <select id="cache_enabled" name="CACHE_ENABLED">
+                            <option value="true" {% if config.CACHE_ENABLED %}selected{% endif %}>Abilitata</option>
+                            <option value="false" {% if not config.CACHE_ENABLED %}selected{% endif %}>Disabilitata (stream diretto)</option>
+                        </select>
+                        <small>Se disabilitata, tutte le richieste vengono gestite in streaming diretto senza alcun caching.</small>
+                    </div>
                         <div class="form-group">
                             <label for="cache_ttl_m3u8">TTL Cache M3U8 (secondi):</label>
                             <input type="number" id="cache_ttl_m3u8" name="CACHE_TTL_M3U8" value="{{ config.CACHE_TTL_M3U8 }}" min="1" max="300">
@@ -2479,6 +2696,14 @@ CONFIG_TEMPLATE = """
                         <div class="form-group">
                             <label for="cache_maxsize_ts">Max Size Cache TS:</label>
                             <input type="number" id="cache_maxsize_ts" name="CACHE_MAXSIZE_TS" value="{{ config.CACHE_MAXSIZE_TS }}" min="100" max="5000">
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_ttl_key">TTL Cache KEY (secondi):</label>
+                            <input type="number" id="cache_ttl_key" name="CACHE_TTL_KEY" value="{{ config.CACHE_TTL_KEY }}" min="1" max="300">
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_maxsize_key">Max Size Cache KEY:</label>
+                            <input type="number" id="cache_maxsize_key" name="CACHE_MAXSIZE_KEY" value="{{ config.CACHE_MAXSIZE_KEY }}" min="10" max="1000">
                         </div>
                     </div>
                 </div>
