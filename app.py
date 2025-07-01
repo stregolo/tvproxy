@@ -4046,8 +4046,6 @@ def proxy_key():
         app.logger.error(f"Errore durante il download della chiave AES-128: {str(e)}")
         return f"Errore durante il download della chiave AES-128: {str(e)}", 500
 
-setup_all_caches()
-
 # --- Inizializzazione dell'app ---
 
 # Carica e applica la configurazione salvata al startup
