@@ -94,6 +94,17 @@ CACHE_MAXSIZE_KEY=50
 
 ---
 
+## 🚫 Disattivare la Cache per Streaming Diretto
+
+Se vuoi **disabilitare completamente la cache** (ad esempio per streaming diretto e contenuti sempre aggiornati), puoi farlo aggiungendo questa riga al tuo file `.env`:
+
+```
+CACHE_ENABLED=False
+
+```
+
+---
+
 ## ☁️ Piattaforme di Deploy
 
 ### ▶️ Render
@@ -122,22 +133,33 @@ Per **HuggingFace Spaces**, è consigliato utilizzare questa configurazione otti
 ADMIN_PASSWORD="tua_password_sicura"
 SECRET_KEY="chiave_segreta_generata"
 CACHE_TTL_M3U8=5
- CACHE_MAXSIZE_M3U8=500
- CACHE_TTL_TS=600
- CACHE_MAXSIZE_TS=8000
- CACHE_TTL_KEY=600
- CACHE_MAXSIZE_KEY=1000
- POOL_CONNECTIONS=50
- POOL_MAXSIZE=300
- MAX_KEEP_ALIVE_REQUESTS=5000
- KEEP_ALIVE_TIMEOUT=900
- REQUEST_TIMEOUT=60
+CACHE_MAXSIZE_M3U8=500
+CACHE_TTL_TS=600
+CACHE_MAXSIZE_TS=8000
+CACHE_TTL_KEY=600
+CACHE_MAXSIZE_KEY=1000
+POOL_CONNECTIONS=50
+POOL_MAXSIZE=300
+MAX_KEEP_ALIVE_REQUESTS=5000
+KEEP_ALIVE_TIMEOUT=900
+REQUEST_TIMEOUT=60
 ```
 
 **Perché questa configurazione?**
 - **Cache Ottimizzata**: Valori più elevati per gestire meglio i flussi video frequenti
 - **Pool di Connessioni Potenziato**: Gestisce più connessioni simultanee nell'ambiente cloud
 - **Timeout Bilanciati**: Equilibrio tra stabilità e performance per connessioni di lunga durata
+
+---
+
+## 🚫 Disattivare la Cache per Streaming Diretto
+
+Se vuoi **disabilitare completamente la cache** (ad esempio per streaming diretto e contenuti sempre aggiornati), puoi farlo aggiungendo questa riga al tuo file `.env`:
+
+```
+CACHE_ENABLED=False
+
+```
 
 ---
 
