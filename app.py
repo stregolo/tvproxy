@@ -3466,17 +3466,12 @@ def save_config():
         
         # Salva la configurazione
         if config_manager.save_config(new_config):
-            # Applica la configurazione all'app
             config_manager.apply_config_to_app(new_config)
-            
-            # Riavvia i proxy se necessario
             setup_proxies()
             setup_all_caches()
-            
-            app.logger.info(f"Configurazione aggiornata dall'utente {session.get('username', 'unknown')}")
-            return jsonify({"status": "success", "message": "Configurazione salvata con successo! Riavvia l'applicazione per applicare tutte le modifiche."})
+            return jsonify({"status": "success", "message": "Configurazione salvata con successo"})
         else:
-            return jsonify({"status": "error", "message": "Errore nel salvataggio della configurazione"})
+            return jsonify({"status": "error", "message": "Errore nel salvataggio"})
             
     except Exception as e:
         app.logger.error(f"Errore nel salvataggio configurazione: {e}")
