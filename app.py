@@ -1058,12 +1058,14 @@ def debug_proxies():
 def debug_env():
     """Debug delle variabili d'ambiente"""
     env_vars = {}
-    config_keys = [
-        'ADMIN_PASSWORD', 'SECRET_KEY', 'CACHE_TTL_M3U8', 'CACHE_MAXSIZE_M3U8',
-        'CACHE_TTL_TS', 'CACHE_MAXSIZE_TS', 'CACHE_TTL_KEY', 'CACHE_MAXSIZE_KEY',
-        'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'MAX_KEEP_ALIVE_REQUESTS',
-        'KEEP_ALIVE_TIMEOUT', 'REQUEST_TIMEOUT'
-    ]
+config_keys = [
+    'ADMIN_PASSWORD', 'SECRET_KEY', 'CACHE_ENABLED',
+    'CACHE_TTL_M3U8', 'CACHE_MAXSIZE_M3U8',
+    'CACHE_TTL_TS', 'CACHE_MAXSIZE_TS', 
+    'CACHE_TTL_KEY', 'CACHE_MAXSIZE_KEY',
+    'POOL_CONNECTIONS', 'POOL_MAXSIZE', 
+    'MAX_KEEP_ALIVE_REQUESTS', 'KEEP_ALIVE_TIMEOUT', 'REQUEST_TIMEOUT'
+]
     
     for key in config_keys:
         env_vars[key] = {
