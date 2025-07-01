@@ -40,6 +40,22 @@ ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'password123')
 ALLOWED_IPS = os.environ.get('ALLOWED_IPS', '').split(',') if os.environ.get('ALLOWED_IPS') else []
 
+def setup_all_caches():
+    global M3U8_CACHE, TS_CACHE, KEY_CACHE, MPD_CACHE
+    config = config_manager.load_config()
+    if config.get('CACHE_ENABLED', True):
+        M3U8_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_M3U8'], ttl=config['CACHE_TTL_M3U8'])
+        TS_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_TS'], ttl=config['CACHE_TTL_TS'])
+        KEY_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_KEY'], ttl=config['CACHE_TTL_KEY'])
+        MPD_CACHE = TTLCache(maxsize=config.get('CACHE_MAXSIZE_MPD', 100), ttl=config.get('CACHE_TTL_MPD', 30))
+        app.logger.info("Cache ABILITATA su tutte le risorse.")
+    else:
+        M3U8_CACHE = {}
+        TS_CACHE = {}
+        KEY_CACHE = {}
+        MPD_CACHE = {}
+        app.logger.warning("TUTTE LE CACHE DISABILITATE: stream diretto attivo.")
+
 def check_auth(username, password):
     """Verifica le credenziali di accesso"""
     return username == ADMIN_USERNAME and password == ADMIN_PASSWORD
@@ -994,6 +1010,17 @@ def setup_dynamic_mpd_cache():
     MPD_CACHE = {}  # Usa dict normale per TTL dinamico
 
 setup_dynamic_mpd_cache()
+
+@app.route('/admin/cache/toggle', methods=['POST'])
+@login_required
+def toggle_cache():
+    config = config_manager.load_config()
+    new_value = not config.get('CACHE_ENABLED', True)
+    config['CACHE_ENABLED'] = new_value
+    config_manager.save_config(config)
+    config_manager.apply_config_to_app(config)
+    setup_all_caches()
+    return jsonify({"status": "success", "cache_enabled": new_value})
 
 @app.route('/admin/debug/proxies')
 @login_required
@@ -2644,6 +2671,14 @@ CONFIG_TEMPLATE = """
                 <h3>💾 Configurazioni Cache</h3>
                 <div class="row">
                     <div class="col">
+                    <div class="form-group">
+                        <label for="cache_enabled"><b>Cache Abilitata:</b></label>
+                        <select id="cache_enabled" name="CACHE_ENABLED">
+                            <option value="true" {% if config.CACHE_ENABLED %}selected{% endif %}>Abilitata</option>
+                            <option value="false" {% if not config.CACHE_ENABLED %}selected{% endif %}>Disabilitata (stream diretto)</option>
+                        </select>
+                        <small>Se disabilitata, tutte le richieste vengono gestite in streaming diretto senza alcun caching.</small>
+                    </div>
                         <div class="form-group">
                             <label for="cache_ttl_m3u8">TTL Cache M3U8 (secondi):</label>
                             <input type="number" id="cache_ttl_m3u8" name="CACHE_TTL_M3U8" value="{{ config.CACHE_TTL_M3U8 }}" min="1" max="300">
