@@ -2266,42 +2266,66 @@ ADMIN_TEMPLATE = """
     </div>
     
     <div class="container">
-        <div class="admin-grid">
-            <div class="admin-card">
-                <h3>📊 Monitoraggio Sistema</h3>
-                <p>Visualizza statistiche dettagliate del sistema in tempo reale</p>
-                <a href="/dashboard" class="btn">Vai alla Dashboard</a>
-            </div>
-            
-            <div class="admin-card">
-                <h3>🔧 Configurazioni</h3>
-                <p>Gestisci le impostazioni del proxy, timeout, cache e sicurezza</p>
-                <a href="/admin/config" class="btn">Configura Sistema</a>
-            </div>
-            
-            <div class="admin-card">
-                <h3>📝 Log Sistema</h3>
-                <p>Visualizza i log delle attività in tempo reale con streaming</p>
-                <a href="/admin/logs" class="btn">Visualizza Log</a>
-            </div>
-            
-            <div class="admin-card">
-                <h3>🔄 Gestione Cache</h3>
-                <p>Pulisci e gestisci la cache del sistema</p>
-                <button class="btn" onclick="clearCache()">Pulisci Cache</button>
-            </div>
-            
-            <div class="admin-card">
-                <h3>📈 API Statistiche</h3>
-                <p>Accesso alle API JSON per integrazioni esterne</p>
-                <a href="/stats" class="btn">API Endpoint</a>
-            </div>
-            
-            <div class="admin-card">
-                <h3>🛡️ Sicurezza</h3>
-                <p>Gestione IP consentiti e credenziali di accesso</p>
-                <a href="/admin/config#security" class="btn">Impostazioni Sicurezza</a>
-            </div>
+    <div class="admin-grid">
+        <div class="admin-card">
+            <h3>📊 Monitoraggio Sistema</h3>
+            <p>Visualizza statistiche dettagliate del sistema in tempo reale</p>
+            <a href="/dashboard" class="btn">Vai alla Dashboard</a>
+        </div>
+        
+        <div class="admin-card">
+            <h3>🔧 Configurazioni</h3>
+            <p>Gestisci le impostazioni del proxy, timeout, cache e sicurezza</p>
+            <a href="/admin/config" class="btn">Configura Sistema</a>
+        </div>
+        
+        <div class="admin-card">
+            <h3>📝 Log Sistema</h3>
+            <p>Visualizza i log delle attività in tempo reale con streaming</p>
+            <a href="/admin/logs" class="btn">Visualizza Log</a>
+        </div>
+        
+        <div class="admin-card">
+            <h3>🔄 Gestione Cache</h3>
+            <p>Pulisci e gestisci la cache del sistema</p>
+            <button class="btn" onclick="clearCache()">Pulisci Cache</button>
+        </div>
+        
+        <div class="admin-card">
+            <h3>📈 API Statistiche</h3>
+            <p>Accesso alle API JSON per integrazioni esterne</p>
+            <a href="/stats" class="btn">API Endpoint</a>
+        </div>
+        
+        <div class="admin-card">
+            <h3>🛡️ Sicurezza</h3>
+            <p>Gestione IP consentiti e credenziali di accesso</p>
+            <a href="/admin/config#security" class="btn">Impostazioni Sicurezza</a>
+        </div>
+        
+        <!-- NUOVE CARD PER DEBUG -->
+        <div class="admin-card">
+            <h3>🔍 Debug Variabili</h3>
+            <p>Verifica variabili d'ambiente e configurazioni attive</p>
+            <a href="/admin/debug/env" class="btn">Debug Env</a>
+        </div>
+        
+        <div class="admin-card">
+            <h3>🌐 Debug Proxy</h3>
+            <p>Visualizza proxy combinati da file e variabili d'ambiente</p>
+            <a href="/admin/debug/proxies" class="btn">Debug Proxy</a>
+        </div>
+        
+        <div class="admin-card">
+            <h3>🔄 Ricarica Config</h3>
+            <p>Ricarica configurazione dalle variabili d'ambiente</p>
+            <button class="btn" onclick="reloadEnvConfig()">Ricarica da ENV</button>
+        </div>
+        
+        <div class="admin-card">
+            <h3>📺 Test MPD</h3>
+            <p>Test e debug specifico per manifest MPEG-DASH</p>
+            <a href="/test/mpd-debug" class="btn">Test MPD</a>
         </div>
     </div>
     
@@ -2314,6 +2338,20 @@ ADMIN_TEMPLATE = """
                         alert(data.message);
                     })
                     .catch(() => alert('Errore durante la pulizia della cache'));
+            }
+        }
+        
+        function reloadEnvConfig() {
+            if(confirm('Sei sicuro di voler ricaricare la configurazione dalle variabili d\'ambiente?')) {
+                fetch('/admin/config/reload-env', {method: 'POST'})
+                    .then(response => response.json())
+                    .then(data => {
+                        alert(data.message);
+                        if(data.status === 'success') {
+                            setTimeout(() => location.reload(), 1000);
+                        }
+                    })
+                    .catch(() => alert('Errore durante il ricaricamento'));
             }
         }
     </script>
