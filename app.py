@@ -18,7 +18,7 @@ from threading import Thread, Lock
 import weakref
 import hashlib
 from functools import wraps
-import logging
+import loggingf
 from logging.handlers import RotatingFileHandler
 import subprocess
 import concurrent.futures
@@ -28,6 +28,7 @@ import xml.etree.ElementTree as ET
 from mpegdash.parser import MPEGDASHParser
 from datetime import datetime, timedelta
 import math
+from flask_wtf.csrf import csrf
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
@@ -3648,6 +3649,7 @@ def download_log(filename):
 
 @app.route('/admin/clear-cache', methods=['POST'])
 @login_required
+@csrf.exempt 
 def clear_cache():
     """Pulisce tutte le cache"""
     M3U8_CACHE.clear()
