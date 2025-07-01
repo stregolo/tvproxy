@@ -28,6 +28,7 @@ import xml.etree.ElementTree as ET
 from mpegdash.parser import MPEGDASHParser
 from datetime import datetime, timedelta
 import math
+from config_manager import config_manager
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
@@ -1105,15 +1106,18 @@ def proxy_mpd():
     # Cache key
     cache_key = f"mpd_{mpd_url}"
     
-    # Controlla cache dinamica
-    if cache_key in MPD_CACHE:
+    # Carica configurazione cache
+    config = config_manager.load_config()
+    cache_enabled = config.get('CACHE_ENABLED', True)
+    
+    if cache_enabled and cache_key in MPD_CACHE:
         cached_data, cache_time, ttl = MPD_CACHE[cache_key]
         if time.time() - cache_time < ttl:
             app.logger.info(f"Cache HIT per MPD: {mpd_url}")
             return Response(cached_data, content_type="application/dash+xml")
         else:
             del MPD_CACHE[cache_key]
-
+    
     # Headers personalizzati
     headers = {
         unquote(key[2:]).replace("_", "-"): unquote(value).strip()
@@ -1141,8 +1145,10 @@ def proxy_mpd():
         modified_mpd = modify_mpd_urls(mpd_content, final_url, headers)
         
         # Cache dinamico basato sul tipo
-        ttl = get_mpd_cache_ttl(mpd_content)
-        MPD_CACHE[cache_key] = (modified_mpd, time.time(), ttl)
+        # Cache dinamico basato sul tipo
+        if cache_enabled:
+            ttl = get_mpd_cache_ttl(mpd_content)
+            MPD_CACHE[cache_key] = (modified_mpd, time.time(), ttl)
         
         app.logger.info(f"MPD cachato con TTL {ttl}s: {mpd_url}")
         
@@ -3683,10 +3689,15 @@ def proxy_m3u():
     cache_key = f"{m3u_url}|{cache_key_headers}"
 
     # Se è in cache, restituisci subito la cache
-    if cache_key in M3U8_CACHE:
+    # Carica configurazione cache
+    config = config_manager.load_config()
+    cache_enabled = config.get('CACHE_ENABLED', True)
+    
+    if cache_enabled and cache_key in M3U8_CACHE:
         app.logger.info(f"Cache HIT per M3U8: {m3u_url}")
         cached_response = M3U8_CACHE[cache_key]
         return Response(cached_response, content_type="application/vnd.apple.mpegurl")
+
     app.logger.info(f"Cache MISS per M3U8: {m3u_url} (primo avvio, risposta diretta)")
 
     daddy_base_url = get_daddylive_base_url()
@@ -3763,6 +3774,8 @@ def proxy_m3u():
 
         # Salva la cache in background dopo aver risposto
         def cache_later():
+            if not cache_enabled:
+                return
             try:
                 M3U8_CACHE[cache_key] = modified_m3u8_content
                 app.logger.info(f"M3U8 cache salvata per {m3u_url}")
@@ -3829,9 +3842,14 @@ def proxy_ts():
     if not ts_url:
         return "Errore: Parametro 'url' mancante", 400
 
-    if ts_url in TS_CACHE:
+    # Carica configurazione cache
+    config = config_manager.load_config()
+    cache_enabled = config.get('CACHE_ENABLED', True)
+    
+    if cache_enabled and ts_url in TS_CACHE:
         app.logger.info(f"Cache HIT per TS: {ts_url}")
         return Response(TS_CACHE[ts_url], content_type="video/mp2t")
+
     app.logger.info(f"Cache MISS per TS: {ts_url}")
 
     headers = {
@@ -3872,7 +3890,7 @@ def proxy_ts():
                     raise
                 finally:
                     ts_content = b"".join(content_parts)
-                    if ts_content and len(ts_content) > 1024:
+                    if cache_enabled and ts_content and len(ts_content) > 1024:
                         TS_CACHE[ts_url] = ts_content
                         app.logger.info(f"Segmento TS cachato ({len(ts_content)} bytes) per: {ts_url}")
 
@@ -4006,9 +4024,14 @@ def proxy_key():
     if not key_url:
         return "Errore: Parametro 'url' mancante per la chiave", 400
 
-    if key_url in KEY_CACHE:
+    # Carica configurazione cache
+    config = config_manager.load_config()
+    cache_enabled = config.get('CACHE_ENABLED', True)
+    
+    if cache_enabled and key_url in KEY_CACHE:
         app.logger.info(f"Cache HIT per KEY: {key_url}")
         return Response(KEY_CACHE[key_url], content_type="application/octet-stream")
+
     app.logger.info(f"Cache MISS per KEY: {key_url}")
 
     headers = {
@@ -4031,7 +4054,8 @@ def proxy_key():
         response.raise_for_status()
         key_content = response.content
 
-        KEY_CACHE[key_url] = key_content
+        if cache_enabled:
+            KEY_CACHE[key_url] = key_content
         return Response(key_content, content_type="application/octet-stream")
 
     except requests.RequestException as e:
