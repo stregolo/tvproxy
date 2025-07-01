@@ -206,7 +206,8 @@ class ConfigManager:
             'CACHE_MAXSIZE_KEY': 200,
             'ALLOWED_IPS': '',
             'ADMIN_USERNAME': 'admin',
-            'ADMIN_PASSWORD': 'password123'
+            'ADMIN_PASSWORD': 'password123',
+            'CACHE_ENABLED' : True,
         }
         
     def load_config(self):
@@ -226,6 +227,13 @@ class ConfigManager:
         # Combina proxy da variabili d'ambiente con quelli del file
         proxy_keys = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']
         
+        for key in config.keys():
+            if key not in proxy_keys:
+                env_value = os.environ.get(key)
+                if env_value is not None:
+                    if key == 'CACHE_ENABLED':
+                        config[key] = env_value.lower() in ('true', '1', 'yes')
+                        
         for key in proxy_keys:
             env_value = os.environ.get(key)
             if env_value and env_value.strip():
@@ -605,11 +613,6 @@ def get_dynamic_timeout(url, base_timeout=REQUEST_TIMEOUT):
         return base_timeout
 
 setup_proxies()
-
-# --- Configurazione Cache ---
-M3U8_CACHE = TTLCache(maxsize=200, ttl=5)
-TS_CACHE = TTLCache(maxsize=1000, ttl=300) 
-KEY_CACHE = TTLCache(maxsize=200, ttl=300)
 
 # --- Dynamic DaddyLive URL Fetcher ---
 DADDYLIVE_BASE_URL = None
@@ -2671,14 +2674,14 @@ CONFIG_TEMPLATE = """
                 <h3>💾 Configurazioni Cache</h3>
                 <div class="row">
                     <div class="col">
-                    <div class="form-group">
-                        <label for="cache_enabled"><b>Cache Abilitata:</b></label>
-                        <select id="cache_enabled" name="CACHE_ENABLED">
-                            <option value="true" {% if config.CACHE_ENABLED %}selected{% endif %}>Abilitata</option>
-                            <option value="false" {% if not config.CACHE_ENABLED %}selected{% endif %}>Disabilitata (stream diretto)</option>
-                        </select>
-                        <small>Se disabilitata, tutte le richieste vengono gestite in streaming diretto senza alcun caching.</small>
-                    </div>
+                        <div class="form-group">
+                            <label for="cache_enabled"><b>Cache Abilitata:</b></label>
+                            <select id="cache_enabled" name="CACHE_ENABLED">
+                                <option value="true" {% if config.CACHE_ENABLED %}selected{% endif %}>Abilitata</option>
+                                <option value="false" {% if not config.CACHE_ENABLED %}selected{% endif %}>Disabilitata (stream diretto)</option>
+                            </select>
+                            <small>Se disabilitata, tutte le richieste vengono gestite in streaming diretto senza alcun caching.</small>
+                        </div>
                         <div class="form-group">
                             <label for="cache_ttl_m3u8">TTL Cache M3U8 (secondi):</label>
                             <input type="number" id="cache_ttl_m3u8" name="CACHE_TTL_M3U8" value="{{ config.CACHE_TTL_M3U8 }}" min="1" max="300">
@@ -3448,6 +3451,13 @@ def save_config():
     """Salva la configurazione"""
     try:
         new_config = request.get_json()
+
+        if 'CACHE_ENABLED' in new_config:
+            val = new_config['CACHE_ENABLED']
+            if isinstance(val, str):
+                new_config['CACHE_ENABLED'] = val.lower() in ('true', '1', 'yes')
+            else:
+                new_config['CACHE_ENABLED'] = bool(val)
         
         # Valida la configurazione
         if not isinstance(new_config, dict):
@@ -4034,6 +4044,8 @@ def proxy_key():
     except requests.RequestException as e:
         app.logger.error(f"Errore durante il download della chiave AES-128: {str(e)}")
         return f"Errore durante il download della chiave AES-128: {str(e)}", 500
+
+setup_all_caches()
 
 # --- Inizializzazione dell'app ---
 
