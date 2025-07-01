@@ -3460,10 +3460,6 @@ def save_config():
             else:
                 new_config['CACHE_ENABLED'] = bool(val)
         
-        # Valida la configurazione
-        if not isinstance(new_config, dict):
-            return jsonify({"status": "error", "message": "Configurazione non valida"})
-        
         # Salva la configurazione
         if config_manager.save_config(new_config):
             config_manager.apply_config_to_app(new_config)
