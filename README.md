@@ -96,7 +96,7 @@ CACHE_MAXSIZE_KEY=50
 
 ## 🚫 Disattivare la Cache per Streaming Diretto
 
-Se vuoi **disabilitare completamente la cache** (ad esempio per streaming diretto e contenuti sempre aggiornati), puoi farlo aggiungendo questa riga al tuo file `.env`:
+  Se vuoi **disabilitare completamente la cache** (ad esempio per streaming diretto e contenuti sempre aggiornati), oi farlo aggiungendo questa riga al tuo file `.env` oppure dall`interfaccia web:
 
 ```
 CACHE_ENABLED=False
@@ -154,7 +154,7 @@ REQUEST_TIMEOUT=60
 
 ## 🚫 Disattivare la Cache per Streaming Diretto
 
-Se vuoi **disabilitare completamente la cache** (ad esempio per streaming diretto e contenuti sempre aggiornati), puoi farlo aggiungendo questa riga al tuo file `.env`:
+Se vuoi **disabilitare completamente la cache** (ad esempio per streaming diretto e contenuti sempre aggiornati), puoi farlo aggiungendo questa riga al tuo file `.env` oppure dall`interfaccia web:
 
 ```
 CACHE_ENABLED=False
