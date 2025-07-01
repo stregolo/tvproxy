@@ -3470,6 +3470,7 @@ def save_config():
             
             # Riavvia i proxy se necessario
             setup_proxies()
+            setup_all_caches()
             
             app.logger.info(f"Configurazione aggiornata dall'utente {session.get('username', 'unknown')}")
             return jsonify({"status": "success", "message": "Configurazione salvata con successo! Riavvia l'applicazione per applicare tutte le modifiche."})
