@@ -194,7 +194,7 @@ class ConfigManager:
         }
         
     def load_config(self):
-        """Carica la configurazione dando priorità alle variabili d'ambiente"""
+        """Carica la configurazione combinando proxy da file e variabili d'ambiente"""
         # Inizia con i valori di default
         config = self.default_config.copy()
         
@@ -207,22 +207,54 @@ class ConfigManager:
             except Exception as e:
                 app.logger.error(f"Errore nel caricamento della configurazione: {e}")
         
-        # Sovrascrivi con le variabili d'ambiente (PRIORITÀ MASSIMA)
-        for key in config.keys():
+        # Combina proxy da variabili d'ambiente con quelli del file
+        proxy_keys = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']
+        
+        for key in proxy_keys:
             env_value = os.environ.get(key)
-            if env_value is not None:
-                # Converti il tipo appropriato
-                if key in ['VERIFY_SSL']:
-                    config[key] = env_value.lower() in ('true', '1', 'yes')
-                elif key in ['REQUEST_TIMEOUT', 'KEEP_ALIVE_TIMEOUT', 'MAX_KEEP_ALIVE_REQUESTS', 
-                            'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'CACHE_TTL_M3U8', 'CACHE_TTL_TS', 
-                            'CACHE_TTL_KEY', 'CACHE_MAXSIZE_M3U8', 'CACHE_MAXSIZE_TS', 'CACHE_MAXSIZE_KEY']:
-                    try:
-                        config[key] = int(env_value)
-                    except ValueError:
-                        app.logger.warning(f"Valore non valido per {key}: {env_value}")
-                else:
-                    config[key] = env_value
+            if env_value and env_value.strip():
+                file_value = config.get(key, '')
+                
+                # Combina i proxy: prima quelli del file, poi quelli delle env vars
+                combined_proxies = []
+                
+                # Aggiungi proxy dal file
+                if file_value and file_value.strip():
+                    file_proxies = [p.strip() for p in file_value.split(',') if p.strip()]
+                    combined_proxies.extend(file_proxies)
+                
+                # Aggiungi proxy dalle variabili d'ambiente
+                env_proxies = [p.strip() for p in env_value.split(',') if p.strip()]
+                combined_proxies.extend(env_proxies)
+                
+                # Rimuovi duplicati mantenendo l'ordine
+                unique_proxies = []
+                for proxy in combined_proxies:
+                    if proxy not in unique_proxies:
+                        unique_proxies.append(proxy)
+                
+                # Aggiorna la configurazione con i proxy combinati
+                config[key] = ','.join(unique_proxies)
+                
+                app.logger.info(f"Proxy combinati per {key}: {len(unique_proxies)} totali")
+        
+        # Per le altre variabili, mantieni la priorità alle env vars
+        for key in config.keys():
+            if key not in proxy_keys:  # Salta i proxy che abbiamo già gestito
+                env_value = os.environ.get(key)
+                if env_value is not None:
+                    # Converti il tipo appropriato
+                    if key in ['VERIFY_SSL']:
+                        config[key] = env_value.lower() in ('true', '1', 'yes')
+                    elif key in ['REQUEST_TIMEOUT', 'KEEP_ALIVE_TIMEOUT', 'MAX_KEEP_ALIVE_REQUESTS', 
+                                'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'CACHE_TTL_M3U8', 'CACHE_TTL_TS', 
+                                'CACHE_TTL_KEY', 'CACHE_MAXSIZE_M3U8', 'CACHE_MAXSIZE_TS', 'CACHE_MAXSIZE_KEY']:
+                        try:
+                            config[key] = int(env_value)
+                        except ValueError:
+                            app.logger.warning(f"Valore non valido per {key}: {env_value}")
+                    else:
+                        config[key] = env_value
         
         return config
     
@@ -962,6 +994,33 @@ def setup_dynamic_mpd_cache():
     MPD_CACHE = {}  # Usa dict normale per TTL dinamico
 
 setup_dynamic_mpd_cache()
+
+@app.route('/admin/debug/proxies')
+@login_required
+def debug_proxies():
+    """Debug dei proxy combinati"""
+    config = config_manager.load_config()
+    
+    proxy_info = {}
+    for proxy_type in ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']:
+        proxy_string = config.get(proxy_type, '')
+        if proxy_string:
+            proxies = [p.strip() for p in proxy_string.split(',') if p.strip()]
+            proxy_info[proxy_type] = {
+                'count': len(proxies),
+                'proxies': proxies,
+                'env_value': os.environ.get(proxy_type, 'NON_IMPOSTATA'),
+                'combined': proxy_string
+            }
+        else:
+            proxy_info[proxy_type] = {
+                'count': 0,
+                'proxies': [],
+                'env_value': os.environ.get(proxy_type, 'NON_IMPOSTATA'),
+                'combined': ''
+            }
+    
+    return jsonify(proxy_info)
 
 @app.route('/admin/debug/env')
 @login_required
