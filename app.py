@@ -33,9 +33,10 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+secure_flag = os.environ.get('FLASK_ENV') == 'production'
 app.config.update(
-    SESSION_COOKIE_SAMESITE=None,
-    SESSION_COOKIE_SECURE=True
+    SESSION_COOKIE_SAMESITE='None',
+    SESSION_COOKIE_SECURE=secure_flag
 )
 
 load_dotenv()
