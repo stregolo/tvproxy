@@ -613,6 +613,7 @@ def get_dynamic_timeout(url, base_timeout=REQUEST_TIMEOUT):
         return base_timeout
 
 setup_proxies()
+setup_all_caches()
 
 # --- Dynamic DaddyLive URL Fetcher ---
 DADDYLIVE_BASE_URL = None
