@@ -1945,6 +1945,10 @@ DASHBOARD_TEMPLATE = """
                     <h4>/proxy/ts</h4>
                     <p>Proxy per segmenti TS con caching</p>
                 </div>
+                <div class="endpoint-card touchable" onclick="copyToClipboard('/proxy/key')">
+                    <h4>/proxy/key</h4>
+                    <p>Proxy per chiavi di decrittazione AES-128</p>
+                </div>
                 <div class="endpoint-card touchable" onclick="copyToClipboard('/proxy/mpd')">
                     <h4>/proxy/mpd</h4>
                     <p>Proxy per manifest MPEG-DASH con supporto live e VOD</p>
@@ -1957,10 +1961,26 @@ DASHBOARD_TEMPLATE = """
                     <h4>/proxy/dash-master</h4>
                     <p>Generatore master manifest DASH</p>
                 </div>
+                <div class="endpoint-card touchable" onclick="copyToClipboard('/admin/debug/env')">
+                    <h4>/admin/debug/env</h4>
+                    <p>Debug variabili d'ambiente e configurazioni</p>
+                </div>
+                <div class="endpoint-card touchable" onclick="copyToClipboard('/admin/debug/proxies')">
+                    <h4>/admin/debug/proxies</h4>
+                    <p>Debug proxy combinati da file e variabili d'ambiente</p>
+                </div>
+                <div class="endpoint-card touchable" onclick="copyToClipboard('/admin/config/reload-env')">
+                    <h4>/admin/config/reload-env</h4>
+                    <p>Ricarica configurazione dalle variabili d'ambiente</p>
+                </div>
+                <div class="endpoint-card touchable" onclick="copyToClipboard('/test/mpd-debug')">
+                    <h4>/test/mpd-debug</h4>
+                    <p>Test e debug specifico per manifest MPD</p>
+                </div>
             </div>
         </div>
     </div>
-
+    
     <div class="connection-status" id="connectionStatus">
         <span id="statusIcon">🔄</span>
         <span id="statusText">Connessione in corso...</span>
