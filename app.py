@@ -3648,11 +3648,9 @@ def download_log(filename):
 @login_required
 def clear_cache():
     """Pulisce tutte le cache"""
-    global M3U8_CACHE, TS_CACHE, KEY_CACHE, MPD_CACHE
     M3U8_CACHE.clear()
     TS_CACHE.clear()
     KEY_CACHE.clear()
-    MPD_CACHE.clear()
     cleanup_sessions()
     app.logger.info(f"Cache pulita dall'utente {session.get('username', 'unknown')}")
     return jsonify({"status": "success", "message": "Cache pulita con successo"})
