@@ -194,14 +194,37 @@ class ConfigManager:
         }
         
     def load_config(self):
-        """Carica la configurazione dal file JSON"""
+        """Carica la configurazione dando priorità alle variabili d'ambiente"""
+        # Inizia con i valori di default
+        config = self.default_config.copy()
+        
+        # Carica dal file se esiste (seconda priorità)
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r') as f:
-                    return json.load(f)
+                    file_config = json.load(f)
+                    config.update(file_config)
             except Exception as e:
                 app.logger.error(f"Errore nel caricamento della configurazione: {e}")
-        return self.default_config.copy()
+        
+        # Sovrascrivi con le variabili d'ambiente (PRIORITÀ MASSIMA)
+        for key in config.keys():
+            env_value = os.environ.get(key)
+            if env_value is not None:
+                # Converti il tipo appropriato
+                if key in ['VERIFY_SSL']:
+                    config[key] = env_value.lower() in ('true', '1', 'yes')
+                elif key in ['REQUEST_TIMEOUT', 'KEEP_ALIVE_TIMEOUT', 'MAX_KEEP_ALIVE_REQUESTS', 
+                            'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'CACHE_TTL_M3U8', 'CACHE_TTL_TS', 
+                            'CACHE_TTL_KEY', 'CACHE_MAXSIZE_M3U8', 'CACHE_MAXSIZE_TS', 'CACHE_MAXSIZE_KEY']:
+                    try:
+                        config[key] = int(env_value)
+                    except ValueError:
+                        app.logger.warning(f"Valore non valido per {key}: {env_value}")
+                else:
+                    config[key] = env_value
+        
+        return config
     
     def save_config(self, config):
         """Salva la configurazione nel file JSON"""
@@ -939,6 +962,48 @@ def setup_dynamic_mpd_cache():
     MPD_CACHE = {}  # Usa dict normale per TTL dinamico
 
 setup_dynamic_mpd_cache()
+
+@app.route('/admin/debug/env')
+@login_required
+def debug_env():
+    """Debug delle variabili d'ambiente"""
+    env_vars = {}
+    config_keys = [
+        'ADMIN_PASSWORD', 'SECRET_KEY', 'CACHE_TTL_M3U8', 'CACHE_MAXSIZE_M3U8',
+        'CACHE_TTL_TS', 'CACHE_MAXSIZE_TS', 'CACHE_TTL_KEY', 'CACHE_MAXSIZE_KEY',
+        'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'MAX_KEEP_ALIVE_REQUESTS',
+        'KEEP_ALIVE_TIMEOUT', 'REQUEST_TIMEOUT'
+    ]
+    
+    for key in config_keys:
+        env_vars[key] = {
+            'env_value': os.environ.get(key, 'NON_IMPOSTATA'),
+            'current_config': config_manager.load_config().get(key, 'NON_TROVATA')
+        }
+    
+    return jsonify(env_vars)
+
+@app.route('/admin/config/reload-env', methods=['POST'])
+@login_required
+def reload_env_config():
+    """Ricarica la configurazione dalle variabili d'ambiente"""
+    try:
+        # Ricarica la configurazione (ora con priorità alle env vars)
+        config = config_manager.load_config()
+        
+        # Salva la configurazione aggiornata
+        if config_manager.save_config(config):
+            config_manager.apply_config_to_app(config)
+            setup_proxies()
+            return jsonify({
+                "status": "success", 
+                "message": "Configurazione ricaricata con priorità alle variabili d'ambiente"
+            })
+        else:
+            return jsonify({"status": "error", "message": "Errore nel salvataggio"})
+            
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"Errore: {str(e)}"})
 
 @app.route('/proxy/mpd')
 def proxy_mpd():
