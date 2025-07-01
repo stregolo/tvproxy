@@ -1,3 +1,4 @@
+
 from flask import Flask, request, Response, jsonify, render_template_string, session, redirect, url_for
 import requests
 from urllib.parse import urlparse, urljoin, quote, unquote
@@ -18,7 +19,7 @@ from threading import Thread, Lock
 import weakref
 import hashlib
 from functools import wraps
-import loggingf
+import logging
 from logging.handlers import RotatingFileHandler
 import subprocess
 import concurrent.futures
@@ -1059,12 +1060,10 @@ def debug_env():
     """Debug delle variabili d'ambiente"""
     env_vars = {}
     config_keys = [
-        'ADMIN_PASSWORD', 'SECRET_KEY', 'CACHE_ENABLED',
-        'CACHE_TTL_M3U8', 'CACHE_MAXSIZE_M3U8',
-        'CACHE_TTL_TS', 'CACHE_MAXSIZE_TS', 
-        'CACHE_TTL_KEY', 'CACHE_MAXSIZE_KEY',
-        'POOL_CONNECTIONS', 'POOL_MAXSIZE', 
-        'MAX_KEEP_ALIVE_REQUESTS', 'KEEP_ALIVE_TIMEOUT', 'REQUEST_TIMEOUT'
+        'ADMIN_PASSWORD', 'SECRET_KEY', 'CACHE_TTL_M3U8', 'CACHE_MAXSIZE_M3U8',
+        'CACHE_TTL_TS', 'CACHE_MAXSIZE_TS', 'CACHE_TTL_KEY', 'CACHE_MAXSIZE_KEY',
+        'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'MAX_KEEP_ALIVE_REQUESTS',
+        'KEEP_ALIVE_TIMEOUT', 'REQUEST_TIMEOUT'
     ]
     
     for key in config_keys:
