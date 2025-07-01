@@ -268,7 +268,7 @@ class ConfigManager:
                 env_value = os.environ.get(key)
                 if env_value is not None:
                     # Converti il tipo appropriato
-                    if key in ['VERIFY_SSL']:
+                    if key in ['VERIFY_SSL', 'CACHE_ENABLED']:
                         config[key] = env_value.lower() in ('true', '1', 'yes')
                     elif key in ['REQUEST_TIMEOUT', 'KEEP_ALIVE_TIMEOUT', 'MAX_KEEP_ALIVE_REQUESTS', 
                                 'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'CACHE_TTL_M3U8', 'CACHE_TTL_TS', 
