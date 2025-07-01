@@ -28,7 +28,6 @@ import xml.etree.ElementTree as ET
 from mpegdash.parser import MPEGDASHParser
 from datetime import datetime, timedelta
 import math
-from config_manager import config_manager
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
