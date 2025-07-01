@@ -1,4 +1,3 @@
-
 from flask import Flask, request, Response, jsonify, render_template_string, session, redirect, url_for
 import requests
 from urllib.parse import urlparse, urljoin, quote, unquote
@@ -2369,26 +2368,59 @@ ADMIN_TEMPLATE = """
     <script>
         function clearCache() {
             if(confirm('Sei sicuro di voler pulire la cache del sistema?')) {
-                fetch('/admin/clear-cache', {method: 'POST'})
-                    .then(response => response.json())
-                    .then(data => {
-                        alert(data.message);
-                    })
-                    .catch(() => alert('Errore durante la pulizia della cache'));
+                fetch('/admin/clear-cache', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    alert(data.message);
+                    if(data.status === 'success') {
+                        location.reload();
+                    }
+                })
+                .catch(error => {
+                    console.error('Errore:', error);
+                    alert('Errore durante la pulizia della cache: ' + error.message);
+                });
             }
         }
         
         function reloadEnvConfig() {
             if(confirm('Sei sicuro di voler ricaricare la configurazione dalle variabili d\'ambiente?')) {
-                fetch('/admin/config/reload-env', {method: 'POST'})
-                    .then(response => response.json())
-                    .then(data => {
-                        alert(data.message);
-                        if(data.status === 'success') {
-                            setTimeout(() => location.reload(), 1000);
-                        }
-                    })
-                    .catch(() => alert('Errore durante il ricaricamento'));
+                fetch('/admin/config/reload-env', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    alert(data.message);
+                    if(data.status === 'success') {
+                        setTimeout(() => location.reload(), 1000);
+                    }
+                })
+                .catch(error => {
+                    console.error('Errore:', error);
+                    alert('Errore durante il ricaricamento: ' + error.message);
+                });
             }
         }
     </script>
