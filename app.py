@@ -2662,6 +2662,14 @@ CONFIG_TEMPLATE = """
                             <label for="cache_maxsize_ts">Max Size Cache TS:</label>
                             <input type="number" id="cache_maxsize_ts" name="CACHE_MAXSIZE_TS" value="{{ config.CACHE_MAXSIZE_TS }}" min="100" max="5000">
                         </div>
+                        <div class="form-group">
+                            <label for="cache_ttl_key">TTL Cache KEY (secondi):</label>
+                            <input type="number" id="cache_ttl_key" name="CACHE_TTL_KEY" value="{{ config.CACHE_TTL_KEY }}" min="1" max="300">
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_maxsize_key">Max Size Cache KEY:</label>
+                            <input type="number" id="cache_maxsize_key" name="CACHE_MAXSIZE_KEY" value="{{ config.CACHE_MAXSIZE_KEY }}" min="10" max="1000">
+                        </div>
                     </div>
                 </div>
             </div>
