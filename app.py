@@ -33,6 +33,11 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
 socketio = SocketIO(app, cors_allowed_origins="*")
 
+# Disabilita SameSite per inviare il cookie su tutte le richieste
+app.config['SESSION_COOKIE_SAMESITE'] = None  
+# In produzione, richiede HTTPS per inviare il cookie
+app.config['SESSION_COOKIE_SECURE'] = True  
+
 load_dotenv()
 
 # --- Configurazione Autenticazione ---
