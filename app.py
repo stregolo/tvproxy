@@ -28,6 +28,7 @@ import xml.etree.ElementTree as ET
 from mpegdash.parser import MPEGDASHParser
 from datetime import datetime, timedelta
 import math
+from config_manager import config_manager
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
@@ -2367,33 +2368,27 @@ ADMIN_TEMPLATE = """
     
     <script>
         function clearCache() {
-            if (confirm('Sei sicuro di voler pulire la cache del sistema?')) {
-                fetch('/admin/clear-cache', {
-                    method: 'POST',
-                    credentials: 'include'
-                })
-                .then(response => response.json())
-                .then(data => {
-                    alert(data.message);
-                })
-                .catch(() => alert('Errore durante la pulizia della cache'));
+            if(confirm('Sei sicuro di voler pulire la cache del sistema?')) {
+                fetch('/admin/clear-cache', {method: 'POST'})
+                    .then(response => response.json())
+                    .then(data => {
+                        alert(data.message);
+                    })
+                    .catch(() => alert('Errore durante la pulizia della cache'));
             }
         }
         
         function reloadEnvConfig() {
-            if (confirm('Sei sicuro di voler ricaricare la configurazione dalle variabili d\'ambiente?')) {
-                fetch('/admin/config/reload-env', {
-                    method: 'POST',
-                    credentials: 'include'
-                })
-                .then(response => response.json())
-                .then(data => {
-                    alert(data.message);
-                    if (data.status === 'success') {
-                        setTimeout(() => location.reload(), 1000);
-                    }
-                })
-                .catch(() => alert('Errore durante il ricaricamento'));
+            if(confirm('Sei sicuro di voler ricaricare la configurazione dalle variabili d\'ambiente?')) {
+                fetch('/admin/config/reload-env', {method: 'POST'})
+                    .then(response => response.json())
+                    .then(data => {
+                        alert(data.message);
+                        if(data.status === 'success') {
+                            setTimeout(() => location.reload(), 1000);
+                        }
+                    })
+                    .catch(() => alert('Errore durante il ricaricamento'));
             }
         }
     </script>
@@ -3654,9 +3649,11 @@ def download_log(filename):
 @login_required
 def clear_cache():
     """Pulisce tutte le cache"""
+    global M3U8_CACHE, TS_CACHE, KEY_CACHE, MPD_CACHE
     M3U8_CACHE.clear()
     TS_CACHE.clear()
     KEY_CACHE.clear()
+    MPD_CACHE.clear()
     cleanup_sessions()
     app.logger.info(f"Cache pulita dall'utente {session.get('username', 'unknown')}")
     return jsonify({"status": "success", "message": "Cache pulita con successo"})
