@@ -32,6 +32,7 @@ import math
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
 socketio = SocketIO(app, cors_allowed_origins="*")
+app.permanent_session_lifetime = timedelta(minutes=5)
 
 load_dotenv()
 
@@ -2168,6 +2169,11 @@ DASHBOARD_TEMPLATE = """
             document.head.appendChild(style);
         });
     </script>
+    <script>
+    window.addEventListener('beforeunload', function() {
+        navigator.sendBeacon('/logout');
+    });
+    </script>
 </body>
 </html>
 """
@@ -2854,6 +2860,11 @@ CONFIG_TEMPLATE = """
             });
         }
     </script>
+    <script>
+    window.addEventListener('beforeunload', function() {
+        navigator.sendBeacon('/logout');
+    });
+    </script>
 </body>
 </html>
 """
@@ -3225,6 +3236,11 @@ LOG_TEMPLATE = """
                 eventSource.close();
             }
         });
+    </script>
+    <script>
+    window.addEventListener('beforeunload', function() {
+        navigator.sendBeacon('/logout');
+    });
     </script>
 </body>
 </html>
