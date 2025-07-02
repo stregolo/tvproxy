@@ -1059,12 +1059,10 @@ def debug_env():
     """Debug delle variabili d'ambiente"""
     env_vars = {}
     config_keys = [
-        'ADMIN_PASSWORD', 'SECRET_KEY', 'CACHE_ENABLED',
-        'CACHE_TTL_M3U8', 'CACHE_MAXSIZE_M3U8',
-        'CACHE_TTL_TS', 'CACHE_MAXSIZE_TS', 
-        'CACHE_TTL_KEY', 'CACHE_MAXSIZE_KEY',
-        'POOL_CONNECTIONS', 'POOL_MAXSIZE', 
-        'MAX_KEEP_ALIVE_REQUESTS', 'KEEP_ALIVE_TIMEOUT', 'REQUEST_TIMEOUT'
+        'ADMIN_PASSWORD', 'SECRET_KEY', 'CACHE_TTL_M3U8', 'CACHE_MAXSIZE_M3U8',
+        'CACHE_TTL_TS', 'CACHE_MAXSIZE_TS', 'CACHE_TTL_KEY', 'CACHE_MAXSIZE_KEY',
+        'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'MAX_KEEP_ALIVE_REQUESTS',
+        'KEEP_ALIVE_TIMEOUT', 'REQUEST_TIMEOUT'
     ]
     
     for key in config_keys:
@@ -1075,27 +1073,40 @@ def debug_env():
     
     return jsonify(env_vars)
 
+# ROTTA MODIFICATA: Ricarica da ENV
 @app.route('/admin/config/reload-env', methods=['POST'])
 @login_required
 def reload_env_config():
-    """Ricarica la configurazione dalle variabili d'ambiente"""
+    """Ricarica la configurazione dal file .env e la applica all'applicazione."""
     try:
-        # Ricarica la configurazione (ora con priorità alle env vars)
+        # FORZA LA RILETTURA DEL FILE .env
+        # L'opzione override=True garantisce che le variabili d'ambiente in memoria
+        # vengano sovrascritte con i nuovi valori letti dal file.
+        load_dotenv(override=True)
+        app.logger.info("File .env ricaricato manualmente tramite pannello admin.")
+        
+        # Ricarica la configurazione dall'ambiente aggiornato
         config = config_manager.load_config()
         
-        # Salva la configurazione aggiornata
+        # Salva e applica la nuova configurazione
         if config_manager.save_config(config):
             config_manager.apply_config_to_app(config)
+            
+            # Riapplica le configurazioni dipendenti dall'ambiente
             setup_proxies()
+            setup_all_caches()
+            
+            app.logger.info("Configurazione applicata con successo dopo ricarica da .env.")
             return jsonify({
                 "status": "success", 
-                "message": "Configurazione ricaricata con priorità alle variabili d'ambiente"
+                "message": "Configurazione ricaricata con successo dal file .env. Le modifiche sono ora attive."
             })
         else:
-            return jsonify({"status": "error", "message": "Errore nel salvataggio"})
+            return jsonify({"status": "error", "message": "Errore nel salvataggio della configurazione aggiornata"})
             
     except Exception as e:
-        return jsonify({"status": "error", "message": f"Errore: {str(e)}"})
+        app.logger.error(f"Errore critico durante il ricaricamento da ENV: {e}")
+        return jsonify({"status": "error", "message": f"Errore durante il ricaricamento: {str(e)}"}), 500
 
 @app.route('/proxy/mpd')
 def proxy_mpd():
@@ -2370,26 +2381,59 @@ ADMIN_TEMPLATE = """
     <script>
         function clearCache() {
             if(confirm('Sei sicuro di voler pulire la cache del sistema?')) {
-                fetch('/admin/clear-cache', {method: 'POST'})
-                    .then(response => response.json())
-                    .then(data => {
-                        alert(data.message);
-                    })
-                    .catch(() => alert('Errore durante la pulizia della cache'));
+                fetch('/admin/clear-cache', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    alert(data.message);
+                    if(data.status === 'success') {
+                        location.reload();
+                    }
+                })
+                .catch(error => {
+                    console.error('Errore:', error);
+                    alert('Errore durante la pulizia della cache: ' + error.message);
+                });
             }
         }
         
         function reloadEnvConfig() {
             if(confirm('Sei sicuro di voler ricaricare la configurazione dalle variabili d\'ambiente?')) {
-                fetch('/admin/config/reload-env', {method: 'POST'})
-                    .then(response => response.json())
-                    .then(data => {
-                        alert(data.message);
-                        if(data.status === 'success') {
-                            setTimeout(() => location.reload(), 1000);
-                        }
-                    })
-                    .catch(() => alert('Errore durante il ricaricamento'));
+                fetch('/admin/config/reload-env', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    alert(data.message);
+                    if(data.status === 'success') {
+                        setTimeout(() => location.reload(), 1000);
+                    }
+                })
+                .catch(error => {
+                    console.error('Errore:', error);
+                    alert('Errore durante il ricaricamento: ' + error.message);
+                });
             }
         }
     </script>
@@ -3646,16 +3690,26 @@ def download_log(filename):
         app.logger.error(f"Errore nel download log {filename}: {e}")
         return f"Errore nel download: {str(e)}", 500
 
+# NUOVA ROTTA: Pulisci Cache
 @app.route('/admin/clear-cache', methods=['POST'])
 @login_required
 def clear_cache():
-    """Pulisce tutte le cache"""
-    M3U8_CACHE.clear()
-    TS_CACHE.clear()
-    KEY_CACHE.clear()
-    cleanup_sessions()
-    app.logger.info(f"Cache pulita dall'utente {session.get('username', 'unknown')}")
-    return jsonify({"status": "success", "message": "Cache pulita con successo"})
+    """Pulisce tutte le cache di sistema (M3U8, TS, KEY, MPD)."""
+    try:
+        # La funzione setup_all_caches() reinizializza le cache,
+        # che è il modo più efficace per pulirle completamente.
+        setup_all_caches()
+        app.logger.info("Cache di sistema pulita manualmente dall'amministratore.")
+        return jsonify({
+            "status": "success", 
+            "message": "Tutte le cache (M3U8, TS, KEY, MPD) sono state pulite con successo."
+        })
+    except Exception as e:
+        app.logger.error(f"Errore durante la pulizia manuale della cache: {e}")
+        return jsonify({
+            "status": "error", 
+            "message": f"Errore durante la pulizia della cache: {str(e)}"
+        }), 500
 
 @app.route('/stats')
 def get_stats():
