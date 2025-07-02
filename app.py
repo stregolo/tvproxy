@@ -1073,41 +1073,6 @@ def debug_env():
     
     return jsonify(env_vars)
 
-# ROTTA MODIFICATA: Ricarica da ENV
-@app.route('/admin/config/reload-env', methods=['POST'])
-@login_required
-def reload_env_config():
-    """Ricarica la configurazione dal file .env e la applica all'applicazione."""
-    try:
-        # FORZA LA RILETTURA DEL FILE .env
-        # L'opzione override=True garantisce che le variabili d'ambiente in memoria
-        # vengano sovrascritte con i nuovi valori letti dal file.
-        load_dotenv(override=True)
-        app.logger.info("File .env ricaricato manualmente tramite pannello admin.")
-        
-        # Ricarica la configurazione dall'ambiente aggiornato
-        config = config_manager.load_config()
-        
-        # Salva e applica la nuova configurazione
-        if config_manager.save_config(config):
-            config_manager.apply_config_to_app(config)
-            
-            # Riapplica le configurazioni dipendenti dall'ambiente
-            setup_proxies()
-            setup_all_caches()
-            
-            app.logger.info("Configurazione applicata con successo dopo ricarica da .env.")
-            return jsonify({
-                "status": "success", 
-                "message": "Configurazione ricaricata con successo dal file .env. Le modifiche sono ora attive."
-            })
-        else:
-            return jsonify({"status": "error", "message": "Errore nel salvataggio della configurazione aggiornata"})
-            
-    except Exception as e:
-        app.logger.error(f"Errore critico durante il ricaricamento da ENV: {e}")
-        return jsonify({"status": "error", "message": f"Errore durante il ricaricamento: {str(e)}"}), 500
-
 @app.route('/proxy/mpd')
 def proxy_mpd():
     """Proxy per file MPD MPEG-DASH con supporto proxy e caching dinamico"""
@@ -2018,10 +1983,6 @@ DASHBOARD_TEMPLATE = """
                     <h4>/admin/debug/proxies</h4>
                     <p>Debug proxy combinati da file e variabili d'ambiente</p>
                 </div>
-                <div class="endpoint-card touchable" onclick="copyToClipboard('/admin/config/reload-env')">
-                    <h4>/admin/config/reload-env</h4>
-                    <p>Ricarica configurazione dalle variabili d'ambiente</p>
-                </div>
                 <div class="endpoint-card touchable" onclick="copyToClipboard('/test/mpd-debug')">
                     <h4>/test/mpd-debug</h4>
                     <p>Test e debug specifico per manifest MPD</p>
@@ -2366,12 +2327,6 @@ ADMIN_TEMPLATE = """
         </div>
         
         <div class="admin-card">
-            <h3>🔄 Ricarica Config</h3>
-            <p>Ricarica configurazione dalle variabili d'ambiente</p>
-            <button class="btn" onclick="reloadEnvConfig()">Ricarica da ENV</button>
-        </div>
-        
-        <div class="admin-card">
             <h3>📺 Test MPD</h3>
             <p>Test e debug specifico per manifest MPEG-DASH</p>
             <a href="/test/mpd-debug" class="btn">Test MPD</a>
@@ -2404,35 +2359,6 @@ ADMIN_TEMPLATE = """
                 .catch(error => {
                     console.error('Errore:', error);
                     alert('Errore durante la pulizia della cache: ' + error.message);
-                });
-            }
-        }
-        
-        function reloadEnvConfig() {
-            if(confirm('Sei sicuro di voler ricaricare la configurazione dalle variabili d\'ambiente?')) {
-                fetch('/admin/config/reload-env', {
-                    method: 'POST',
-                    credentials: 'include',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-Requested-With': 'XMLHttpRequest'
-                    }
-                })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    alert(data.message);
-                    if(data.status === 'success') {
-                        setTimeout(() => location.reload(), 1000);
-                    }
-                })
-                .catch(error => {
-                    console.error('Errore:', error);
-                    alert('Errore durante il ricaricamento: ' + error.message);
                 });
             }
         }
