@@ -209,8 +209,9 @@ class ConfigManager:
             'ADMIN_USERNAME': 'admin',
             'ADMIN_PASSWORD': 'password123',
             'CACHE_ENABLED' : True,
+            'NO_PROXY_DOMAINS': 'github.com',
         }
-        
+        s
     def load_config(self):
         """Carica la configurazione combinando proxy da file e variabili d'ambiente"""
         # Inizia con i valori di default
@@ -509,17 +510,16 @@ def setup_proxies():
         app.logger.info("Nessun proxy (SOCKS5, HTTP, HTTPS) configurato.")
 
 def get_proxy_for_url(url):
-    """Seleziona un proxy casuale dalla lista, ma lo salta per i domini GitHub."""
+    config = config_manager.load_config()
+    no_proxy_domains = [d.strip() for d in config.get('NO_PROXY_DOMAINS', '').split(',') if d.strip()]
     if not PROXY_LIST:
         return None
-
     try:
         parsed_url = urlparse(url)
-        if 'github.com' in parsed_url.netloc:
+        if any(domain in parsed_url.netloc for domain in no_proxy_domains):
             return None
     except Exception:
         pass
-
     chosen_proxy = random.choice(PROXY_LIST)
     return {'http': chosen_proxy, 'https': chosen_proxy}
 
@@ -2607,6 +2607,11 @@ CONFIG_TEMPLATE = """
                         <div class="form-group">
                             <label for="https_proxy">Proxy HTTPS:</label>
                             <textarea id="https_proxy" name="HTTPS_PROXY" rows="2" placeholder="https://proxy1:8080,https://proxy2:8080">{{ config.HTTPS_PROXY }}</textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="no_proxy_domains"><b>Domini senza proxy:</b></label>
+                            <input type="text" id="no_proxy_domains" name="NO_PROXY_DOMAINS" value="{{ config.NO_PROXY_DOMAINS }}" placeholder="vavoo.to,newkso.ru,daddylive.sx">
+                            <small>Lista di domini separati da virgola per cui NON usare il proxy</small>
                         </div>
                     </div>
                 </div>
