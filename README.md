@@ -260,11 +260,14 @@ http://<server-ip>:7860/proxy/key?url=<URL_CHIAVE>&h_<HEADER>=<VALORE>
 
 ## 🔁 Configurazione Proxy (Opzionale)
 
-| Variabile      | Descrizione                                              | Esempio                                   |
-|----------------|----------------------------------------------------------|-------------------------------------------|
-| `SOCKS5_PROXY` | Uno o più proxy SOCKS5, separati da virgola              | `socks5://user:pass@host:port,...`        |
-| `HTTP_PROXY`   | Proxy HTTP (usare in coppia con `HTTPS_PROXY`)           | `http://user:pass@host:port,...`          |
-| `HTTPS_PROXY`  | Proxy HTTPS (di solito uguale a `HTTP_PROXY`)            | `http://user:pass@host:port,...`          |
+Se hai bisogno di escludere alcuni domini dall'utilizzo del proxy (ad esempio, per accessi diretti a servizi come `vavoo.to`), puoi usare la variabile `NO_PROXY_DOMAINS`.
+
+| Variabile          | Descrizione                                                  | Esempio                                   |
+|--------------------|--------------------------------------------------------------|-------------------------------------------|
+| `SOCKS5_PROXY`     | Uno o più proxy SOCKS5, separati da virgola                  | `socks5://user:pass@host:port,...`        |
+| `HTTP_PROXY`       | Proxy HTTP (usare in coppia con `HTTPS_PROXY`)               | `http://user:pass@host:port,...`          |
+| `HTTPS_PROXY`      | Proxy HTTPS (di solito uguale a `HTTP_PROXY`)                | `http://user:pass@host:port,...`          |
+| `NO_PROXY_DOMAINS` | Domini da escludere dal proxy, separati da virgola           | `github.com,vavoo.to`                     |
 
 Esempio `.env`:
 
@@ -274,7 +277,10 @@ SECRET_KEY="chiave_segreta_generata"
 # SOCKS5_PROXY="socks5://user:pass@host1:1080"
 # HTTP_PROXY="http://user:pass@host:8080"
 # HTTPS_PROXY="http://user:pass@host:8080"
+# NO_PROXY_DOMAINS="github.com,vavoo.to"
 ```
+
+In questo modo, le richieste verso `github.com` e `vavoo.to` non passeranno attraverso il proxy configurato, ma verranno eseguite direttamente.
 
 ---
 
