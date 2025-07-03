@@ -707,13 +707,17 @@ def process_daddylive_url(url):
     return url
 
 def resolve_m3u8_link(url, headers=None):
-    """Risolve URL DaddyLive con gestione avanzata degli errori di timeout."""
+    """
+    Risolve URL con una logica selettiva: processa solo i link riconosciuti come
+    DaddyLive, altrimenti li passa direttamente.
+    """
     if not url:
         app.logger.error("Errore: URL non fornito.")
         return {"resolved_url": None, "headers": {}}
 
     current_headers = headers.copy() if headers else {}
     
+    # 1. Estrazione degli header dall'URL (logica invariata)
     clean_url = url
     extracted_headers = {}
     if '&h_' in url or '%26h_' in url:
@@ -739,17 +743,31 @@ def resolve_m3u8_link(url, headers=None):
                         extracted_headers[key] = value
                 except Exception as e:
                     app.logger.error(f"Errore nell'estrazione dell'header {param}: {e}")
+    
+    final_headers = {**current_headers, **extracted_headers}
 
-    # **AGGIUNTA: Controllo per URL Vavoo.to DOPO l'estrazione degli header**
-    if 'vavoo.to' in clean_url.lower():
-        app.logger.info(f"URL Vavoo.to rilevato, passaggio diretto: {clean_url}")
-        final_headers = {**current_headers, **extracted_headers}
+    # --- NUOVA SEZIONE DI CONTROLLO ---
+    # 2. Verifica se l'URL deve essere processato come DaddyLive.
+    #    La risoluzione speciale si attiva solo se l'URL contiene "newkso.ru"
+    #    o "/stream-", altrimenti viene passato direttamente.
+    
+    is_daddylive_link = (
+        'newkso.ru' in clean_url.lower() or 
+        '/stream-' in clean_url.lower() or
+        # Aggiungiamo anche i pattern del vecchio estrattore per mantenere la compatibilità
+        re.search(r'/premium(\d+)/mono\.m3u8$', clean_url) is not None
+    )
+
+    if not is_daddylive_link:
+        app.logger.info(f"URL non riconosciuto come DaddyLive, verrà passato direttamente: {clean_url}")
+        # Gestione speciale per Vavoo e altri link diretti
         return {
             "resolved_url": clean_url,
             "headers": final_headers
         }
+    # --- FINE DELLA NUOVA SEZIONE ---
 
-    # Continua con la logica DaddyLive per altri URL...
+    # 3. Se il controllo è superato, procede con la logica di risoluzione DaddyLive (invariata)
     app.logger.info(f"Tentativo di risoluzione URL (DaddyLive): {clean_url}")
 
     daddy_base_url = get_daddylive_base_url()
@@ -760,7 +778,7 @@ def resolve_m3u8_link(url, headers=None):
         'Referer': daddy_base_url,
         'Origin': daddy_origin
     }
-    final_headers_for_resolving = {**current_headers, **daddylive_headers}
+    final_headers_for_resolving = {**final_headers, **daddylive_headers}
 
     try:
         app.logger.info("Ottengo URL base dinamico...")
@@ -827,23 +845,17 @@ def resolve_m3u8_link(url, headers=None):
 
         try:
             channel_key = re.findall(r'(?s) channelKey = \"([^"]*)', iframe_content)[0]
-
             auth_ts_b64 = re.findall(r'(?s)c = atob\("([^"]*)', iframe_content)[0]
             auth_ts = base64.b64decode(auth_ts_b64).decode('utf-8')
-
             auth_rnd_b64 = re.findall(r'(?s)d = atob\("([^"]*)', iframe_content)[0]
             auth_rnd = base64.b64decode(auth_rnd_b64).decode('utf-8')
-
             auth_sig_b64 = re.findall(r'(?s)e = atob\("([^"]*)', iframe_content)[0]
             auth_sig = base64.b64decode(auth_sig_b64).decode('utf-8')
             auth_sig = quote_plus(auth_sig)
-
             auth_host_b64 = re.findall(r'(?s)a = atob\("([^"]*)', iframe_content)[0]
             auth_host = base64.b64decode(auth_host_b64).decode('utf-8')
-
             auth_php_b64 = re.findall(r'(?s)b = atob\("([^"]*)', iframe_content)[0]
             auth_php = base64.b64decode(auth_php_b64).decode('utf-8')
-
             app.logger.info(f"Parametri estratti: channel_key={channel_key}")
 
         except (IndexError, Exception) as e:
@@ -852,13 +864,11 @@ def resolve_m3u8_link(url, headers=None):
 
         auth_url = f'{auth_host}{auth_php}?channel_id={channel_key}&ts={auth_ts}&rnd={auth_rnd}&sig={auth_sig}'
         app.logger.info(f"Passo 6: Autenticazione: {auth_url}")
-
         auth_response = requests.get(auth_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(auth_url), verify=VERIFY_SSL)
         auth_response.raise_for_status()
 
         host = re.findall('(?s)m3u8 =.*?:.*?:.*?".*?".*?"([^"]*)', iframe_content)[0]
         server_lookup = re.findall(r'n fetchWithRetry\(\s*\'([^\']*)', iframe_content)[0]
-
         server_lookup_url = f"https://{urlparse(iframe_url).netloc}{server_lookup}{channel_key}"
         app.logger.info(f"Passo 7: Server lookup: {server_lookup_url}")
 
@@ -866,13 +876,10 @@ def resolve_m3u8_link(url, headers=None):
         lookup_response.raise_for_status()
         server_data = lookup_response.json()
         server_key = server_data['server_key']
-
         app.logger.info(f"Server key ottenuto: {server_key}")
 
         referer_raw = f'https://{urlparse(iframe_url).netloc}'
-
         clean_m3u8_url = f'https://{server_key}{host}{server_key}/{channel_key}/mono.m3u8'
-
         app.logger.info(f"URL M3U8 pulito costruito: {clean_m3u8_url}")
 
         final_headers_for_fetch = {
@@ -883,28 +890,14 @@ def resolve_m3u8_link(url, headers=None):
 
         return {
             "resolved_url": clean_m3u8_url,
-            "headers": final_headers_for_fetch
+            "headers": {**final_headers, **final_headers_for_fetch}
         }
 
-    except (requests.exceptions.ConnectTimeout, requests.exceptions.ProxyError) as e:
-        app.logger.error(f"ERRORE DI TIMEOUT O PROXY DURANTE LA RISOLUZIONE: {e}")
-        app.logger.error("Questo problema è spesso legato a un proxy SOCKS5 lento, non funzionante o bloccato.")
-        app.logger.error("CONSIGLI: Controlla che i tuoi proxy siano attivi. Prova ad aumentare il timeout impostando la variabile d'ambiente 'REQUEST_TIMEOUT' (es. a 20 o 30 secondi).")
-        return {"resolved_url": clean_url, "headers": current_headers}
-    except requests.exceptions.ConnectionError as e:
-        if "Read timed out" in str(e):
-            app.logger.error(f"Read timeout durante la risoluzione per {clean_url}")
-            return {"resolved_url": clean_url, "headers": current_headers}
-        else:
-            app.logger.error(f"Errore di connessione durante la risoluzione: {e}")
-            return {"resolved_url": clean_url, "headers": current_headers}
-    except requests.exceptions.ReadTimeout as e:
-        app.logger.error(f"Read timeout esplicito per {clean_url}")
-        return {"resolved_url": clean_url, "headers": current_headers}
     except Exception as e:
-        app.logger.error(f"Errore durante la risoluzione: {e}")
+        app.logger.error(f"Errore durante la risoluzione DaddyLive: {e}")
         app.logger.error(f"Traceback: {traceback.format_exc()}")
-        return {"resolved_url": clean_url, "headers": current_headers}
+        # In caso di errore nella risoluzione, restituisce l'URL originale
+        return {"resolved_url": clean_url, "headers": final_headers}
 
 stats_thread = threading.Thread(target=broadcast_stats, daemon=True)
 stats_thread.start()
