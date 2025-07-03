@@ -143,6 +143,7 @@ POOL_MAXSIZE=300
 MAX_KEEP_ALIVE_REQUESTS=5000
 KEEP_ALIVE_TIMEOUT=900
 REQUEST_TIMEOUT=30
+NO_PROXY_DOMAINS="github.com,vavoo.to"
 ```
 
 **Perché questa configurazione?**
