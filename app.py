@@ -1120,8 +1120,12 @@ def proxy_mpd():
         if cache_enabled:
             ttl = get_mpd_cache_ttl(mpd_content)
             MPD_CACHE[cache_key] = (modified_mpd, time.time(), ttl)
-        
-        app.logger.info(f"MPD cachato con TTL {ttl}s: {mpd_url}")
+            # Sposta il logger all'interno del blocco if, in modo che venga chiamato
+            # solo quando il file è stato effettivamente cachato.
+            app.logger.info(f"MPD cachato con TTL {ttl}s: {mpd_url}")
+        else:
+            # Aggiungi un log per quando la cache è disabilitata per maggiore chiarezza
+            app.logger.info(f"MPD servito senza cache: {mpd_url}")
         
         return Response(modified_mpd, content_type="application/dash+xml")
         
