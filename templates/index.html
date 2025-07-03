@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Proxy Server - Benvenuto</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            color: white;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            text-align: center;
+        }
+        .hero {
+            margin-bottom: 50px;
+        }
+        .hero h1 {
+            font-size: 48px;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .hero p {
+            font-size: 20px;
+            opacity: 0.9;
+            margin-bottom: 30px;
+        }
+        .status-card {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            padding: 30px;
+            border-radius: 20px;
+            margin: 30px 0;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .stats-mini {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
+        }
+        .stat-mini {
+            background: rgba(255,255,255,0.1);
+            padding: 20px;
+            border-radius: 15px;
+            backdrop-filter: blur(10px);
+        }
+        .stat-mini h3 {
+            margin: 0 0 10px 0;
+            font-size: 24px;
+        }
+        .stat-mini p {
+            margin: 0;
+            opacity: 0.8;
+        }
+        .cta-buttons {
+            margin: 40px 0;
+        }
+        .btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 15px 30px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50px;
+            text-decoration: none;
+            margin: 10px;
+            display: inline-block;
+            transition: all 0.3s;
+            backdrop-filter: blur(10px);
+        }
+        .btn:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-2px);
+        }
+        .footer {
+            margin-top: 50px;
+            opacity: 0.7;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="hero">
+            <h1>🚀 Proxy Server</h1>
+            <p>Sistema di proxy avanzato per streaming e contenuti multimediali</p>
+        </div>
+        
+        <div class="status-card">
+            <h2>✅ Sistema Operativo</h2>
+            <p><strong>Base URL:</strong> {{ base_url }}</p>
+            <p><strong>Sessioni Attive:</strong> {{ session_count }}</p>
+        </div>
+        
+        <div class="stats-mini">
+            <div class="stat-mini">
+                <h3>{{ "%.1f"|format(stats.ram_usage) }}%</h3>
+                <p>Utilizzo RAM</p>
+            </div>
+            <div class="stat-mini">
+                <h3>{{ "%.2f"|format(stats.bandwidth_usage) }}</h3>
+                <p>MB/s Banda</p>
+            </div>
+            <div class="stat-mini">
+                <h3>{{ "%.1f"|format(stats.network_sent) }}</h3>
+                <p>MB Inviati</p>
+            </div>
+            <div class="stat-mini">
+                <h3>{{ "%.1f"|format(stats.network_recv) }}</h3>
+                <p>MB Ricevuti</p>
+            </div>
+        </div>
+        
+        <div class="cta-buttons">
+            <a href="/login" class="btn">🔐 Accedi alla Dashboard</a>
+            <a href="/stats" class="btn">📊 API Statistiche</a>
+        </div>
+        
+        <div class="footer">
+            <p>Proxy Server v2.0 - Sistema di monitoraggio avanzato</p>
+        </div>
+    </div>
+</body>
+</html>

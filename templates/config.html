@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gestione Configurazioni - Proxy</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f8f9fa;
+            margin: 0;
+            padding: 0;
+        }
+        .navbar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .navbar h1 {
+            font-size: 24px;
+            margin: 0;
+        }
+        .navbar .nav-links a {
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: background 0.3s;
+            margin-left: 10px;
+        }
+        .navbar .nav-links a:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        .container {
+            max-width: 1000px;
+            margin: 20px auto;
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.08);
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+        .form-group input, .form-group textarea, .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+            box-sizing: border-box;
+        }
+        .form-group input:focus, .form-group textarea:focus, .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .form-group small {
+            color: #666;
+            font-size: 12px;
+            margin-top: 5px;
+            display: block;
+        }
+        .config-section {
+            margin-bottom: 40px;
+            padding: 25px;
+            border: 1px solid #e1e5e9;
+            border-radius: 10px;
+            background: #f8f9ff;
+        }
+        .config-section h3 {
+            margin: 0 0 20px 0;
+            color: #667eea;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+            transition: transform 0.2s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        .btn-secondary {
+            background: #6c757d;
+        }
+        .alert {
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 8px;
+            display: none;
+        }
+        .alert-success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .alert-error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .row {
+            display: flex;
+            gap: 20px;
+        }
+        .col {
+            flex: 1;
+        }
+        .action-box {
+            margin-top: 35px;
+            padding: 22px 25px;
+            background: #fdf6e3;
+            border: 2px solid #ffe0b2;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(255, 193, 7, 0.06);
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            gap: 12px;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 8px;
+            flex-wrap: wrap;
+        }
+        @media (max-width: 600px) {
+            .action-box {
+                padding: 15px 8px;
+            }
+            .action-buttons {
+                flex-direction: column;
+                gap: 10px;
+                width: 100%;
+            }
+            .action-buttons .btn,
+            .action-buttons .btn-secondary {
+                width: 100%;
+                box-sizing: border-box;
+                margin-right: 0;
+            }
+        /* Media query per dispositivi mobili */
+        @media (max-width: 768px) {
+            .row {
+                flex-direction: column;
+                gap: 15px;
+            }
+            
+            .col {
+                flex: none;
+                width: 100%;
+            }
+            
+            .config-section {
+                padding: 15px;
+                margin-bottom: 25px;
+            }
+            
+            .form-group input, 
+            .form-group textarea, 
+            .form-group select {
+                font-size: 16px; /* Previene lo zoom automatico su iOS */
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .container {
+                margin: 10px;
+                padding: 15px;
+            }
+            
+            .navbar {
+                padding: 0.5rem 1rem;
+                flex-direction: column;
+                gap: 10px;
+            }
+            
+            .navbar .nav-links {
+                flex-direction: column;
+                gap: 5px;
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <h1>⚙️ Gestione Configurazioni Proxy</h1>
+        <div class="nav-links">
+            <a href="/admin">← Admin</a>
+            <a href="/dashboard">📊 Dashboard</a>
+            <a href="/logout">🚪 Logout</a>
+        </div>
+    </nav>
+        
+        <form id="configForm">
+            <!-- Sezione Proxy -->
+            <div class="config-section">
+                <h3>🌐 Configurazioni Proxy</h3>
+                <div class="form-group">
+                    <label for="socks5_proxy">Proxy SOCKS5:</label>
+                    <textarea id="socks5_proxy" name="SOCKS5_PROXY" rows="3" placeholder="socks5://user:pass@proxy1:1080,socks5://user:pass@proxy2:1080">{{ config.SOCKS5_PROXY }}</textarea>
+                    <small>Lista di proxy SOCKS5 separati da virgola</small>
+                </div>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="http_proxy">Proxy HTTP:</label>
+                            <textarea id="http_proxy" name="HTTP_PROXY" rows="2" placeholder="http://proxy1:8080,http://proxy2:8080">{{ config.HTTP_PROXY }}</textarea>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="https_proxy">Proxy HTTPS:</label>
+                            <textarea id="https_proxy" name="HTTPS_PROXY" rows="2" placeholder="https://proxy1:8080,https://proxy2:8080">{{ config.HTTPS_PROXY }}</textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="no_proxy_domains"><b>Domini senza proxy:</b></label>
+                            <input type="text" id="no_proxy_domains" name="NO_PROXY_DOMAINS" value="{{ config.NO_PROXY_DOMAINS }}" placeholder="vavoo.to,newkso.ru,daddylive.sx">
+                            <small>Lista di domini separati da virgola per cui NON usare il proxy</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sezione Timeouts -->
+            <div class="config-section">
+                <h3>⏱️ Configurazioni Timeout</h3>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="request_timeout">Request Timeout (secondi):</label>
+                            <input type="number" id="request_timeout" name="REQUEST_TIMEOUT" value="{{ config.REQUEST_TIMEOUT }}" min="5" max="300">
+                            <small>Timeout per le richieste HTTP</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="keep_alive_timeout">Keep-Alive Timeout (secondi):</label>
+                            <input type="number" id="keep_alive_timeout" name="KEEP_ALIVE_TIMEOUT" value="{{ config.KEEP_ALIVE_TIMEOUT }}" min="60" max="3600">
+                            <small>Timeout per connessioni persistenti</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="max_keep_alive_requests">Max Keep-Alive Requests:</label>
+                            <input type="number" id="max_keep_alive_requests" name="MAX_KEEP_ALIVE_REQUESTS" value="{{ config.MAX_KEEP_ALIVE_REQUESTS }}" min="1" max="10000">
+                            <small>Numero massimo di richieste per connessione persistente (default: 1000)</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="pool_connections">Pool Connections:</label>
+                            <input type="number" id="pool_connections" name="POOL_CONNECTIONS" value="{{ config.POOL_CONNECTIONS }}" min="1" max="1000">
+                            <small>Numero di pool di connessioni per host (default: 20)</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="pool_maxsize">Pool Max Size:</label>
+                            <input type="number" id="pool_maxsize" name="POOL_MAXSIZE" value="{{ config.POOL_MAXSIZE }}" min="1" max="1000">
+                            <small>Numero massimo di connessioni contemporanee per pool (default: 50)</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- Sezione Cache -->
+            <div class="config-section">
+                <h3>💾 Configurazioni Cache</h3>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="cache_enabled"><b>Cache Abilitata:</b></label>
+                            <select id="cache_enabled" name="CACHE_ENABLED">
+                                <option value="true" {% if config.CACHE_ENABLED %}selected{% endif %}>Abilitata</option>
+                                <option value="false" {% if not config.CACHE_ENABLED %}selected{% endif %}>Disabilitata (stream diretto)</option>
+                            </select>
+                            <small>Se disabilitata, tutte le richieste vengono gestite in streaming diretto senza alcun caching.</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_ttl_m3u8">TTL Cache M3U8 (secondi):</label>
+                            <input type="number" id="cache_ttl_m3u8" name="CACHE_TTL_M3U8" value="{{ config.CACHE_TTL_M3U8 }}" min="1" max="300">
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_maxsize_m3u8">Max Size Cache M3U8:</label>
+                            <input type="number" id="cache_maxsize_m3u8" name="CACHE_MAXSIZE_M3U8" value="{{ config.CACHE_MAXSIZE_M3U8 }}" min="10" max="1000">
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="cache_ttl_ts">TTL Cache TS (secondi):</label>
+                            <input type="number" id="cache_ttl_ts" name="CACHE_TTL_TS" value="{{ config.CACHE_TTL_TS }}" min="60" max="3600">
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_maxsize_ts">Max Size Cache TS:</label>
+                            <input type="number" id="cache_maxsize_ts" name="CACHE_MAXSIZE_TS" value="{{ config.CACHE_MAXSIZE_TS }}" min="100" max="5000">
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_ttl_key">TTL Cache KEY (secondi):</label>
+                            <input type="number" id="cache_ttl_key" name="CACHE_TTL_KEY" value="{{ config.CACHE_TTL_KEY }}" min="1" max="300">
+                        </div>
+                        <div class="form-group">
+                            <label for="cache_maxsize_key">Max Size Cache KEY:</label>
+                            <input type="number" id="cache_maxsize_key" name="CACHE_MAXSIZE_KEY" value="{{ config.CACHE_MAXSIZE_KEY }}" min="10" max="1000">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Sezione Cache DASH -->
+            <div class="config-section">
+                <h3>📺 Configurazioni DASH</h3>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="cache_ttl_mpd">TTL Cache MPD (secondi):</label>
+                            <input type="number" id="cache_ttl_mpd" name="CACHE_TTL_MPD" value="{{ config.CACHE_TTL_MPD or 30 }}" min="5" max="300">
+                            <small>Cache per manifest MPD (default: 30s)</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="cache_maxsize_mpd">Max Size Cache MPD:</label>
+                            <input type="number" id="cache_maxsize_mpd" name="CACHE_MAXSIZE_MPD" value="{{ config.CACHE_MAXSIZE_MPD or 100 }}" min="10" max="500">
+                            <small>Numero massimo di MPD in cache</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sezione Sicurezza -->
+            <div class="config-section" id="security">
+                <h3>🔒 Configurazioni Sicurezza</h3>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="admin_username">Username Admin:</label>
+                            <input type="text" id="admin_username" name="ADMIN_USERNAME" value="{{ config.ADMIN_USERNAME }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="verify_ssl">Verifica SSL:</label>
+                            <select id="verify_ssl" name="VERIFY_SSL">
+                                <option value="true" {% if config.VERIFY_SSL %}selected{% endif %}>Abilitato</option>
+                                <option value="false" {% if not config.VERIFY_SSL %}selected{% endif %}>Disabilitato</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="admin_password">Password Admin:</label>
+                            <input type="password" id="admin_password" name="ADMIN_PASSWORD" value="{{ config.ADMIN_PASSWORD }}">
+                        </div>
+                        <div class="form-group">
+                            <label for="allowed_ips">IP Consentiti:</label>
+                            <input type="text" id="allowed_ips" name="ALLOWED_IPS" value="{{ config.ALLOWED_IPS }}" placeholder="192.168.1.100,10.0.0.1">
+                            <small>Lista di IP separati da virgola (lascia vuoto per tutti)</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="alert-container">
+                <div id="alert" class="alert"></div>
+            </div>
+
+            <!-- Box separata per azioni -->
+            <div class="action-box">
+                <div class="action-buttons">
+                    <button type="submit" class="btn">💾 Salva Configurazioni</button>
+                    <button type="button" class="btn btn-secondary" onclick="resetForm()">🔄 Ripristina Default</button>
+                    <button type="button" class="btn btn-secondary" onclick="testConnection()">🔍 Test Connessioni</button>
+                </div>
+                <div class="action-warning">
+                    ⚠️ Il test connessioni verifica <b>solo i proxy già salvati</b> nella configurazione.<br>
+                    Se modifichi i proxy, premi prima <b>Salva Configurazioni</b> per testarli.
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        document.getElementById('configForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const config = {};
+            
+            for (let [key, value] of formData.entries()) {
+                if (key === 'VERIFY_SSL') {
+                    config[key] = value === 'true';
+                } else if (['REQUEST_TIMEOUT', 'KEEP_ALIVE_TIMEOUT', 'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'CACHE_TTL_M3U8', 'CACHE_TTL_TS', 'CACHE_MAXSIZE_M3U8', 'CACHE_MAXSIZE_TS'].includes(key)) {
+                    config[key] = parseInt(value);
+                } else {
+                    config[key] = value;
+                }
+            }
+            
+            fetch('/admin/config/save', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(config)
+            })
+            .then(response => response.json())
+            .then(data => {
+                showAlert(data.message, data.status === 'success' ? 'success' : 'error');
+                if (data.status === 'success') {
+                    setTimeout(() => location.reload(), 2000);
+                }
+            })
+            .catch(error => {
+                showAlert('Errore nel salvataggio della configurazione', 'error');
+                console.error('Error:', error);
+            });
+        });
+        
+        function showAlert(message, type) {
+            const alert = document.getElementById('alert');
+            alert.textContent = message;
+            alert.className = 'alert alert-' + type;
+            alert.style.display = 'block';
+            
+            setTimeout(() => {
+                alert.style.display = 'none';
+            }, 5000);
+        }
+        
+        function resetForm() {
+            if (confirm('Sei sicuro di voler ripristinare le configurazioni di default?')) {
+                fetch('/admin/config/reset', {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    showAlert(data.message, data.status === 'success' ? 'success' : 'error');
+                    if (data.status === 'success') {
+                        setTimeout(() => location.reload(), 2000);
+                    }
+                });
+            }
+        }
+        
+        function testConnection() {
+            showAlert('Test delle connessioni in corso...', 'success');
+            // Disabilita i pulsanti durante il test
+            setButtonsDisabled(true);
+
+            fetch('/admin/config/test', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Mostra il risultato dopo almeno 1 secondo
+                setTimeout(() => {
+                    showAlert(data.message, data.status === 'success' ? 'success' : 'error');
+                    setButtonsDisabled(false);
+                }, 1000);
+            })
+            .catch(error => {
+                setTimeout(() => {
+                    showAlert('Errore nel test delle connessioni', 'error');
+                    setButtonsDisabled(false);
+                }, 1000);
+            });
+        }
+
+        function setButtonsDisabled(disabled) {
+            document.querySelectorAll('.btn, .btn-secondary').forEach(btn => {
+                btn.disabled = disabled;
+            });
+        }
+    </script>
+    <script>
+    window.addEventListener('beforeunload', function() {
+        navigator.sendBeacon('/logout');
+    });
+    </script>
+</body>
+</html>
