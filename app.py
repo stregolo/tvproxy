@@ -902,7 +902,8 @@ def resolve_m3u8_link(url, headers=None):
     if not is_daddylive_link:
         # --- GESTIONE VAVOO ---
         # Controlla se è un link Vavoo e prova a risolverlo
-        if 'vavoo.to' in clean_url.lower() and '/vavoo-iptv/play/' in clean_url.lower():
+        # Supporta sia /vavoo-iptv/play/ che /play/ 
+        if 'vavoo.to' in clean_url.lower() and ('/vavoo-iptv/play/' in clean_url.lower() or '/play/' in clean_url.lower()):
             app.logger.info(f"🔍 Rilevato link Vavoo, tentativo di risoluzione: {clean_url}")
             
             try:
@@ -1637,14 +1638,29 @@ def admin_logs():
     
 @app.route('/')
 def index():
-    """Pagina principale migliorata"""
+    """Pagina principale migliorata con informazioni Vavoo"""
     stats = get_system_stats()
     base_url = get_daddylive_base_url()
+    
+    # Informazioni sulla funzionalità Vavoo
+    vavoo_info = {
+        "enabled": True,
+        "supported_patterns": [
+            "https://vavoo.to/vavoo-iptv/play/[ID]",
+            "https://vavoo.to/play/[ID]"
+        ],
+        "test_url": "https://vavoo.to/vavoo-iptv/play/277580225585f503fbfc87",
+        "endpoints": {
+            "m3u_proxy": "/proxy/m3u?url=[VAVOO_URL]",
+            "vavoo_direct": "/proxy/vavoo?url=[VAVOO_URL]"
+        }
+    }
     
     return render_template('index.html', 
                          stats=stats, 
                          base_url=base_url,
-                         session_count=len(SESSION_POOL))
+                         session_count=len(SESSION_POOL),
+                         vavoo_info=vavoo_info)
 
 @app.route('/logout')
 def logout():
@@ -1872,6 +1888,52 @@ def get_stats():
     return jsonify(stats)
 
 # --- Route Proxy (mantieni tutte le route proxy esistenti) ---
+
+@app.route('/proxy/vavoo')
+def proxy_vavoo():
+    """Route specifica per testare la risoluzione Vavoo"""
+    url = request.args.get('url', '').strip()
+    if not url:
+        return jsonify({
+            "error": "Parametro 'url' mancante",
+            "example": "/proxy/vavoo?url=https://vavoo.to/vavoo-iptv/play/277580225585f503fbfc87"
+        }), 400
+
+    # Verifica che sia un link Vavoo
+    if 'vavoo.to' not in url.lower():
+        return jsonify({
+            "error": "URL non è un link Vavoo",
+            "received": url
+        }), 400
+
+    try:
+        app.logger.info(f"🔍 Richiesta risoluzione Vavoo: {url}")
+        resolved = vavoo_resolver.resolve_vavoo_link(url, verbose=True)
+        
+        if resolved:
+            app.logger.info(f"✅ Vavoo risolto: {resolved}")
+            return jsonify({
+                "status": "success",
+                "original_url": url,
+                "resolved_url": resolved,
+                "method": "vavoo_direct"
+            })
+        else:
+            app.logger.warning(f"❌ Risoluzione Vavoo fallita per: {url}")
+            return jsonify({
+                "status": "error",
+                "original_url": url,
+                "resolved_url": None,
+                "error": "Impossibile risolvere il link Vavoo"
+            }), 500
+            
+    except Exception as e:
+        app.logger.error(f"❌ Errore nella risoluzione Vavoo: {e}")
+        return jsonify({
+            "status": "error",
+            "original_url": url,
+            "error": str(e)
+        }), 500
 
 @app.route('/proxy/m3u')
 def proxy_m3u():
