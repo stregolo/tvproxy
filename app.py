@@ -36,6 +36,147 @@ app.permanent_session_lifetime = timedelta(minutes=5)
 
 load_dotenv()
 
+# --- Classe VavooResolver per gestire i link Vavoo ---
+class VavooResolver:
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'MediaHubMX/2'
+        })
+    
+    def getAuthSignature(self):
+        """Funzione che replica esattamente quella dell'addon utils.py"""
+        headers = {
+            "user-agent": "okhttp/4.11.0",
+            "accept": "application/json", 
+            "content-type": "application/json; charset=utf-8",
+            "content-length": "1106",
+            "accept-encoding": "gzip"
+        }
+        data = {
+            "token": "tosFwQCJMS8qrW_AjLoHPQ41646J5dRNha6ZWHnijoYQQQoADQoXYSo7ki7O5-CsgN4CH0uRk6EEoJ0728ar9scCRQW3ZkbfrPfeCXW2VgopSW2FWDqPOoVYIuVPAOnXCZ5g",
+            "reason": "app-blur",
+            "locale": "de",
+            "theme": "dark",
+            "metadata": {
+                "device": {
+                    "type": "Handset",
+                    "brand": "google",
+                    "model": "Nexus",
+                    "name": "21081111RG",
+                    "uniqueId": "d10e5d99ab665233"
+                },
+                "os": {
+                    "name": "android",
+                    "version": "7.1.2",
+                    "abis": ["arm64-v8a", "armeabi-v7a", "armeabi"],
+                    "host": "android"
+                },
+                "app": {
+                    "platform": "android",
+                    "version": "3.1.20",
+                    "buildId": "289515000",
+                    "engine": "hbc85",
+                    "signatures": ["6e8a975e3cbf07d5de823a760d4c2547f86c1403105020adee5de67ac510999e"],
+                    "installer": "app.revanced.manager.flutter"
+                },
+                "version": {
+                    "package": "tv.vavoo.app",
+                    "binary": "3.1.20",
+                    "js": "3.1.20"
+                }
+            },
+            "appFocusTime": 0,
+            "playerActive": False,
+            "playDuration": 0,
+            "devMode": False,
+            "hasAddon": True,
+            "castConnected": False,
+            "package": "tv.vavoo.app",
+            "version": "3.1.20",
+            "process": "app",
+            "firstAppStart": 1743962904623,
+            "lastAppStart": 1743962904623,
+            "ipLocation": "",
+            "adblockEnabled": True,
+            "proxy": {
+                "supported": ["ss", "openvpn"],
+                "engine": "ss", 
+                "ssVersion": 1,
+                "enabled": True,
+                "autoServer": True,
+                "id": "pl-waw"
+            },
+            "iap": {
+                "supported": False
+            }
+        }
+        try:
+            resp = self.session.post("https://www.vavoo.tv/api/app/ping", json=data, headers=headers, timeout=10)
+            resp.raise_for_status()
+            return resp.json().get("addonSig")
+        except Exception as e:
+            app.logger.error(f"Errore nel recupero della signature Vavoo: {e}")
+            return None
+
+    def resolve_vavoo_link(self, link, verbose=False):
+        """
+        Risolve un link Vavoo usando solo il metodo principale (streammode=1)
+        """
+        if not "vavoo.to" in link:
+            if verbose:
+                app.logger.info("Il link non è un link Vavoo")
+            return None
+            
+        # Solo metodo principale per il proxy
+        signature = self.getAuthSignature()
+        if not signature:
+            app.logger.error("Impossibile ottenere la signature Vavoo")
+            return None
+            
+        headers = {
+            "user-agent": "MediaHubMX/2",
+            "accept": "application/json",
+            "content-type": "application/json; charset=utf-8", 
+            "content-length": "115",
+            "accept-encoding": "gzip",
+            "mediahubmx-signature": signature
+        }
+        data = {
+            "language": "de",
+            "region": "AT", 
+            "url": link,
+            "clientVersion": "3.0.2"
+        }
+        
+        try:
+            resp = self.session.post("https://vavoo.to/mediahubmx-resolve.json", json=data, headers=headers, timeout=10)
+            resp.raise_for_status()
+            
+            if verbose:
+                app.logger.info(f"Vavoo response status: {resp.status_code}")
+                app.logger.info(f"Vavoo response body: {resp.text}")
+            
+            result = resp.json()
+            if isinstance(result, list) and result and result[0].get("url"):
+                resolved_url = result[0]["url"]
+                channel_name = result[0].get("name", "Unknown")
+                app.logger.info(f"✅ Vavoo risolto: {channel_name} -> {resolved_url}")
+                return resolved_url
+            elif isinstance(result, dict) and result.get("url"):
+                app.logger.info(f"✅ Vavoo risolto: {result['url']}")
+                return result["url"]
+            else:
+                app.logger.warning("Nessun link valido trovato nella risposta Vavoo")
+                return None
+                
+        except Exception as e:
+            app.logger.error(f"Errore nella risoluzione Vavoo: {e}")
+            return None
+
+# Istanza globale del resolver Vavoo
+vavoo_resolver = VavooResolver()
+
 # --- Configurazione Autenticazione ---
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'password123')
@@ -759,8 +900,34 @@ def resolve_m3u8_link(url, headers=None):
     )
 
     if not is_daddylive_link:
-        app.logger.info(f"URL non riconosciuto come DaddyLive, verrà passato direttamente: {clean_url}")
-        # Gestione speciale per Vavoo e altri link diretti
+        # --- GESTIONE VAVOO ---
+        # Controlla se è un link Vavoo e prova a risolverlo
+        if 'vavoo.to' in clean_url.lower() and '/vavoo-iptv/play/' in clean_url.lower():
+            app.logger.info(f"🔍 Rilevato link Vavoo, tentativo di risoluzione: {clean_url}")
+            
+            try:
+                resolved_vavoo = vavoo_resolver.resolve_vavoo_link(clean_url, verbose=True)
+                if resolved_vavoo:
+                    app.logger.info(f"✅ Vavoo risolto con successo: {resolved_vavoo}")
+                    return {
+                        "resolved_url": resolved_vavoo,
+                        "headers": final_headers
+                    }
+                else:
+                    app.logger.warning(f"❌ Impossibile risolvere il link Vavoo, passo l'originale: {clean_url}")
+                    return {
+                        "resolved_url": clean_url,
+                        "headers": final_headers
+                    }
+            except Exception as e:
+                app.logger.error(f"❌ Errore nella risoluzione Vavoo: {e}")
+                return {
+                    "resolved_url": clean_url,
+                    "headers": final_headers
+                }
+        
+        # Per tutti gli altri link non-DaddyLive
+        app.logger.info(f"URL non riconosciuto come DaddyLive o Vavoo, verrà passato direttamente: {clean_url}")
         return {
             "resolved_url": clean_url,
             "headers": final_headers
