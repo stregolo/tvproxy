@@ -211,7 +211,7 @@ class ConfigManager:
             'CACHE_ENABLED' : True,
             'NO_PROXY_DOMAINS': 'github.com',
         }
-        s
+        
     def load_config(self):
         """Carica la configurazione combinando proxy da file e variabili d'ambiente"""
         # Inizia con i valori di default
