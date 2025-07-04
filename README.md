@@ -143,7 +143,7 @@ POOL_MAXSIZE=300
 MAX_KEEP_ALIVE_REQUESTS=5000
 KEEP_ALIVE_TIMEOUT=900
 REQUEST_TIMEOUT=45
-NO_PROXY_DOMAINS=github.com,vavoo.to
+NO_PROXY_DOMAINS=github.com
 ```
 
 **Perché questa configurazione?**
@@ -277,7 +277,7 @@ SECRET_KEY=chiave_segreta_generata
 # SOCKS5_PROXY=socks5://user:pass@host1:1080
 # HTTP_PROXY=http://user:pass@host:8080
 # HTTPS_PROXY=http://user:pass@host:8080
-# NO_PROXY_DOMAINS=github.com,vavoo.to
+# NO_PROXY_DOMAINS=github.com
 ```
 
 In questo modo, le richieste verso `github.com` e `vavoo.to` non passeranno attraverso il proxy configurato, ma verranno eseguite direttamente.
