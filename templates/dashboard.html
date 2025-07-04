@@ -565,6 +565,27 @@
                 <div class="stat-value" id="networkRecv">{{ "%.1f"|format(stats.network_recv) }}</div>
                 <div class="stat-subtitle">MB - Totale dalla partenza</div>
             </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <i class="fas fa-bolt stat-icon"></i>
+                    <span class="stat-title">Pre-Buffer</span>
+                </div>
+                <div class="stat-value" id="prebufferStreams">{{ stats.prebuffer_info.active_streams }}</div>
+                <div class="stat-subtitle">
+                    <span id="prebufferSegments">{{ stats.prebuffer_info.buffered_segments }}</span> segmenti | 
+                    <span id="prebufferSize">{{ stats.prebuffer_info.buffer_size_mb }}</span> MB
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <div class="stat-header">
+                    <i class="fas fa-cogs stat-icon"></i>
+                    <span class="stat-title">Thread Attivi</span>
+                </div>
+                <div class="stat-value" id="prebufferThreads">{{ stats.prebuffer_info.active_threads }}</div>
+                <div class="stat-subtitle">Pre-buffer in background</div>
+            </div>
         </div>
 
         <div class="endpoints-section">
@@ -613,6 +634,18 @@
                 <div class="endpoint-card" onclick="copyToClipboard('/test/mpd-debug')">
                     <h4><i class="fas fa-vial"></i> /test/mpd-debug</h4>
                     <p>Test e debug specifico per manifest MPD</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/proxy/prebuffer')">
+                    <h4><i class="fas fa-bolt"></i> /proxy/prebuffer</h4>
+                    <p>Pre-buffering manuale di segmenti specifici</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/admin/prebuffer/status')">
+                    <h4><i class="fas fa-chart-line"></i> /admin/prebuffer/status</h4>
+                    <p>Stato del sistema di pre-buffering</p>
+                </div>
+                <div class="endpoint-card" onclick="copyToClipboard('/admin/prebuffer/test')">
+                    <h4><i class="fas fa-play"></i> /admin/prebuffer/test</h4>
+                    <p>Test del sistema di pre-buffering</p>
                 </div>
             </div>
         </div>
@@ -692,6 +725,14 @@
             // Aggiorna URL base se cambiato
             if (stats.daddy_base_url) {
                 document.getElementById('daddyBaseUrl').textContent = stats.daddy_base_url;
+            }
+            
+            // Aggiorna statistiche pre-buffer
+            if (stats.prebuffer_info) {
+                updateStatValue('prebufferStreams', stats.prebuffer_info.active_streams);
+                updateStatValue('prebufferSegments', stats.prebuffer_info.buffered_segments);
+                updateStatValue('prebufferSize', stats.prebuffer_info.buffer_size_mb);
+                updateStatValue('prebufferThreads', stats.prebuffer_info.active_threads);
             }
         }
 
