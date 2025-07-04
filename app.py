@@ -267,7 +267,7 @@ def broadcast_stats():
 @socketio.on('connect')
 def handle_connect():
     """Gestisce nuove connessioni WebSocket"""
-    app.logger.info(f"Client connesso: {request.sid}")
+    app.logger.info("Client connesso")
     # Invia immediatamente le statistiche correnti
     stats = get_system_stats()
     emit('stats_update', stats)
@@ -275,7 +275,7 @@ def handle_connect():
 @socketio.on('disconnect')
 def handle_disconnect():
     """Gestisce disconnessioni WebSocket"""
-    app.logger.info(f"Client disconnesso: {request.sid}")
+    app.logger.info("Client disconnesso")
 
 # --- Configurazione Generale ---
 VERIFY_SSL = os.environ.get('VERIFY_SSL', 'false').lower() not in ('false', '0', 'no')
@@ -513,14 +513,7 @@ class LogManager:
 log_manager = LogManager()
 
 # --- Variabili globali per monitoraggio sistema ---
-system_stats = {
-    'ram_usage': 0,
-    'ram_used_gb': 0,
-    'ram_total_gb': 0,
-    'network_sent': 0,
-    'network_recv': 0,
-    'bandwidth_usage': 0
-}
+system_stats = {}
 
 # Inizializza cache globali (verranno sovrascritte da setup_all_caches)
 M3U8_CACHE = {}
@@ -1836,7 +1829,7 @@ def import_config():
         if file.filename == '':
             return jsonify({"status": "error", "message": "Nessun file selezionato"}), 400
         
-        if not file.filename.endswith('.json'):
+        if not file.filename or not file.filename.endswith('.json'):
             return jsonify({"status": "error", "message": "Il file deve essere in formato JSON"}), 400
         
         # Leggi il contenuto del file
@@ -2192,7 +2185,7 @@ def proxy_ts():
                 except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
                     if "Read timed out" in str(e) or "timed out" in str(e).lower():
                         app.logger.warning(f"Timeout durante il download del segmento TS (tentativo {attempt + 1}): {ts_url}")
-                        return
+                        return b""  # Return empty bytes instead of None
                     raise
                 finally:
                     ts_content = b"".join(content_parts)
@@ -2221,7 +2214,9 @@ def proxy_ts():
         except requests.RequestException as e:
             app.logger.error(f"Errore durante il download del segmento TS: {str(e)}")
             return f"Errore durante il download del segmento TS: {str(e)}", 500
-        
+    
+    # If we get here, all retries failed
+    return "Errore: Impossibile scaricare il segmento TS dopo tutti i tentativi", 500
 @app.route('/proxy')
 def proxy():
     """Proxy per liste M3U che aggiunge automaticamente /proxy/m3u?url= con IP prima dei link"""
