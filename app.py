@@ -1731,6 +1731,8 @@ def convert_mpd_to_m3u8(mpd_content, base_url, headers):
                     rep_id = representation.get('id', 'audio')
                     bandwidth = representation.get('bandwidth', '128000')
                     
+                    app.logger.info(f"Trovato audio representation: {rep_id} (bandwidth: {bandwidth}, lang: {lang})")
+                    
                     # Crea URL per l'audio track
                     audio_url = f"/proxy/mpd/playlist.m3u8?url={quote(base_url)}&profile_id={rep_id}"
                     if headers_query:
@@ -1769,6 +1771,8 @@ def convert_mpd_to_m3u8(mpd_content, base_url, headers):
                     height = representation.get('height', '720')
                     codecs = representation.get('codecs', 'avc1.64001f')
                     frame_rate = representation.get('frameRate', '25.0')
+                    
+                    app.logger.info(f"Trovato video representation: {rep_id} (bandwidth: {bandwidth})")
                     
                     video_rep = {
                         'id': rep_id,
@@ -1841,17 +1845,24 @@ def generate_mpd_playlist(mpd_content, base_url, profile_id, headers):
         target_representation = None
         target_adaptation_set = None
         
+        # Debug: lista tutti i representation disponibili
+        available_reps = []
         for adaptation_set in root.findall('.//dash:AdaptationSet', ns):
             for representation in adaptation_set.findall('.//dash:Representation', ns):
+                rep_id = representation.get('id', 'unknown')
+                available_reps.append(rep_id)
+                app.logger.info(f"Representation disponibile: {rep_id}")
                 if representation.get('id') == profile_id:
                     target_representation = representation
                     target_adaptation_set = adaptation_set
+                    app.logger.info(f"Trovato target representation: {profile_id}")
                     break
             if target_representation:
                 break
         
         if not target_representation:
             app.logger.error(f"Representation {profile_id} non trovato nel MPD")
+            app.logger.error(f"Representation disponibili: {available_reps}")
             return "#EXTM3U\n#EXT-X-ERROR: Representation not found"
         
         # Trova SegmentTemplate
