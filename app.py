@@ -926,6 +926,7 @@ def resolve_m3u8_link(url, headers=None):
                     app.logger.info(f"✅ Vavoo risolto con successo: {resolved_vavoo}")
                     # Unisci headers estratti con quelli richiesti e propaga anche per fetch downstream
                     final_headers_with_vavoo = {**final_headers, **vavoo_headers}
+                    app.logger.info(f"[DEBUG] Headers restituiti per Vavoo: {final_headers_with_vavoo}")
                     return {
                         "resolved_url": resolved_vavoo,
                         "headers": final_headers_with_vavoo
@@ -1080,9 +1081,10 @@ def resolve_m3u8_link(url, headers=None):
         }
         # Unisci anche i custom headers richiesti per DaddyLive e propaga downstream
         all_headers = {**final_headers, **final_headers_for_fetch, **daddylive_custom_headers}
+        app.logger.info(f"[DEBUG] Headers restituiti per DaddyLive: {final_headers_for_resolving}")
         return {
             "resolved_url": clean_m3u8_url,
-            "headers": all_headers
+            "headers": final_headers_for_resolving.copy()
         }
 
     except Exception as e:
