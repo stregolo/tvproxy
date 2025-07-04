@@ -2091,12 +2091,14 @@ def proxy_m3u():
 
         headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in current_headers_for_proxy.items()])
 
-        # Se il link è stato risolto da Vavoo, aggiungi is_vavoo=1 ai segmenti e alle chiavi
+        # Se l'URL di partenza è Vavoo, forziamo is_vavoo=1
         is_vavoo = False
-        vavoo_headers_set = {"User-Agent": "VAVOO/2.6", "Referer": "https://vavoo.to/", "Origin": "https://vavoo.to"}
-        # Se tutti e 3 gli header sono presenti e corrispondono, consideriamo il link come Vavoo
-        if all(current_headers_for_proxy.get(k) == v for k, v in vavoo_headers_set.items()):
+        if "vavoo.to" in m3u_url.lower():
             is_vavoo = True
+        else:
+            vavoo_headers_set = {"User-Agent": "VAVOO/2.6", "Referer": "https://vavoo.to/", "Origin": "https://vavoo.to"}
+            if all(current_headers_for_proxy.get(k) == v for k, v in vavoo_headers_set.items()):
+                is_vavoo = True
         vavoo_param = "&is_vavoo=1" if is_vavoo else ""
 
         modified_m3u8 = []
