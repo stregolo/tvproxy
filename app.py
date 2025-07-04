@@ -2080,7 +2080,10 @@ def proxy_m3u():
                 line = replace_key_uri(line, headers_query)
             elif line and not line.startswith("#"):
                 segment_url = urljoin(base_url, line)
-                line = f"/proxy/ts?url={quote(segment_url)}&{headers_query}"
+                if headers_query:
+                    line = f"/proxy/ts?url={quote(segment_url)}&{headers_query}"
+                else:
+                    line = f"/proxy/ts?url={quote(segment_url)}"
             modified_m3u8.append(line)
 
         modified_m3u8_content = "\n".join(modified_m3u8)
