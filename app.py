@@ -351,6 +351,10 @@ class ConfigManager:
             'ADMIN_PASSWORD': 'password123',
             'CACHE_ENABLED' : True,
             'NO_PROXY_DOMAINS': 'github.com,raw.githubusercontent.com',
+            'PREBUFFER_ENABLED': True,
+            'PREBUFFER_MAX_SEGMENTS': 3,
+            'PREBUFFER_MAX_SIZE_MB': 50,
+            'PREBUFFER_CLEANUP_INTERVAL': 300,
         }
         
     def load_config(self):
@@ -444,6 +448,167 @@ class ConfigManager:
         return True
 
 config_manager = ConfigManager()
+
+# --- Sistema di Pre-Buffering per Evitare Buffering ---
+class PreBufferManager:
+    def __init__(self):
+        self.pre_buffer = {}  # {stream_id: {segment_url: content}}
+        self.pre_buffer_lock = Lock()
+        self.pre_buffer_threads = {}  # {stream_id: thread}
+        self.update_config()
+    
+    def update_config(self):
+        """Aggiorna la configurazione dal config manager"""
+        try:
+            config = config_manager.load_config()
+            self.pre_buffer_config = {
+                'enabled': config.get('PREBUFFER_ENABLED', True),
+                'max_segments': config.get('PREBUFFER_MAX_SEGMENTS', 3),
+                'max_buffer_size': config.get('PREBUFFER_MAX_SIZE_MB', 50) * 1024 * 1024,  # Converti in bytes
+                'cleanup_interval': config.get('PREBUFFER_CLEANUP_INTERVAL', 300)
+            }
+            app.logger.info(f"Configurazione pre-buffer aggiornata: {self.pre_buffer_config}")
+        except Exception as e:
+            app.logger.error(f"Errore nell'aggiornamento configurazione pre-buffer: {e}")
+            # Configurazione di fallback
+            self.pre_buffer_config = {
+                'enabled': True,
+                'max_segments': 3,
+                'max_buffer_size': 50 * 1024 * 1024,
+                'cleanup_interval': 300
+            }
+    
+    def get_stream_id_from_url(self, url):
+        """Estrae un ID stream univoco dall'URL"""
+        # Usa l'hash dell'URL come stream ID
+        return hashlib.md5(url.encode()).hexdigest()[:12]
+    
+    def pre_buffer_segments(self, m3u8_content, base_url, headers, stream_id):
+        """Pre-scarica i segmenti successivi in background"""
+        # Controlla se il pre-buffering è abilitato
+        if not self.pre_buffer_config.get('enabled', True):
+            app.logger.info(f"Pre-buffering disabilitato per stream {stream_id}")
+            return
+        
+        try:
+            # Trova i segmenti nel M3U8
+            segment_urls = []
+            for line in m3u8_content.splitlines():
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    segment_url = urljoin(base_url, line)
+                    segment_urls.append(segment_url)
+            
+            if not segment_urls:
+                return
+            
+            # Pre-scarica i primi N segmenti
+            segments_to_buffer = segment_urls[:self.pre_buffer_config['max_segments']]
+            
+            def buffer_worker():
+                try:
+                    current_buffer_size = 0
+                    
+                    for segment_url in segments_to_buffer:
+                        # Controlla se il segmento è già nel buffer
+                        with self.pre_buffer_lock:
+                            if stream_id in self.pre_buffer and segment_url in self.pre_buffer[stream_id]:
+                                continue
+                        
+                        try:
+                            # Scarica il segmento
+                            proxy_config = get_proxy_for_url(segment_url)
+                            proxy_key = proxy_config['http'] if proxy_config else None
+                            
+                            response = make_persistent_request(
+                                segment_url,
+                                headers=headers,
+                                timeout=get_dynamic_timeout(segment_url),
+                                proxy_url=proxy_key,
+                                allow_redirects=True
+                            )
+                            response.raise_for_status()
+                            
+                            segment_content = response.content
+                            segment_size = len(segment_content)
+                            
+                            # Controlla se il buffer non supera il limite
+                            if current_buffer_size + segment_size > self.pre_buffer_config['max_buffer_size']:
+                                app.logger.warning(f"Buffer pieno per stream {stream_id}, salto segmento {segment_url}")
+                                break
+                            
+                            # Aggiungi al buffer
+                            with self.pre_buffer_lock:
+                                if stream_id not in self.pre_buffer:
+                                    self.pre_buffer[stream_id] = {}
+                                self.pre_buffer[stream_id][segment_url] = segment_content
+                                current_buffer_size += segment_size
+                            
+                            app.logger.info(f"Segmento pre-buffato: {segment_url} ({segment_size} bytes) per stream {stream_id}")
+                            
+                        except Exception as e:
+                            app.logger.error(f"Errore nel pre-buffering del segmento {segment_url}: {e}")
+                            continue
+                    
+                    app.logger.info(f"Pre-buffering completato per stream {stream_id}: {len(segments_to_buffer)} segmenti")
+                    
+                except Exception as e:
+                    app.logger.error(f"Errore nel worker di pre-buffering per stream {stream_id}: {e}")
+                finally:
+                    # Rimuovi il thread dalla lista
+                    with self.pre_buffer_lock:
+                        if stream_id in self.pre_buffer_threads:
+                            del self.pre_buffer_threads[stream_id]
+            
+            # Avvia il thread di pre-buffering
+            buffer_thread = Thread(target=buffer_worker, daemon=True)
+            buffer_thread.start()
+            
+            with self.pre_buffer_lock:
+                self.pre_buffer_threads[stream_id] = buffer_thread
+            
+        except Exception as e:
+            app.logger.error(f"Errore nell'avvio del pre-buffering per stream {stream_id}: {e}")
+    
+    def get_buffered_segment(self, segment_url, stream_id):
+        """Recupera un segmento dal buffer se disponibile"""
+        with self.pre_buffer_lock:
+            if stream_id in self.pre_buffer and segment_url in self.pre_buffer[stream_id]:
+                content = self.pre_buffer[stream_id][segment_url]
+                # Rimuovi dal buffer dopo l'uso
+                del self.pre_buffer[stream_id][segment_url]
+                app.logger.info(f"Segmento servito dal buffer: {segment_url} per stream {stream_id}")
+                return content
+        return None
+    
+    def cleanup_old_buffers(self):
+        """Pulisce i buffer vecchi"""
+        while True:
+            try:
+                time.sleep(self.pre_buffer_config['cleanup_interval'])
+                
+                with self.pre_buffer_lock:
+                    current_time = time.time()
+                    streams_to_remove = []
+                    
+                    for stream_id, segments in self.pre_buffer.items():
+                        # Rimuovi stream senza thread attivo e con buffer vecchio
+                        if stream_id not in self.pre_buffer_threads:
+                            streams_to_remove.append(stream_id)
+                    
+                    for stream_id in streams_to_remove:
+                        del self.pre_buffer[stream_id]
+                        app.logger.info(f"Buffer pulito per stream {stream_id}")
+                
+            except Exception as e:
+                app.logger.error(f"Errore nella pulizia del buffer: {e}")
+
+# Istanza globale del pre-buffer manager
+pre_buffer_manager = PreBufferManager()
+
+# Avvia il thread di pulizia del buffer
+cleanup_thread = Thread(target=pre_buffer_manager.cleanup_old_buffers, daemon=True)
+cleanup_thread.start()
 
 # --- Log Manager ---
 class LogManager:
@@ -539,6 +704,25 @@ def get_system_stats():
     net_io = psutil.net_io_counters()
     system_stats['network_sent'] = net_io.bytes_sent / (1024**2)  # MB
     system_stats['network_recv'] = net_io.bytes_recv / (1024**2)  # MB
+    
+    # Statistiche pre-buffer
+    try:
+        with pre_buffer_manager.pre_buffer_lock:
+            total_segments = sum(len(segments) for segments in pre_buffer_manager.pre_buffer.values())
+            total_size = sum(
+                sum(len(content) for content in segments.values())
+                for segments in pre_buffer_manager.pre_buffer.values()
+            )
+            system_stats['prebuffer_streams'] = len(pre_buffer_manager.pre_buffer)
+            system_stats['prebuffer_segments'] = total_segments
+            system_stats['prebuffer_size_mb'] = round(total_size / (1024 * 1024), 2)
+            system_stats['prebuffer_threads'] = len(pre_buffer_manager.pre_buffer_threads)
+    except Exception as e:
+        app.logger.error(f"Errore nel calcolo statistiche pre-buffer: {e}")
+        system_stats['prebuffer_streams'] = 0
+        system_stats['prebuffer_segments'] = 0
+        system_stats['prebuffer_size_mb'] = 0
+        system_stats['prebuffer_threads'] = 0
     
     return system_stats
 
@@ -1698,11 +1882,21 @@ def save_config():
             else:
                 new_config['CACHE_ENABLED'] = bool(val)
         
+        # Gestisci configurazioni pre-buffer
+        if 'PREBUFFER_ENABLED' in new_config:
+            val = new_config['PREBUFFER_ENABLED']
+            if isinstance(val, str):
+                new_config['PREBUFFER_ENABLED'] = val.lower() in ('true', '1', 'yes')
+            else:
+                new_config['PREBUFFER_ENABLED'] = bool(val)
+        
         # Salva la configurazione
         if config_manager.save_config(new_config):
             config_manager.apply_config_to_app(new_config)
             setup_proxies()
             setup_all_caches()
+            # Aggiorna la configurazione del pre-buffer
+            pre_buffer_manager.update_config()
             return jsonify({"status": "success", "message": "Configurazione salvata con successo"})
         else:
             return jsonify({"status": "error", "message": "Errore nel salvataggio"})
@@ -1955,6 +2149,180 @@ def clear_cache():
             "message": f"Errore durante la pulizia della cache: {str(e)}"
         }), 500
 
+# NUOVA ROTTA: Pre-buffering Avanzato
+@app.route('/proxy/prebuffer')
+def proxy_prebuffer():
+    """Endpoint per pre-buffering manuale di segmenti specifici"""
+    m3u8_url = request.args.get('m3u8_url', '').strip()
+    stream_id = request.args.get('stream_id', '').strip()
+    
+    if not m3u8_url or not stream_id:
+        return jsonify({
+            "error": "Parametri mancanti",
+            "required": ["m3u8_url", "stream_id"]
+        }), 400
+    
+    try:
+        # Scarica il M3U8
+        headers = {
+            unquote(key[2:]).replace("_", "-"): unquote(value).strip()
+            for key, value in request.args.items()
+            if key.lower().startswith("h_")
+        }
+        
+        response = make_persistent_request(
+            m3u8_url,
+            headers=headers,
+            timeout=get_dynamic_timeout(m3u8_url),
+            allow_redirects=True
+        )
+        response.raise_for_status()
+        
+        m3u8_content = response.text
+        final_url = response.url
+        parsed_url = urlparse(final_url)
+        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path.rsplit('/', 1)[0]}/"
+        
+        # Avvia il pre-buffering
+        pre_buffer_manager.pre_buffer_segments(m3u8_content, base_url, headers, stream_id)
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Pre-buffering avviato per stream {stream_id}",
+            "stream_id": stream_id,
+            "segments_to_buffer": pre_buffer_manager.pre_buffer_config['max_segments']
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel pre-buffering manuale: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nel pre-buffering: {str(e)}"
+        }), 500
+
+# NUOVA ROTTA: Stato Pre-buffer
+@app.route('/admin/prebuffer/status')
+@login_required
+def prebuffer_status():
+    """Mostra lo stato del sistema di pre-buffering"""
+    try:
+        with pre_buffer_manager.pre_buffer_lock:
+            buffer_info = {}
+            total_segments = 0
+            total_size = 0
+            
+            for stream_id, segments in pre_buffer_manager.pre_buffer.items():
+                stream_size = sum(len(content) for content in segments.values())
+                buffer_info[stream_id] = {
+                    "segments_count": len(segments),
+                    "total_size_mb": round(stream_size / (1024 * 1024), 2),
+                    "segments": list(segments.keys())[:5]  # Primi 5 segmenti
+                }
+                total_segments += len(segments)
+                total_size += stream_size
+            
+            active_threads = len(pre_buffer_manager.pre_buffer_threads)
+            
+        return jsonify({
+            "status": "success",
+            "pre_buffer_config": pre_buffer_manager.pre_buffer_config,
+            "active_streams": len(buffer_info),
+            "active_threads": active_threads,
+            "total_segments_buffered": total_segments,
+            "total_buffer_size_mb": round(total_size / (1024 * 1024), 2),
+            "streams": buffer_info
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero stato pre-buffer: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nel recupero stato: {str(e)}"
+        }), 500
+
+# NUOVA ROTTA: Pulisci Pre-buffer
+@app.route('/admin/prebuffer/clear', methods=['POST'])
+@login_required
+def clear_prebuffer():
+    """Pulisce tutti i buffer di pre-buffering"""
+    try:
+        with pre_buffer_manager.pre_buffer_lock:
+            streams_cleared = len(pre_buffer_manager.pre_buffer)
+            pre_buffer_manager.pre_buffer.clear()
+            pre_buffer_manager.pre_buffer_threads.clear()
+        
+        app.logger.info(f"Pre-buffer pulito: {streams_cleared} stream rimossi")
+        return jsonify({
+            "status": "success",
+            "message": f"Pre-buffer pulito: {streams_cleared} stream rimossi"
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella pulizia del pre-buffer: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nella pulizia: {str(e)}"
+        }), 500
+
+# NUOVA ROTTA: Test Pre-buffering
+@app.route('/admin/prebuffer/test', methods=['POST'])
+@login_required
+def test_prebuffer():
+    """Testa il sistema di pre-buffering con un URL di esempio"""
+    try:
+        test_url = (request.json or {}).get('test_url', 'https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.m3u8')
+        stream_id = pre_buffer_manager.get_stream_id_from_url(test_url)
+        
+        # Test del pre-buffering
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        # Scarica il M3U8 di test
+        response = make_persistent_request(
+            test_url,
+            headers=headers,
+            timeout=10,
+            allow_redirects=True
+        )
+        response.raise_for_status()
+        
+        m3u8_content = response.text
+        final_url = response.url
+        parsed_url = urlparse(final_url)
+        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path.rsplit('/', 1)[0]}/"
+        
+        # Avvia il pre-buffering
+        pre_buffer_manager.pre_buffer_segments(m3u8_content, base_url, headers, stream_id)
+        
+        # Attendi un momento per il pre-buffering
+        time.sleep(2)
+        
+        # Controlla lo stato del buffer
+        with pre_buffer_manager.pre_buffer_lock:
+            stream_buffer = pre_buffer_manager.pre_buffer.get(stream_id, {})
+            buffer_status = {
+                'stream_id': stream_id,
+                'segments_buffered': len(stream_buffer),
+                'buffer_size_mb': round(
+                    sum(len(content) for content in stream_buffer.values()) / (1024 * 1024), 2
+                ),
+                'test_url': test_url
+            }
+        
+        return jsonify({
+            "status": "success",
+            "message": "Test pre-buffering completato",
+            "results": buffer_status
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel test pre-buffering: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nel test: {str(e)}"
+        }), 500
+
 @app.route('/stats')
 def get_stats():
     """Endpoint per ottenere le statistiche di sistema"""
@@ -1979,8 +2347,16 @@ def get_stats():
     # Calcola richieste per minuto (semplificato)
     stats['requests_per_min'] = len(SESSION_POOL) * 2  # Stima basata su sessioni attive
     
+    # Aggiungi statistiche pre-buffer
+    stats['prebuffer_info'] = {
+        'active_streams': stats.get('prebuffer_streams', 0),
+        'buffered_segments': stats.get('prebuffer_segments', 0),
+        'buffer_size_mb': stats.get('prebuffer_size_mb', 0),
+        'active_threads': stats.get('prebuffer_threads', 0)
+    }
+    
     # Debug log per verificare i dati
-    app.logger.info(f"Stats endpoint chiamato - RAM: {stats.get('ram_usage', 0)}%, Cache: {stats.get('cache_size', '0')}, Sessions: {stats.get('session_count', 0)}")
+    app.logger.info(f"Stats endpoint chiamato - RAM: {stats.get('ram_usage', 0)}%, Cache: {stats.get('cache_size', '0')}, Sessions: {stats.get('session_count', 0)}, Pre-buffer: {stats.get('prebuffer_streams', 0)} streams")
     
     return jsonify(stats)
 
@@ -2034,7 +2410,7 @@ def proxy_vavoo():
 
 @app.route('/proxy/m3u')
 def proxy_m3u():
-    """Proxy per file M3U e M3U8 con supporto DaddyLive 2025 e caching intelligente"""
+    """Proxy per file M3U e M3U8 con supporto DaddyLive 2025, caching intelligente e pre-buffering"""
     m3u_url = request.args.get('url', '').strip()
     if not m3u_url:
         return "Errore: Parametro 'url' mancante", 400
@@ -2103,6 +2479,9 @@ def proxy_m3u():
 
         headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in current_headers_for_proxy.items()])
 
+        # Genera stream ID per il pre-buffering
+        stream_id = pre_buffer_manager.get_stream_id_from_url(m3u_url)
+
         modified_m3u8 = []
         for line in m3u_content.splitlines():
             line = line.strip()
@@ -2111,12 +2490,21 @@ def proxy_m3u():
             elif line and not line.startswith("#"):
                 segment_url = urljoin(base_url, line)
                 if headers_query:
-                    line = f"/proxy/ts?url={quote(segment_url)}&{headers_query}"
+                    line = f"/proxy/ts?url={quote(segment_url)}&{headers_query}&stream_id={stream_id}"
                 else:
-                    line = f"/proxy/ts?url={quote(segment_url)}"
+                    line = f"/proxy/ts?url={quote(segment_url)}&stream_id={stream_id}"
             modified_m3u8.append(line)
 
         modified_m3u8_content = "\n".join(modified_m3u8)
+
+        # Avvia il pre-buffering in background
+        def start_pre_buffering():
+            try:
+                pre_buffer_manager.pre_buffer_segments(m3u_content, base_url, current_headers_for_proxy, stream_id)
+            except Exception as e:
+                app.logger.error(f"Errore nell'avvio del pre-buffering: {e}")
+
+        Thread(target=start_pre_buffering, daemon=True).start()
 
         def cache_later():
             if not cache_enabled:
@@ -2173,8 +2561,10 @@ def proxy_resolve():
 
 @app.route('/proxy/ts')
 def proxy_ts():
-    """Proxy per segmenti .TS con connessioni persistenti, headers personalizzati e caching"""
+    """Proxy per segmenti .TS con connessioni persistenti, headers personalizzati, caching e pre-buffering"""
     ts_url = request.args.get('url', '').strip()
+    stream_id = request.args.get('stream_id', '').strip()
+    
     if not ts_url:
         return "Errore: Parametro 'url' mancante", 400
 
@@ -2182,6 +2572,14 @@ def proxy_ts():
     config = config_manager.load_config()
     cache_enabled = config.get('CACHE_ENABLED', True)
     
+    # 1. Controlla prima il pre-buffer (più veloce)
+    if stream_id:
+        buffered_content = pre_buffer_manager.get_buffered_segment(ts_url, stream_id)
+        if buffered_content:
+            app.logger.info(f"Pre-buffer HIT per TS: {ts_url}")
+            return Response(buffered_content, content_type="video/mp2t")
+    
+    # 2. Controlla la cache normale
     if cache_enabled and ts_url in TS_CACHE:
         app.logger.info(f"Cache HIT per TS: {ts_url}")
         return Response(TS_CACHE[ts_url], content_type="video/mp2t")
@@ -2409,6 +2807,8 @@ config_manager.apply_config_to_app(saved_config)
 # Inizializza le cache
 setup_all_caches()
 setup_proxies()
+
+
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
