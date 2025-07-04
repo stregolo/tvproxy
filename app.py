@@ -2089,28 +2089,26 @@ def proxy_m3u():
         parsed_url = urlparse(final_url)
         base_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path.rsplit('/', 1)[0]}/"
 
-        headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in current_headers_for_proxy.items()])
-
-        # Se l'URL di partenza è Vavoo, forziamo is_vavoo=1
-        is_vavoo = False
-        if "vavoo.to" in m3u_url.lower():
-            is_vavoo = True
+        if is_vavoo:
+            vavoo_headers = {
+                "User-Agent": "VAVOO/2.6",
+                "Referer": "https://vavoo.to/",
+                "Origin": "https://vavoo.to"
+            }
+            headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in vavoo_headers.items()])
         else:
-            vavoo_headers_set = {"User-Agent": "VAVOO/2.6", "Referer": "https://vavoo.to/", "Origin": "https://vavoo.to"}
-            if all(current_headers_for_proxy.get(k) == v for k, v in vavoo_headers_set.items()):
-                is_vavoo = True
-        vavoo_param = "&is_vavoo=1" if is_vavoo else ""
+            headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in current_headers_for_proxy.items()])
 
         modified_m3u8 = []
         for line in m3u_content.splitlines():
             line = line.strip()
             if line.startswith("#EXT-X-KEY") and 'URI="' in line:
                 # Aggiungi is_vavoo=1 alla chiave se necessario
-                line = replace_key_uri(line, headers_query + vavoo_param)
+                line = replace_key_uri(line, headers_query)
             elif line and not line.startswith("#"):
                 # Aggiungi is_vavoo=1 ai segmenti se necessario
                 segment_url = urljoin(base_url, line)
-                line = f"/proxy/ts?url={quote(segment_url)}&{headers_query}{vavoo_param}"
+                line = f"/proxy/ts?url={quote(segment_url)}&{headers_query}"
             modified_m3u8.append(line)
 
         modified_m3u8_content = "\n".join(modified_m3u8)
