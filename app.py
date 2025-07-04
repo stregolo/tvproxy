@@ -2101,7 +2101,15 @@ def proxy_m3u():
             if all(current_headers_for_proxy.get(k) == v for k, v in vavoo_headers_set.items()):
                 is_vavoo = True
 
-        headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in current_headers_for_proxy.items()])
+        if is_vavoo:
+            vavoo_headers = {
+                "User-Agent": "VAVOO/2.6",
+                "Referer": "https://vavoo.to/",
+                "Origin": "https://vavoo.to"
+            }
+            headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in vavoo_headers.items()])
+        else:
+            headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in current_headers_for_proxy.items()])
 
         modified_m3u8 = []
         for line in m3u_content.splitlines():
