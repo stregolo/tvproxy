@@ -364,6 +364,21 @@
                     </button>
                 </div>
             </div>
+            
+            <div class="admin-card">
+                <h3><i class="fas fa-memory"></i> Gestione Memoria</h3>
+                <p>Monitora e gestisci l'uso della memoria RAM e del buffer di pre-buffering</p>
+                <div class="btn-group">
+                    <button class="btn btn-small" onclick="showMemoryStatus()">
+                        <i class="fas fa-chart-line"></i>
+                        Stato
+                    </button>
+                    <button class="btn btn-small" onclick="cleanupMemory()">
+                        <i class="fas fa-broom"></i>
+                        Pulisci
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
     
@@ -561,6 +576,91 @@ Configurazione:
                 btn.innerHTML = '<i class="fas fa-chart-line"></i> Stato';
                 alert('Errore nel recupero stato: ' + error.message);
             });
+        }
+
+        function showMemoryStatus() {
+            const btn = event.target;
+            btn.classList.add('loading');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Caricando...';
+            
+            fetch('/admin/memory/status', {
+                credentials: 'include',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-chart-line"></i> Stato';
+                
+                if(data.status === 'success') {
+                    const mem = data.system_memory;
+                    const buf = data.buffer_memory;
+                    const config = data.config;
+                    
+                    const message = `Stato Memoria Sistema:
+                    
+RAM Totale: ${mem.total_gb} GB
+RAM Usata: ${mem.used_gb} GB (${mem.percent}%)
+RAM Disponibile: ${mem.available_gb} GB
+
+Buffer Pre-Buffer:
+Dimensione: ${buf.size_mb} MB (${buf.percent}%)
+Stream attivi: ${buf.streams}
+Segmenti buffati: ${buf.segments}
+
+Configurazione:
+- Max memoria buffer: ${config.max_memory_percent}%
+- Soglia emergenza: ${config.emergency_cleanup_threshold}%
+- Max dimensione: ${config.max_buffer_size / (1024*1024)} MB`;
+                    
+                    alert(message);
+                } else {
+                    alert('Errore nel recupero stato memoria: ' + data.message);
+                }
+            })
+            .catch(error => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-chart-line"></i> Stato';
+                alert('Errore nel recupero stato memoria: ' + error.message);
+            });
+        }
+
+        function cleanupMemory() {
+            if(confirm('Sei sicuro di voler pulire la memoria e tutti i buffer?')) {
+                const btn = event.target;
+                btn.classList.add('loading');
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Pulendo...';
+                
+                fetch('/admin/memory/cleanup', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    btn.classList.remove('loading');
+                    if(data.status === 'success') {
+                        btn.innerHTML = '<i class="fas fa-check"></i> Pulito!';
+                        setTimeout(() => {
+                            btn.innerHTML = '<i class="fas fa-broom"></i> Pulisci';
+                        }, 2000);
+                        alert(`Memoria pulita: ${data.memory_freed_mb} MB liberati, ${data.buffer_cleared_mb} MB buffer puliti`);
+                    } else {
+                        btn.innerHTML = '<i class="fas fa-broom"></i> Pulisci';
+                        alert('Errore: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    btn.classList.remove('loading');
+                    btn.innerHTML = '<i class="fas fa-broom"></i> Pulisci';
+                    alert('Errore nella pulizia memoria: ' + error.message);
+                });
+            }
         }
     </script>
 </body>
