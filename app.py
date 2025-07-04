@@ -2402,3 +2402,33 @@ def proxy_key():
         key_content = response.content
 
         if cache_enabled:
+            KEY_CACHE[key_url] = key_content
+        return Response(key_content, content_type="application/octet-stream")
+
+    except requests.RequestException as e:
+        app.logger.error(f"Errore durante il download della chiave AES-128: {str(e)}")
+        return f"Errore durante il download della chiave AES-128: {str(e)}", 500
+
+# --- Inizializzazione dell'app ---
+
+# Carica e applica la configurazione salvata al startup
+saved_config = config_manager.load_config()
+config_manager.apply_config_to_app(saved_config)
+
+# Inizializza le cache
+setup_all_caches()
+setup_proxies()
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 7860))
+    
+    # Log di avvio
+    app.logger.info("="*50)
+    app.logger.info("🚀 PROXY SERVER AVVIATO CON WEBSOCKET")
+    app.logger.info("="*50)
+    app.logger.info(f"Porta: {port}")
+    app.logger.info(f"WebSocket abilitato per aggiornamenti real-time")
+    app.logger.info("="*50)
+    
+    # Usa socketio.run invece di app.run
+    socketio.run(app, host="0.0.0.0", port=port, debug=False)
