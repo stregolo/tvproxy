@@ -1435,49 +1435,27 @@ def proxy_dash_segment():
     template = request.args.get('template', '').strip()
     base = request.args.get('base', '').strip()
 
-    # Se NON c'è né url né (template e base), restituisci errore
     if not segment_url and not (template and base):
         return "Errore: Parametri mancanti (serve 'url' oppure 'template' e 'base')", 400
 
     try:
-        segment_url = request.args.get('url', '').strip()
-        template = request.args.get('template', '').strip()
-        base = request.args.get('base', '').strip()
-        
-        # Se è un template, costruisci l'URL
         if template and base:
-            app.logger.info(f"Processando template DASH: {template} con base: {base}")
+            # Decodifica i parametri
             number = request.args.get('Number', request.args.get('number', '1'))
             time = request.args.get('Time', request.args.get('time', '0'))
             bandwidth = request.args.get('Bandwidth', request.args.get('bandwidth', '1000000'))
             representation_id = request.args.get('RepresentationID', request.args.get('representation_id', 'video'))
-            import re
+
+            # Sostituzione placeholder
             segment_url = template
-            for match in re.finditer(r'\$(\w+)%(\d+)d\$', template):
-                param_name = match.group(1).lower()
-                width = int(match.group(2))
-                if param_name == 'number':
-                    value = str(number).zfill(width)
-                elif param_name == 'time':
-                    value = str(time).zfill(width)
-                elif param_name == 'bandwidth':
-                    value = str(bandwidth).zfill(width)
-                else:
-                    value = str(locals().get(param_name, '1')).zfill(width)
-                segment_url = segment_url.replace(match.group(0), value)
-            replacements = {
-                '$Number$': str(number),
-                '$Time$': str(time),
-                '$Bandwidth$': str(bandwidth),
-                '$RepresentationID$': str(representation_id),
-                '$$': '$'
-            }
-            for placeholder, value in replacements.items():
-                segment_url = segment_url.replace(placeholder, value)
+            segment_url = segment_url.replace('$Number$', str(number))
+            segment_url = segment_url.replace('$Time$', str(time))
+            segment_url = segment_url.replace('$Bandwidth$', str(bandwidth))
+            segment_url = segment_url.replace('$RepresentationID$', str(representation_id))
+            segment_url = segment_url.replace('$$', '$')
             segment_url = urljoin(base, segment_url)
-            app.logger.info(f"Template risolto: {template} -> {segment_url}")
         elif segment_url:
-            app.logger.info(f"Proxy diretto DASH segment: {segment_url}")
+            pass  # già pronto
         else:
             return "Errore: Parametri mancanti", 400
 
@@ -1497,7 +1475,6 @@ def proxy_dash_segment():
         app.logger.error(f"Errore proxy DASH segment: {e}")
         app.logger.error(traceback.format_exc())
         return f"Errore proxy DASH segment: {str(e)}", 502
-
 
 @app.route('/proxy/dash-master')
 def proxy_dash_master():
