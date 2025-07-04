@@ -350,7 +350,7 @@ class ConfigManager:
             'ADMIN_USERNAME': 'admin',
             'ADMIN_PASSWORD': 'password123',
             'CACHE_ENABLED' : True,
-            'NO_PROXY_DOMAINS': 'github.com',
+            'NO_PROXY_DOMAINS': 'github.com,raw.githubusercontent.com',
         }
         
     def load_config(self):
@@ -772,10 +772,12 @@ def get_daddylive_base_url():
     try:
         app.logger.info("Fetching dynamic DaddyLive base URL from GitHub...")
         github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
+        
+        # Force direct connection for GitHub (no proxy)
         response = requests.get(
             github_url,
             timeout=REQUEST_TIMEOUT,
-            proxies=get_proxy_for_url(github_url),
+            proxies=None,  # Force direct connection
             verify=VERIFY_SSL
         )
         response.raise_for_status()
