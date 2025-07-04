@@ -6,6 +6,3 @@ cachetools
 PySocks
 psutil
 flask-socketio
-mpegdash
-lxml
-defusedxml
