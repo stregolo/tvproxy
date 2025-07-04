@@ -355,6 +355,8 @@ class ConfigManager:
             'PREBUFFER_MAX_SEGMENTS': 3,
             'PREBUFFER_MAX_SIZE_MB': 50,
             'PREBUFFER_CLEANUP_INTERVAL': 300,
+            'PREBUFFER_MAX_MEMORY_PERCENT': 30,
+            'PREBUFFER_EMERGENCY_THRESHOLD': 90,
         }
         
     def load_config(self):
@@ -455,6 +457,7 @@ class PreBufferManager:
         self.pre_buffer = {}  # {stream_id: {segment_url: content}}
         self.pre_buffer_lock = Lock()
         self.pre_buffer_threads = {}  # {stream_id: thread}
+        self.last_cleanup_time = time.time()
         self.update_config()
     
     def update_config(self):
@@ -465,7 +468,9 @@ class PreBufferManager:
                 'enabled': config.get('PREBUFFER_ENABLED', True),
                 'max_segments': config.get('PREBUFFER_MAX_SEGMENTS', 3),
                 'max_buffer_size': config.get('PREBUFFER_MAX_SIZE_MB', 50) * 1024 * 1024,  # Converti in bytes
-                'cleanup_interval': config.get('PREBUFFER_CLEANUP_INTERVAL', 300)
+                'cleanup_interval': config.get('PREBUFFER_CLEANUP_INTERVAL', 300),
+                'max_memory_percent': config.get('PREBUFFER_MAX_MEMORY_PERCENT', 20),  # Max 20% RAM
+                'emergency_cleanup_threshold': config.get('PREBUFFER_EMERGENCY_THRESHOLD', 80)  # Cleanup se RAM > 80%
             }
             app.logger.info(f"Configurazione pre-buffer aggiornata: {self.pre_buffer_config}")
         except Exception as e:
@@ -475,8 +480,97 @@ class PreBufferManager:
                 'enabled': True,
                 'max_segments': 3,
                 'max_buffer_size': 50 * 1024 * 1024,
-                'cleanup_interval': 300
+                'cleanup_interval': 300,
+                'max_memory_percent': 20,
+                'emergency_cleanup_threshold': 80
             }
+    
+    def check_memory_usage(self):
+        """Controlla l'uso di memoria e attiva cleanup se necessario"""
+        try:
+            memory = psutil.virtual_memory()
+            memory_percent = memory.percent
+            
+            # Calcola la dimensione totale del buffer
+            with self.pre_buffer_lock:
+                total_buffer_size = sum(
+                    sum(len(content) for content in segments.values())
+                    for segments in self.pre_buffer.values()
+                )
+                buffer_memory_percent = (total_buffer_size / memory.total) * 100
+            
+            app.logger.info(f"Memoria sistema: {memory_percent:.1f}%, Buffer: {buffer_memory_percent:.1f}%")
+            
+            # Cleanup di emergenza se la RAM supera la soglia
+            if memory_percent > self.pre_buffer_config['emergency_cleanup_threshold']:
+                app.logger.warning(f"RAM critica ({memory_percent:.1f}%), pulizia di emergenza del buffer")
+                self.emergency_cleanup()
+                return False
+            
+            # Cleanup se il buffer usa troppa memoria
+            if buffer_memory_percent > self.pre_buffer_config['max_memory_percent']:
+                app.logger.warning(f"Buffer troppo grande ({buffer_memory_percent:.1f}%), pulizia automatica")
+                self.cleanup_oldest_streams()
+                return False
+            
+            return True
+            
+        except Exception as e:
+            app.logger.error(f"Errore nel controllo memoria: {e}")
+            return True
+    
+    def emergency_cleanup(self):
+        """Pulizia di emergenza - rimuove tutti i buffer"""
+        with self.pre_buffer_lock:
+            streams_cleared = len(self.pre_buffer)
+            total_size = sum(
+                sum(len(content) for content in segments.values())
+                for segments in self.pre_buffer.values()
+            )
+            self.pre_buffer.clear()
+            self.pre_buffer_threads.clear()
+        
+        app.logger.warning(f"Pulizia di emergenza completata: {streams_cleared} stream, {total_size / (1024*1024):.1f}MB liberati")
+    
+    def cleanup_oldest_streams(self):
+        """Rimuove gli stream più vecchi per liberare memoria"""
+        with self.pre_buffer_lock:
+            if len(self.pre_buffer) <= 1:
+                return
+            
+            # Calcola la dimensione di ogni stream
+            stream_sizes = {}
+            for stream_id, segments in self.pre_buffer.items():
+                stream_size = sum(len(content) for content in segments.values())
+                stream_sizes[stream_id] = stream_size
+            
+            # Rimuovi gli stream più grandi fino a liberare abbastanza memoria
+            target_reduction = self.pre_buffer_config['max_buffer_size'] * 0.5  # Riduci del 50%
+            current_total = sum(stream_sizes.values())
+            
+            if current_total <= target_reduction:
+                return
+            
+            # Ordina per dimensione (più grandi prima)
+            sorted_streams = sorted(stream_sizes.items(), key=lambda x: x[1], reverse=True)
+            
+            freed_memory = 0
+            streams_to_remove = []
+            
+            for stream_id, size in sorted_streams:
+                if freed_memory >= target_reduction:
+                    break
+                streams_to_remove.append(stream_id)
+                freed_memory += size
+            
+            # Rimuovi gli stream selezionati
+            for stream_id in streams_to_remove:
+                if stream_id in self.pre_buffer:
+                    del self.pre_buffer[stream_id]
+                if stream_id in self.pre_buffer_threads:
+                    del self.pre_buffer_threads[stream_id]
+            
+            app.logger.info(f"Pulizia automatica: {len(streams_to_remove)} stream rimossi, {freed_memory / (1024*1024):.1f}MB liberati")
     
     def get_stream_id_from_url(self, url):
         """Estrae un ID stream univoco dall'URL"""
@@ -488,6 +582,11 @@ class PreBufferManager:
         # Controlla se il pre-buffering è abilitato
         if not self.pre_buffer_config.get('enabled', True):
             app.logger.info(f"Pre-buffering disabilitato per stream {stream_id}")
+            return
+        
+        # Controlla l'uso di memoria prima di iniziare
+        if not self.check_memory_usage():
+            app.logger.warning(f"Memoria insufficiente, pre-buffering saltato per stream {stream_id}")
             return
         
         try:
@@ -510,6 +609,11 @@ class PreBufferManager:
                     current_buffer_size = 0
                     
                     for segment_url in segments_to_buffer:
+                        # Controlla memoria prima di ogni segmento
+                        if not self.check_memory_usage():
+                            app.logger.warning(f"Memoria insufficiente durante pre-buffering, interrotto per stream {stream_id}")
+                            break
+                        
                         # Controlla se il segmento è già nel buffer
                         with self.pre_buffer_lock:
                             if stream_id in self.pre_buffer and segment_url in self.pre_buffer[stream_id]:
@@ -586,6 +690,9 @@ class PreBufferManager:
         while True:
             try:
                 time.sleep(self.pre_buffer_config['cleanup_interval'])
+                
+                # Controlla memoria e pulisci se necessario
+                self.check_memory_usage()
                 
                 with self.pre_buffer_lock:
                     current_time = time.time()
@@ -2275,6 +2382,84 @@ def clear_prebuffer():
         
     except Exception as e:
         app.logger.error(f"Errore nella pulizia del pre-buffer: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nella pulizia: {str(e)}"
+        }), 500
+
+# NUOVA ROTTA: Controllo Memoria
+@app.route('/admin/memory/status')
+@login_required
+def memory_status():
+    """Mostra lo stato della memoria e del buffer"""
+    try:
+        memory = psutil.virtual_memory()
+        
+        with pre_buffer_manager.pre_buffer_lock:
+            total_buffer_size = sum(
+                sum(len(content) for content in segments.values())
+                for segments in pre_buffer_manager.pre_buffer.values()
+            )
+            buffer_memory_percent = (total_buffer_size / memory.total) * 100
+        
+        return jsonify({
+            "status": "success",
+            "system_memory": {
+                "total_gb": round(memory.total / (1024**3), 2),
+                "used_gb": round(memory.used / (1024**3), 2),
+                "available_gb": round(memory.available / (1024**3), 2),
+                "percent": round(memory.percent, 1)
+            },
+            "buffer_memory": {
+                "size_mb": round(total_buffer_size / (1024*1024), 2),
+                "percent": round(buffer_memory_percent, 1),
+                "streams": len(pre_buffer_manager.pre_buffer),
+                "segments": sum(len(segments) for segments in pre_buffer_manager.pre_buffer.values())
+            },
+            "config": pre_buffer_manager.pre_buffer_config
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero stato memoria: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nel recupero stato: {str(e)}"
+        }), 500
+
+@app.route('/admin/memory/cleanup', methods=['POST'])
+@login_required
+def memory_cleanup():
+    """Pulizia manuale della memoria"""
+    try:
+        before_memory = psutil.virtual_memory()
+        
+        # Pulisci il pre-buffer
+        with pre_buffer_manager.pre_buffer_lock:
+            streams_cleared = len(pre_buffer_manager.pre_buffer)
+            total_size = sum(
+                sum(len(content) for content in segments.values())
+                for segments in pre_buffer_manager.pre_buffer.values()
+            )
+            pre_buffer_manager.pre_buffer.clear()
+            pre_buffer_manager.pre_buffer_threads.clear()
+        
+        # Pulisci le cache
+        setup_all_caches()
+        
+        after_memory = psutil.virtual_memory()
+        memory_freed = before_memory.used - after_memory.used
+        
+        app.logger.info(f"Pulizia memoria manuale: {streams_cleared} stream, {total_size / (1024*1024):.1f}MB liberati")
+        
+        return jsonify({
+            "status": "success",
+            "message": f"Pulizia completata: {streams_cleared} stream rimossi",
+            "memory_freed_mb": round(memory_freed / (1024*1024), 2),
+            "buffer_cleared_mb": round(total_size / (1024*1024), 2)
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella pulizia memoria: {e}")
         return jsonify({
             "status": "error",
             "message": f"Errore nella pulizia: {str(e)}"
