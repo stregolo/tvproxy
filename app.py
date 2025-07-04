@@ -741,6 +741,7 @@ def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, **k
     
     if headers:
         request_headers.update(headers)
+    app.logger.info(f"[DEBUG] make_persistent_request: URL={url} HEADERS={request_headers}")
     
     try:
         response = session.get(
