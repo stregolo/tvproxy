@@ -1732,7 +1732,7 @@ def convert_mpd_to_m3u8(mpd_content, base_url, headers):
                     bandwidth = representation.get('bandwidth', '128000')
                     
                     # Crea URL per l'audio track
-                    audio_url = f"/proxy/mpd/playlist.m3u8?d={quote(base_url)}&profile_id={rep_id}"
+                    audio_url = f"/proxy/mpd/playlist.m3u8?url={quote(base_url)}&profile_id={rep_id}"
                     if headers_query:
                         audio_url += f"&{headers_query}"
                     
@@ -1786,7 +1786,7 @@ def convert_mpd_to_m3u8(mpd_content, base_url, headers):
         # Aggiungi video streams
         for video in video_representations:
             # Crea URL per il video stream
-            video_url = f"/proxy/mpd/playlist.m3u8?d={quote(base_url)}&profile_id={video['id']}"
+            video_url = f"/proxy/mpd/playlist.m3u8?url={quote(base_url)}&profile_id={video['id']}"
             if headers_query:
                 video_url += f"&{headers_query}"
             
@@ -2087,11 +2087,11 @@ def proxy_dash_segment():
 @app.route('/proxy/mpd/playlist.m3u8')
 def proxy_mpd_playlist():
     """Genera playlist M3U8 specifica per ogni representation del MPD"""
-    mpd_url = request.args.get('d', '').strip()
+    mpd_url = request.args.get('url', '').strip()
     profile_id = request.args.get('profile_id', '').strip()
     
     if not mpd_url or not profile_id:
-        return "Errore: Parametri 'd' e 'profile_id' mancanti", 400
+        return "Errore: Parametri 'url' e 'profile_id' mancanti", 400
     
     try:
         # Headers personalizzati
