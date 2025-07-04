@@ -522,6 +522,12 @@ system_stats = {
     'bandwidth_usage': 0
 }
 
+# Inizializza cache globali (verranno sovrascritte da setup_all_caches)
+M3U8_CACHE = {}
+TS_CACHE = {}
+KEY_CACHE = {}
+MPD_CACHE = {}
+
 # Pool globale di sessioni per connessioni persistenti
 SESSION_POOL = {}
 SESSION_LOCK = Lock()
@@ -1949,6 +1955,26 @@ def get_stats():
     stats['daddy_base_url'] = get_daddylive_base_url()
     stats['session_count'] = len(SESSION_POOL)
     stats['proxy_count'] = len(PROXY_LIST)
+    
+    # Aggiungi campi mancanti per il template admin.html
+    stats['active_connections'] = len(SESSION_POOL)
+    stats['cache_size'] = f"{len(M3U8_CACHE) + len(TS_CACHE) + len(KEY_CACHE) + len(MPD_CACHE)} items"
+    
+    # Calcola uptime (tempo dall'avvio del processo)
+    try:
+        process = psutil.Process()
+        uptime_seconds = time.time() - process.create_time()
+        uptime_hours = int(uptime_seconds // 3600)
+        stats['uptime'] = f"{uptime_hours}h"
+    except:
+        stats['uptime'] = "0h"
+    
+    # Calcola richieste per minuto (semplificato)
+    stats['requests_per_min'] = len(SESSION_POOL) * 2  # Stima basata su sessioni attive
+    
+    # Debug log per verificare i dati
+    app.logger.info(f"Stats endpoint chiamato - RAM: {stats.get('ram_usage', 0)}%, Cache: {stats.get('cache_size', '0')}, Sessions: {stats.get('session_count', 0)}")
+    
     return jsonify(stats)
 
 # --- Route Proxy (mantieni tutte le route proxy esistenti) ---
@@ -2376,29 +2402,3 @@ def proxy_key():
         key_content = response.content
 
         if cache_enabled:
-            KEY_CACHE[key_url] = key_content
-        return Response(key_content, content_type="application/octet-stream")
-
-    except requests.RequestException as e:
-        app.logger.error(f"Errore durante il download della chiave AES-128: {str(e)}")
-        return f"Errore durante il download della chiave AES-128: {str(e)}", 500
-
-# --- Inizializzazione dell'app ---
-
-# Carica e applica la configurazione salvata al startup
-saved_config = config_manager.load_config()
-config_manager.apply_config_to_app(saved_config)
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 7860))
-    
-    # Log di avvio
-    app.logger.info("="*50)
-    app.logger.info("🚀 PROXY SERVER AVVIATO CON WEBSOCKET")
-    app.logger.info("="*50)
-    app.logger.info(f"Porta: {port}")
-    app.logger.info(f"WebSocket abilitato per aggiornamenti real-time")
-    app.logger.info("="*50)
-    
-    # Usa socketio.run invece di app.run
-    socketio.run(app, host="0.0.0.0", port=port, debug=False)
