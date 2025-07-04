@@ -122,17 +122,18 @@ class VavooResolver:
     def resolve_vavoo_link(self, link, verbose=False):
         """
         Risolve un link Vavoo usando solo il metodo principale (streammode=1)
+        Restituisce una tupla (resolved_url, headers) se risolto, altrimenti (None, {})
         """
         if not "vavoo.to" in link:
             if verbose:
                 app.logger.info("Il link non è un link Vavoo")
-            return None
+            return None, {}
             
         # Solo metodo principale per il proxy
         signature = self.getAuthSignature()
         if not signature:
             app.logger.error("Impossibile ottenere la signature Vavoo")
-            return None
+            return None, {}
             
         headers = {
             "user-agent": "MediaHubMX/2",
@@ -158,21 +159,28 @@ class VavooResolver:
                 app.logger.info(f"Vavoo response body: {resp.text}")
             
             result = resp.json()
+            resolved_url = None
             if isinstance(result, list) and result and result[0].get("url"):
                 resolved_url = result[0]["url"]
                 channel_name = result[0].get("name", "Unknown")
                 app.logger.info(f"✅ Vavoo risolto: {channel_name} -> {resolved_url}")
-                return resolved_url
             elif isinstance(result, dict) and result.get("url"):
-                app.logger.info(f"✅ Vavoo risolto: {result['url']}")
-                return result["url"]
+                resolved_url = result["url"]
+                app.logger.info(f"✅ Vavoo risolto: {resolved_url}")
             else:
                 app.logger.warning("Nessun link valido trovato nella risposta Vavoo")
-                return None
-                
+                return None, {}
+            # Headers richiesti da aggiungere
+            vavoo_headers = {
+                "user-agent": "VAVOO/2.6",
+                "referer": "https://vavoo.to/",
+                "origin": "https://vavoo.to"
+            }
+            return resolved_url, vavoo_headers
+            
         except Exception as e:
             app.logger.error(f"Errore nella risoluzione Vavoo: {e}")
-            return None
+            return None, {}
 
 # Istanza globale del resolver Vavoo
 vavoo_resolver = VavooResolver()
@@ -913,12 +921,14 @@ def resolve_m3u8_link(url, headers=None):
             app.logger.info(f"🔍 Rilevato link Vavoo, tentativo di risoluzione: {clean_url}")
             
             try:
-                resolved_vavoo = vavoo_resolver.resolve_vavoo_link(clean_url, verbose=True)
+                resolved_vavoo, vavoo_headers = vavoo_resolver.resolve_vavoo_link(clean_url, verbose=True)
                 if resolved_vavoo:
                     app.logger.info(f"✅ Vavoo risolto con successo: {resolved_vavoo}")
+                    # Unisci headers estratti con quelli richiesti
+                    final_headers_with_vavoo = {**final_headers, **vavoo_headers}
                     return {
                         "resolved_url": resolved_vavoo,
-                        "headers": final_headers
+                        "headers": final_headers_with_vavoo
                     }
                 else:
                     app.logger.warning(f"❌ Impossibile risolvere il link Vavoo, passo l'originale: {clean_url}")
@@ -947,10 +957,16 @@ def resolve_m3u8_link(url, headers=None):
     daddy_base_url = get_daddylive_base_url()
     daddy_origin = urlparse(daddy_base_url).scheme + "://" + urlparse(daddy_base_url).netloc
 
+    # Headers richiesti per DaddyLive
+    daddylive_custom_headers = {
+        'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
+        'referer': 'https://forcedtoplay.xyz/',
+        'origin': 'https://forcedtoplay.xyz'
+    }
     daddylive_headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
-        'Referer': daddy_base_url,
-        'Origin': daddy_origin
+        'User-Agent': daddylive_custom_headers['user-agent'],
+        'Referer': daddylive_custom_headers['referer'],
+        'Origin': daddylive_custom_headers['origin']
     }
     final_headers_for_resolving = {**final_headers, **daddylive_headers}
 
@@ -1061,10 +1077,11 @@ def resolve_m3u8_link(url, headers=None):
             'Referer': referer_raw,
             'Origin': referer_raw
         }
-
+        # Unisci anche i custom headers richiesti per DaddyLive
+        all_headers = {**final_headers, **final_headers_for_fetch, **daddylive_custom_headers}
         return {
             "resolved_url": clean_m3u8_url,
-            "headers": {**final_headers, **final_headers_for_fetch}
+            "headers": all_headers
         }
 
     except Exception as e:
@@ -1975,7 +1992,7 @@ def proxy_vavoo():
 
     try:
         app.logger.info(f"🔍 Richiesta risoluzione Vavoo: {url}")
-        resolved = vavoo_resolver.resolve_vavoo_link(url, verbose=True)
+        resolved, vavoo_headers = vavoo_resolver.resolve_vavoo_link(url, verbose=True)
         
         if resolved:
             app.logger.info(f"✅ Vavoo risolto: {resolved}")
@@ -1983,6 +2000,7 @@ def proxy_vavoo():
                 "status": "success",
                 "original_url": url,
                 "resolved_url": resolved,
+                "headers": vavoo_headers,
                 "method": "vavoo_direct"
             })
         else:
@@ -1991,6 +2009,7 @@ def proxy_vavoo():
                 "status": "error",
                 "original_url": url,
                 "resolved_url": None,
+                "headers": {},
                 "error": "Impossibile risolvere il link Vavoo"
             }), 500
             
@@ -1999,6 +2018,7 @@ def proxy_vavoo():
         return jsonify({
             "status": "error",
             "original_url": url,
+            "headers": {},
             "error": str(e)
         }), 500
 
