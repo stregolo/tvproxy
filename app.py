@@ -1847,12 +1847,14 @@ def generate_mpd_playlist(mpd_content, base_url, profile_id, headers):
         
         # Debug: lista tutti i representation disponibili
         available_reps = []
+        app.logger.info(f"Cercando representation: {profile_id}")
+        
         for adaptation_set in root.findall('.//dash:AdaptationSet', ns):
             for representation in adaptation_set.findall('.//dash:Representation', ns):
                 rep_id = representation.get('id', 'unknown')
                 available_reps.append(rep_id)
                 app.logger.info(f"Representation disponibile: {rep_id}")
-                if representation.get('id') == profile_id:
+                if rep_id == profile_id:
                     target_representation = representation
                     target_adaptation_set = adaptation_set
                     app.logger.info(f"Trovato target representation: {profile_id}")
@@ -1865,14 +1867,20 @@ def generate_mpd_playlist(mpd_content, base_url, profile_id, headers):
             app.logger.error(f"Representation disponibili: {available_reps}")
             return "#EXTM3U\n#EXT-X-ERROR: Representation not found"
         
+        app.logger.info(f"Procedendo con representation: {profile_id}")
+        
         # Trova SegmentTemplate
+        app.logger.info(f"Cercando SegmentTemplate per representation: {profile_id}")
         segment_template = target_representation.find('.//dash:SegmentTemplate', ns)
         if segment_template is None and target_adaptation_set is not None:
+            app.logger.info("SegmentTemplate non trovato nel representation, cerco nell'AdaptationSet")
             segment_template = target_adaptation_set.find('.//dash:SegmentTemplate', ns)
         
         if segment_template is None:
             app.logger.error("Nessun SegmentTemplate trovato")
             return "#EXTM3U\n#EXT-X-ERROR: No SegmentTemplate found"
+        
+        app.logger.info("SegmentTemplate trovato")
         
         # Estrai parametri dal SegmentTemplate
         timescale = int(segment_template.get('timescale', '1'))
