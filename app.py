@@ -1608,7 +1608,7 @@ def proxy_mpd():
         cached_data, cache_time, ttl = MPD_CACHE[cache_key]
         if time.time() - cache_time < ttl:
             app.logger.info(f"Cache HIT per MPD: {mpd_url}")
-            return Response(cached_data, content_type="application/dash+xml")
+            return Response(cached_data, content_type="application/vnd.apple.mpegurl")
         else:
             del MPD_CACHE[cache_key]
     
@@ -1635,22 +1635,18 @@ def proxy_mpd():
         mpd_content = response.text
         final_url = response.url
         
-        # Modifica URLs nel manifest MPD
-        modified_mpd = modify_mpd_urls(mpd_content, final_url, headers)
+        # Converti MPD in M3U8
+        m3u8_content = convert_mpd_to_m3u8(mpd_content, final_url, headers)
         
-        # Cache dinamico basato sul tipo
         # Cache dinamico basato sul tipo
         if cache_enabled:
             ttl = get_mpd_cache_ttl(mpd_content)
-            MPD_CACHE[cache_key] = (modified_mpd, time.time(), ttl)
-            # Sposta il logger all'interno del blocco if, in modo che venga chiamato
-            # solo quando il file è stato effettivamente cachato.
-            app.logger.info(f"MPD cachato con TTL {ttl}s: {mpd_url}")
+            MPD_CACHE[cache_key] = (m3u8_content, time.time(), ttl)
+            app.logger.info(f"MPD convertito e cachato con TTL {ttl}s: {mpd_url}")
         else:
-            # Aggiungi un log per quando la cache è disabilitata per maggiore chiarezza
-            app.logger.info(f"MPD servito senza cache: {mpd_url}")
+            app.logger.info(f"MPD convertito senza cache: {mpd_url}")
         
-        return Response(modified_mpd, content_type="application/dash+xml")
+        return Response(m3u8_content, content_type="application/vnd.apple.mpegurl")
         
     except requests.RequestException as e:
         app.logger.error(f"Errore durante il download del file MPD: {str(e)}")
@@ -1689,6 +1685,269 @@ def test_mpd_debug():
     except Exception as e:
         return jsonify({"error": str(e), "traceback": traceback.format_exc()})
 
+
+def convert_mpd_to_m3u8(mpd_content, base_url, headers):
+    """Converte un manifest MPD in formato M3U8"""
+    try:
+        app.logger.info(f"Convertendo MPD in M3U8 per base URL: {base_url}")
+        
+        # Parse XML
+        root = ET.fromstring(mpd_content)
+        ns = {'dash': 'urn:mpeg:dash:schema:mpd:2011'}
+        
+        # Calcola base URL
+        parsed_base = urlparse(base_url)
+        base_url_elements = root.findall('.//dash:BaseURL', ns)
+        if base_url_elements and base_url_elements[0].text:
+            mpd_base = base_url_elements[0].text
+            if mpd_base.startswith('http'):
+                base_path = mpd_base
+            else:
+                base_path = urljoin(base_url, mpd_base)
+        else:
+            base_path = f"{parsed_base.scheme}://{parsed_base.netloc}{parsed_base.path.rsplit('/', 1)[0]}/"
+        
+        # Headers query string
+        headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in headers.items()])
+        
+        # Inizia con l'header M3U8
+        m3u8_lines = ["#EXTM3U", "#EXT-X-VERSION:6"]
+        
+        # Trova tutti i Period
+        periods = root.findall('.//dash:Period', ns)
+        if not periods:
+            app.logger.error("Nessun Period trovato nel MPD")
+            return "#EXTM3U\n#EXT-X-ERROR: No periods found"
+        
+        period = periods[0]  # Usa il primo Period
+        
+        # Raccogli audio tracks
+        audio_tracks = []
+        for adaptation_set in period.findall('.//dash:AdaptationSet', ns):
+            mime_type = adaptation_set.get('mimeType', '')
+            if 'audio' in mime_type:
+                lang = adaptation_set.get('lang', 'und')
+                for representation in adaptation_set.findall('.//dash:Representation', ns):
+                    rep_id = representation.get('id', 'audio')
+                    bandwidth = representation.get('bandwidth', '128000')
+                    
+                    # Crea URL per l'audio track
+                    audio_url = f"/proxy/mpd/playlist.m3u8?d={quote(base_url)}&profile_id={rep_id}"
+                    if headers_query:
+                        audio_url += f"&{headers_query}"
+                    
+                    default = "YES" if len(audio_tracks) == 0 else "NO"
+                    autoselect = "YES" if len(audio_tracks) == 0 else "NO"
+                    
+                    audio_track = {
+                        'id': rep_id,
+                        'name': rep_id,
+                        'lang': lang,
+                        'url': audio_url,
+                        'default': default,
+                        'autoselect': autoselect
+                    }
+                    audio_tracks.append(audio_track)
+        
+        # Aggiungi audio tracks al M3U8
+        for audio in audio_tracks:
+            m3u8_lines.append(
+                f'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="{audio["name"]}",'
+                f'DEFAULT={audio["default"]},AUTOSELECT={audio["autoselect"]},'
+                f'LANGUAGE="{audio["lang"]}",URI="{audio["url"]}"'
+            )
+        
+        # Trova video tracks
+        video_representations = []
+        for adaptation_set in period.findall('.//dash:AdaptationSet', ns):
+            mime_type = adaptation_set.get('mimeType', '')
+            if 'video' in mime_type:
+                for representation in adaptation_set.findall('.//dash:Representation', ns):
+                    rep_id = representation.get('id', 'video')
+                    bandwidth = representation.get('bandwidth', '1000000')
+                    width = representation.get('width', '1280')
+                    height = representation.get('height', '720')
+                    codecs = representation.get('codecs', 'avc1.64001f')
+                    frame_rate = representation.get('frameRate', '25.0')
+                    
+                    video_rep = {
+                        'id': rep_id,
+                        'bandwidth': bandwidth,
+                        'width': width,
+                        'height': height,
+                        'codecs': codecs,
+                        'frame_rate': frame_rate
+                    }
+                    video_representations.append(video_rep)
+        
+        # Ordina per bandwidth
+        video_representations.sort(key=lambda x: int(x['bandwidth']))
+        
+        # Aggiungi video streams
+        for video in video_representations:
+            # Crea URL per il video stream
+            video_url = f"/proxy/mpd/playlist.m3u8?d={quote(base_url)}&profile_id={video['id']}"
+            if headers_query:
+                video_url += f"&{headers_query}"
+            
+            # Crea EXT-X-STREAM-INF
+            stream_info = (
+                f'#EXT-X-STREAM-INF:BANDWIDTH={video["bandwidth"]},'
+                f'RESOLUTION={video["width"]}x{video["height"]},'
+                f'CODECS="{video["codecs"]}",'
+                f'FRAME-RATE={video["frame_rate"]}'
+            )
+            
+            if audio_tracks:
+                stream_info += ',AUDIO="audio"'
+            
+            m3u8_lines.append(stream_info)
+            m3u8_lines.append(video_url)
+        
+        m3u8_content = '\n'.join(m3u8_lines)
+        app.logger.info(f"MPD convertito in M3U8: {len(video_representations)} video streams, {len(audio_tracks)} audio tracks")
+        return m3u8_content
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella conversione MPD a M3U8: {e}")
+        app.logger.error(f"Traceback: {traceback.format_exc()}")
+        return "#EXTM3U\n#EXT-X-ERROR: Conversion failed"
+
+def generate_mpd_playlist(mpd_content, base_url, profile_id, headers):
+    """Genera una playlist M3U8 specifica per un representation del MPD"""
+    try:
+        app.logger.info(f"Generando playlist M3U8 per profile {profile_id}")
+        
+        # Parse XML
+        root = ET.fromstring(mpd_content)
+        ns = {'dash': 'urn:mpeg:dash:schema:mpd:2011'}
+        
+        # Calcola base URL
+        parsed_base = urlparse(base_url)
+        base_url_elements = root.findall('.//dash:BaseURL', ns)
+        if base_url_elements and base_url_elements[0].text:
+            mpd_base = base_url_elements[0].text
+            if mpd_base.startswith('http'):
+                base_path = mpd_base
+            else:
+                base_path = urljoin(base_url, mpd_base)
+        else:
+            base_path = f"{parsed_base.scheme}://{parsed_base.netloc}{parsed_base.path.rsplit('/', 1)[0]}/"
+        
+        # Headers query string
+        headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in headers.items()])
+        
+        # Trova il representation specifico
+        target_representation = None
+        target_adaptation_set = None
+        
+        for adaptation_set in root.findall('.//dash:AdaptationSet', ns):
+            for representation in adaptation_set.findall('.//dash:Representation', ns):
+                if representation.get('id') == profile_id:
+                    target_representation = representation
+                    target_adaptation_set = adaptation_set
+                    break
+            if target_representation:
+                break
+        
+        if not target_representation:
+            app.logger.error(f"Representation {profile_id} non trovato nel MPD")
+            return "#EXTM3U\n#EXT-X-ERROR: Representation not found"
+        
+        # Trova SegmentTemplate
+        segment_template = target_representation.find('.//dash:SegmentTemplate', ns)
+        if segment_template is None and target_adaptation_set is not None:
+            segment_template = target_adaptation_set.find('.//dash:SegmentTemplate', ns)
+        
+        if segment_template is None:
+            app.logger.error("Nessun SegmentTemplate trovato")
+            return "#EXTM3U\n#EXT-X-ERROR: No SegmentTemplate found"
+        
+        # Estrai parametri dal SegmentTemplate
+        timescale = int(segment_template.get('timescale', '1'))
+        start_number = int(segment_template.get('startNumber', '1'))
+        media_template = segment_template.get('media', '')
+        initialization = segment_template.get('initialization', '')
+        
+        # Inizia playlist M3U8
+        m3u8_lines = ["#EXTM3U", "#EXT-X-VERSION:6"]
+        
+        # Aggiungi initialization segment
+        if initialization:
+            init_url = urljoin(base_path, initialization)
+            init_url = init_url.replace('$RepresentationID$', profile_id)
+            proxy_init_url = f"/proxy/dash-segment?url={quote(init_url)}"
+            if headers_query:
+                proxy_init_url += f"&{headers_query}"
+            m3u8_lines.append(f"#EXT-X-MAP:URI=\"{proxy_init_url}\"")
+        
+        # Trova SegmentTimeline
+        timeline = segment_template.find('.//dash:SegmentTimeline', ns)
+        if timeline:
+            # Usa SegmentTimeline per generare segmenti
+            current_time = 0
+            segment_number = start_number
+            
+            for s_elem in timeline.findall('.//dash:S', ns):
+                t = s_elem.get('t')
+                if t is not None:
+                    current_time = int(t)
+                
+                d = int(s_elem.get('d', '0'))
+                r = int(s_elem.get('r', '0'))
+                
+                # Genera segmenti per questo elemento S
+                for i in range(r + 1):
+                    segment_url = media_template.replace('$Number$', str(segment_number))
+                    segment_url = segment_url.replace('$Time$', str(current_time))
+                    segment_url = segment_url.replace('$RepresentationID$', profile_id)
+                    segment_url = urljoin(base_path, segment_url)
+                    
+                    # Crea URL proxy per il segmento
+                    proxy_segment_url = f"/proxy/dash-segment?url={quote(segment_url)}"
+                    if headers_query:
+                        proxy_segment_url += f"&{headers_query}"
+                    
+                    # Calcola durata in secondi
+                    duration = d / timescale
+                    
+                    m3u8_lines.append(f"#EXTINF:{duration:.3f},")
+                    m3u8_lines.append(proxy_segment_url)
+                    
+                    current_time += d
+                    segment_number += 1
+        else:
+            # Usa duration se non c'è timeline
+            duration = int(segment_template.get('duration', '0'))
+            if duration > 0:
+                segment_duration = duration / timescale
+                
+                # Genera alcuni segmenti di esempio (per live streams)
+                for i in range(10):  # Genera 10 segmenti
+                    segment_number = start_number + i
+                    segment_url = media_template.replace('$Number$', str(segment_number))
+                    segment_url = segment_url.replace('$RepresentationID$', profile_id)
+                    segment_url = urljoin(base_path, segment_url)
+                    
+                    # Crea URL proxy per il segmento
+                    proxy_segment_url = f"/proxy/dash-segment?url={quote(segment_url)}"
+                    if headers_query:
+                        proxy_segment_url += f"&{headers_query}"
+                    
+                    m3u8_lines.append(f"#EXTINF:{segment_duration:.3f},")
+                    m3u8_lines.append(proxy_segment_url)
+        
+        # Aggiungi chiusura playlist
+        m3u8_lines.append("#EXT-X-ENDLIST")
+        
+        m3u8_content = '\n'.join(m3u8_lines)
+        app.logger.info(f"Playlist M3U8 generata per profile {profile_id}: {len(m3u8_lines)} righe")
+        return m3u8_content
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella generazione playlist MPD: {e}")
+        app.logger.error(f"Traceback: {traceback.format_exc()}")
+        return "#EXTM3U\n#EXT-X-ERROR: Playlist generation failed"
 
 def modify_mpd_urls(mpd_content, base_url, headers):
     """Modifica gli URL nel manifest MPD per passare attraverso il proxy"""
@@ -1824,6 +2083,48 @@ def proxy_dash_segment():
         app.logger.error(f"Errore proxy DASH segment: {e}")
         app.logger.error(traceback.format_exc())
         return f"Errore proxy DASH segment: {str(e)}", 502
+
+@app.route('/proxy/mpd/playlist.m3u8')
+def proxy_mpd_playlist():
+    """Genera playlist M3U8 specifica per ogni representation del MPD"""
+    mpd_url = request.args.get('d', '').strip()
+    profile_id = request.args.get('profile_id', '').strip()
+    
+    if not mpd_url or not profile_id:
+        return "Errore: Parametri 'd' e 'profile_id' mancanti", 400
+    
+    try:
+        # Headers personalizzati
+        headers = {
+            unquote(key[2:]).replace("_", "-"): unquote(value).strip()
+            for key, value in request.args.items()
+            if key.lower().startswith("h_")
+        }
+        
+        # Scarica il MPD originale
+        proxy_config = get_proxy_for_url(mpd_url)
+        proxy_key = proxy_config['http'] if proxy_config else None
+        
+        response = make_persistent_request(
+            mpd_url,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT,
+            proxy_url=proxy_key,
+            allow_redirects=True
+        )
+        response.raise_for_status()
+        
+        mpd_content = response.text
+        final_url = response.url
+        
+        # Genera playlist M3U8 per il profile specifico
+        m3u8_content = generate_mpd_playlist(mpd_content, final_url, profile_id, headers)
+        
+        return Response(m3u8_content, content_type="application/vnd.apple.mpegurl")
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella generazione playlist MPD: {str(e)}")
+        return f"Errore nella generazione playlist: {str(e)}", 500
 
 @app.route('/proxy/dash-master')
 def proxy_dash_master():
