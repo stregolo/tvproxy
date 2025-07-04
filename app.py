@@ -355,8 +355,8 @@ class ConfigManager:
             'PREBUFFER_MAX_SEGMENTS': 3,
             'PREBUFFER_MAX_SIZE_MB': 50,
             'PREBUFFER_CLEANUP_INTERVAL': 300,
-            'PREBUFFER_MAX_MEMORY_PERCENT': 30,
-            'PREBUFFER_EMERGENCY_THRESHOLD': 90,
+            'PREBUFFER_MAX_MEMORY_PERCENT': 30.0,
+            'PREBUFFER_EMERGENCY_THRESHOLD': 90.0,
         }
         
     def load_config(self):
@@ -464,13 +464,35 @@ class PreBufferManager:
         """Aggiorna la configurazione dal config manager"""
         try:
             config = config_manager.load_config()
+            
+            # Assicurati che tutti i valori numerici siano convertiti correttamente
+            max_segments = config.get('PREBUFFER_MAX_SEGMENTS', 3)
+            if isinstance(max_segments, str):
+                max_segments = int(max_segments)
+            
+            max_size_mb = config.get('PREBUFFER_MAX_SIZE_MB', 50)
+            if isinstance(max_size_mb, str):
+                max_size_mb = int(max_size_mb)
+            
+            cleanup_interval = config.get('PREBUFFER_CLEANUP_INTERVAL', 300)
+            if isinstance(cleanup_interval, str):
+                cleanup_interval = int(cleanup_interval)
+            
+            max_memory_percent = config.get('PREBUFFER_MAX_MEMORY_PERCENT', 30)
+            if isinstance(max_memory_percent, str):
+                max_memory_percent = float(max_memory_percent)
+            
+            emergency_threshold = config.get('PREBUFFER_EMERGENCY_THRESHOLD', 90)
+            if isinstance(emergency_threshold, str):
+                emergency_threshold = float(emergency_threshold)
+            
             self.pre_buffer_config = {
                 'enabled': config.get('PREBUFFER_ENABLED', True),
-                'max_segments': config.get('PREBUFFER_MAX_SEGMENTS', 3),
-                'max_buffer_size': config.get('PREBUFFER_MAX_SIZE_MB', 50) * 1024 * 1024,  # Converti in bytes
-                'cleanup_interval': config.get('PREBUFFER_CLEANUP_INTERVAL', 300),
-                'max_memory_percent': config.get('PREBUFFER_MAX_MEMORY_PERCENT', 20),  # Max 20% RAM
-                'emergency_cleanup_threshold': config.get('PREBUFFER_EMERGENCY_THRESHOLD', 80)  # Cleanup se RAM > 80%
+                'max_segments': max_segments,
+                'max_buffer_size': max_size_mb * 1024 * 1024,  # Converti in bytes
+                'cleanup_interval': cleanup_interval,
+                'max_memory_percent': max_memory_percent,  # Max RAM percent
+                'emergency_cleanup_threshold': emergency_threshold  # Cleanup se RAM > threshold%
             }
             app.logger.info(f"Configurazione pre-buffer aggiornata: {self.pre_buffer_config}")
         except Exception as e:
@@ -481,8 +503,8 @@ class PreBufferManager:
                 'max_segments': 3,
                 'max_buffer_size': 50 * 1024 * 1024,
                 'cleanup_interval': 300,
-                'max_memory_percent': 20,
-                'emergency_cleanup_threshold': 80
+                'max_memory_percent': 30.0,
+                'emergency_cleanup_threshold': 90.0
             }
     
     def check_memory_usage(self):
@@ -502,13 +524,17 @@ class PreBufferManager:
             app.logger.info(f"Memoria sistema: {memory_percent:.1f}%, Buffer: {buffer_memory_percent:.1f}%")
             
             # Cleanup di emergenza se la RAM supera la soglia
-            if memory_percent > self.pre_buffer_config['emergency_cleanup_threshold']:
+            emergency_threshold = self.pre_buffer_config['emergency_cleanup_threshold']
+            app.logger.debug(f"Controllo memoria: {memory_percent:.1f}% vs soglia {emergency_threshold}")
+            if memory_percent > emergency_threshold:
                 app.logger.warning(f"RAM critica ({memory_percent:.1f}%), pulizia di emergenza del buffer")
                 self.emergency_cleanup()
                 return False
             
             # Cleanup se il buffer usa troppa memoria
-            if buffer_memory_percent > self.pre_buffer_config['max_memory_percent']:
+            max_memory_percent = self.pre_buffer_config['max_memory_percent']
+            app.logger.debug(f"Controllo buffer: {buffer_memory_percent:.1f}% vs limite {max_memory_percent}")
+            if buffer_memory_percent > max_memory_percent:
                 app.logger.warning(f"Buffer troppo grande ({buffer_memory_percent:.1f}%), pulizia automatica")
                 self.cleanup_oldest_streams()
                 return False
@@ -602,7 +628,9 @@ class PreBufferManager:
                 return
             
             # Pre-scarica i primi N segmenti
-            segments_to_buffer = segment_urls[:self.pre_buffer_config['max_segments']]
+            max_segments = self.pre_buffer_config['max_segments']
+            app.logger.info(f"Pre-buffering per stream {stream_id}: {len(segment_urls)} segmenti disponibili, max_segments={max_segments}")
+            segments_to_buffer = segment_urls[:max_segments]
             
             def buffer_worker():
                 try:
@@ -2013,6 +2041,29 @@ def save_config():
             else:
                 new_config['PREBUFFER_ENABLED'] = bool(val)
         
+        # Converti valori numerici per pre-buffer
+        prebuffer_numeric_fields = [
+            'PREBUFFER_MAX_SEGMENTS',
+            'PREBUFFER_MAX_SIZE_MB', 
+            'PREBUFFER_CLEANUP_INTERVAL',
+            'PREBUFFER_MAX_MEMORY_PERCENT',
+            'PREBUFFER_EMERGENCY_THRESHOLD'
+        ]
+        
+        for field in prebuffer_numeric_fields:
+            if field in new_config:
+                val = new_config[field]
+                if isinstance(val, str):
+                    try:
+                        if field in ['PREBUFFER_MAX_MEMORY_PERCENT', 'PREBUFFER_EMERGENCY_THRESHOLD']:
+                            new_config[field] = float(val)
+                        else:
+                            new_config[field] = int(val)
+                    except ValueError:
+                        app.logger.warning(f"Valore non valido per {field}: {val}, usando default")
+                        # Rimuovi il campo invalido, userà il default
+                        del new_config[field]
+        
         # Salva la configurazione
         if config_manager.save_config(new_config):
             config_manager.apply_config_to_app(new_config)
@@ -3004,6 +3055,10 @@ def proxy_key():
 # Carica e applica la configurazione salvata al startup
 saved_config = config_manager.load_config()
 config_manager.apply_config_to_app(saved_config)
+
+# Valida e aggiorna la configurazione del pre-buffer
+pre_buffer_manager.update_config()
+app.logger.info("Configurazione pre-buffer inizializzata con successo")
 
 # Inizializza le cache
 setup_all_caches()
