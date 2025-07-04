@@ -2089,15 +2089,19 @@ def proxy_m3u():
         parsed_url = urlparse(final_url)
         base_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path.rsplit('/', 1)[0]}/"
 
-        if is_vavoo:
-            vavoo_headers = {
+        is_vavoo = False
+        if "vavoo.to" in m3u_url.lower():
+            is_vavoo = True
+        else:
+            vavoo_headers_set = {
                 "User-Agent": "VAVOO/2.6",
                 "Referer": "https://vavoo.to/",
                 "Origin": "https://vavoo.to"
             }
-            headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in vavoo_headers.items()])
-        else:
-            headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in current_headers_for_proxy.items()])
+            if all(current_headers_for_proxy.get(k) == v for k, v in vavoo_headers_set.items()):
+                is_vavoo = True
+
+        headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in current_headers_for_proxy.items()])
 
         modified_m3u8 = []
         for line in m3u_content.splitlines():
