@@ -51,8 +51,8 @@ Un server proxy leggero e dockerizzato basato su **Flask** e **Requests**, proge
 
 ```bash
 docker run -d -p 7860:7860 \
-  -e ADMIN_PASSWORD="tua_password_sicura" \
-  -e SECRET_KEY="1f4d8e9a6c57bd2eec914d93cfb7a3efb9ae67f2643125c89cc3c50e75c4d4c3" \
+  -e ADMIN_PASSWORD=tua_password_sicura \
+  -e SECRET_KEY=1f4d8e9a6c57bd2eec914d93cfb7a3efb9ae67f2643125c89cc3c50e75c4d4c3 \
   --name tvproxy tvproxy
 ```
 
@@ -61,8 +61,8 @@ docker run -d -p 7860:7860 \
 ### 📦 Esempio `.env` (Termux / Python)
 
 ```dotenv
-ADMIN_PASSWORD="tua_password_sicura"
-SECRET_KEY="1f4d8e9a6c57bd2eec914d93cfb7a3efb9ae67f2643125c89cc3c50e75c4d4c3"
+ADMIN_PASSWORD=tua_password_sicura
+SECRET_KEY=1f4d8e9a6c57bd2eec914d93cfb7a3efb9ae67f2643125c89cc3c50e75c4d4c3
 ```
 
 ---
@@ -73,8 +73,8 @@ SECRET_KEY="1f4d8e9a6c57bd2eec914d93cfb7a3efb9ae67f2643125c89cc3c50e75c4d4c3"
 
 ```dotenv
 # OBBLIGATORIO
-ADMIN_PASSWORD="tua_password_sicura"
-SECRET_KEY="chiave_segreta_generata"
+ADMIN_PASSWORD=tua_password_sicura
+SECRET_KEY=chiave_segreta_generata
 
 # Ottimizzazioni memoria
 REQUEST_TIMEOUT=30
@@ -130,8 +130,8 @@ Per **HuggingFace Spaces**, è consigliato utilizzare questa configurazione otti
 
 ```dotenv
 # OBBLIGATORIO
-ADMIN_PASSWORD="tua_password_sicura"
-SECRET_KEY="chiave_segreta_generata"
+ADMIN_PASSWORD=tua_password_sicura
+SECRET_KEY=chiave_segreta_generata
 CACHE_TTL_M3U8=5
 CACHE_MAXSIZE_M3U8=500
 CACHE_TTL_TS=600
@@ -143,7 +143,7 @@ POOL_MAXSIZE=300
 MAX_KEEP_ALIVE_REQUESTS=5000
 KEEP_ALIVE_TIMEOUT=900
 REQUEST_TIMEOUT=45
-NO_PROXY_DOMAINS="github.com,vavoo.to"
+NO_PROXY_DOMAINS=github.com,vavoo.to
 ```
 
 **Perché questa configurazione?**
@@ -174,8 +174,8 @@ cd tvproxy
 docker build -t tvproxy .
 
 docker run -d -p 7860:7860 \
-  -e ADMIN_PASSWORD="tua_password_sicura" \
-  -e SECRET_KEY="chiave_segreta_generata" \
+  -e ADMIN_PASSWORD=tua_password_sicura \
+  -e SECRET_KEY=chiave_segreta_generata \
   --name tvproxy tvproxy
 ```
 
@@ -272,12 +272,12 @@ Se hai bisogno di escludere alcuni domini dall'utilizzo del proxy (ad esempio, p
 Esempio `.env`:
 
 ```dotenv
-ADMIN_PASSWORD="tua_password_sicura"
-SECRET_KEY="chiave_segreta_generata"
-# SOCKS5_PROXY="socks5://user:pass@host1:1080"
-# HTTP_PROXY="http://user:pass@host:8080"
-# HTTPS_PROXY="http://user:pass@host:8080"
-# NO_PROXY_DOMAINS="github.com,vavoo.to"
+ADMIN_PASSWORD=tua_password_sicura
+SECRET_KEY=chiave_segreta_generata
+# SOCKS5_PROXY=socks5://user:pass@host1:1080
+# HTTP_PROXY=http://user:pass@host:8080
+# HTTPS_PROXY=http://user:pass@host:8080
+# NO_PROXY_DOMAINS=github.com,vavoo.to
 ```
 
 In questo modo, le richieste verso `github.com` e `vavoo.to` non passeranno attraverso il proxy configurato, ma verranno eseguite direttamente.
