@@ -916,9 +916,16 @@ def resolve_m3u8_link(url, headers=None):
                 resolved_vavoo = vavoo_resolver.resolve_vavoo_link(clean_url, verbose=True)
                 if resolved_vavoo:
                     app.logger.info(f"✅ Vavoo risolto con successo: {resolved_vavoo}")
+                    vavoo_headers = {
+                        "User-Agent": "VAVOO/2.6",
+                        "Referer": "https://vavoo.to/",
+                        "Origin": "https://vavoo.to"
+                    }
+                    # Precedenza agli header già presenti, ma questi sono obbligatori
+                    merged_headers = {**vavoo_headers, **final_headers}
                     return {
                         "resolved_url": resolved_vavoo,
-                        "headers": final_headers
+                        "headers": merged_headers
                     }
                 else:
                     app.logger.warning(f"❌ Impossibile risolvere il link Vavoo, passo l'originale: {clean_url}")
