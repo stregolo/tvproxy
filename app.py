@@ -1820,6 +1820,70 @@ def test_config():
         app.logger.error(f"Errore nel test configurazioni: {e}")
         return jsonify({"status": "error", "message": f"Errore nel test: {str(e)}"})
 
+@app.route('/admin/config/export')
+@login_required
+def export_config():
+    """Esporta la configurazione corrente in formato JSON"""
+    try:
+        config = config_manager.load_config()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"config_export_{timestamp}.json"
+        
+        return Response(
+            json.dumps(config, indent=2, ensure_ascii=False),
+            mimetype='application/json',
+            headers={
+                'Content-Disposition': f'attachment; filename={filename}',
+                'Cache-Control': 'no-cache'
+            }
+        )
+    except Exception as e:
+        app.logger.error(f"Errore nell'esportazione configurazione: {e}")
+        return jsonify({"status": "error", "message": f"Errore nell'esportazione: {str(e)}"}), 500
+
+@app.route('/admin/config/import', methods=['POST'])
+@login_required
+def import_config():
+    """Importa una configurazione da file JSON"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({"status": "error", "message": "Nessun file caricato"}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({"status": "error", "message": "Nessun file selezionato"}), 400
+        
+        if not file.filename.endswith('.json'):
+            return jsonify({"status": "error", "message": "Il file deve essere in formato JSON"}), 400
+        
+        # Leggi il contenuto del file
+        content = file.read().decode('utf-8')
+        imported_config = json.loads(content)
+        
+        # Valida la configurazione importata
+        if not isinstance(imported_config, dict):
+            return jsonify({"status": "error", "message": "Formato configurazione non valido"}), 400
+        
+        # Applica la configurazione importata
+        if config_manager.save_config(imported_config):
+            config_manager.apply_config_to_app(imported_config)
+            setup_proxies()
+            setup_all_caches()
+            app.logger.info(f"Configurazione importata con successo da {file.filename}")
+            return jsonify({
+                "status": "success", 
+                "message": f"Configurazione importata con successo da {file.filename}"
+            })
+        else:
+            return jsonify({"status": "error", "message": "Errore nel salvataggio della configurazione importata"}), 500
+            
+    except json.JSONDecodeError as e:
+        app.logger.error(f"Errore nel parsing JSON del file importato: {e}")
+        return jsonify({"status": "error", "message": f"Errore nel parsing del file JSON: {str(e)}"}), 400
+    except Exception as e:
+        app.logger.error(f"Errore nell'importazione configurazione: {e}")
+        return jsonify({"status": "error", "message": f"Errore nell'importazione: {str(e)}"}), 500
+
 @app.route('/admin/logs/stream/<filename>')
 @login_required
 def stream_logs(filename):
