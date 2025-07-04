@@ -24,8 +24,6 @@ import subprocess
 import concurrent.futures
 from flask_socketio import SocketIO, emit
 import threading
-import xml.etree.ElementTree as ET
-from mpegdash.parser import MPEGDASHParser
 from datetime import datetime, timedelta
 import math
 
@@ -183,19 +181,17 @@ ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'password123')
 ALLOWED_IPS = os.environ.get('ALLOWED_IPS', '').split(',') if os.environ.get('ALLOWED_IPS') else []
 
 def setup_all_caches():
-    global M3U8_CACHE, TS_CACHE, KEY_CACHE, MPD_CACHE
+    global M3U8_CACHE, TS_CACHE, KEY_CACHE
     config = config_manager.load_config()
     if config.get('CACHE_ENABLED', True):
         M3U8_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_M3U8'], ttl=config['CACHE_TTL_M3U8'])
         TS_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_TS'], ttl=config['CACHE_TTL_TS'])
         KEY_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_KEY'], ttl=config['CACHE_TTL_KEY'])
-        MPD_CACHE = TTLCache(maxsize=config.get('CACHE_MAXSIZE_MPD', 100), ttl=config.get('CACHE_TTL_MPD', 30))
         app.logger.info("Cache ABILITATA su tutte le risorse.")
     else:
         M3U8_CACHE = {}
         TS_CACHE = {}
         KEY_CACHE = {}
-        MPD_CACHE = {}
         app.logger.warning("TUTTE LE CACHE DISABILITATE: stream diretto attivo.")
 
 def check_auth(username, password):
@@ -819,7 +815,6 @@ system_stats = {}
 M3U8_CACHE = {}
 TS_CACHE = {}
 KEY_CACHE = {}
-MPD_CACHE = {}
 
 # Pool globale di sessioni per connessioni persistenti
 SESSION_POOL = {}
@@ -1425,112 +1420,7 @@ def resolve_m3u8_link(url, headers=None):
 stats_thread = threading.Thread(target=broadcast_stats, daemon=True)
 stats_thread.start()
 
-# Cache per manifest MPD
-MPD_CACHE = TTLCache(maxsize=100, ttl=30)
 
-def parse_duration(duration_str):
-    """Converte durata ISO 8601 in secondi"""
-    if not duration_str or not duration_str.startswith('PT'):
-        return 0
-    
-    # Rimuovi PT e converti
-    duration_str = duration_str[2:]
-    
-    # Pattern per ore, minuti, secondi
-    pattern = r'(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?'
-    match = re.match(pattern, duration_str)
-    
-    if not match:
-        return 0
-    
-    hours = int(match.group(1) or 0)
-    minutes = int(match.group(2) or 0)
-    seconds = float(match.group(3) or 0)
-    
-    return hours * 3600 + minutes * 60 + seconds
-
-def get_segment_timeline(adaptation_set, representation):
-    """Estrae la timeline dei segmenti da un representation"""
-    segments = []
-    
-    # Trova SegmentTemplate o SegmentList
-    segment_template = representation.find('.//SegmentTemplate')
-    if segment_template is None:
-        segment_template = adaptation_set.find('.//SegmentTemplate')
-    
-    if segment_template is not None:
-        # Gestione SegmentTemplate con SegmentTimeline
-        timeline = segment_template.find('.//SegmentTimeline')
-        if timeline is not None:
-            timescale = int(segment_template.get('timescale', 1))
-            media_template = segment_template.get('media', '')
-            
-            current_time = 0
-            segment_number = int(segment_template.get('startNumber', 1))
-            
-            for s_elem in timeline.findall('.//S'):
-                t = s_elem.get('t')
-                if t is not None:
-                    current_time = int(t)
-                
-                d = int(s_elem.get('d'))
-                r = int(s_elem.get('r', 0))
-                
-                # Genera segmenti per questo elemento S
-                for i in range(r + 1):
-                    segment_url = media_template.replace('$Number$', str(segment_number))
-                    segment_url = segment_url.replace('$Time$', str(current_time))
-                    
-                    segments.append({
-                        'url': segment_url,
-                        'duration': d / timescale,
-                        'number': segment_number,
-                        'time': current_time
-                    })
-                    
-                    current_time += d
-                    segment_number += 1
-        else:
-            # SegmentTemplate senza timeline - usa duration
-            duration = int(segment_template.get('duration', 0))
-            timescale = int(segment_template.get('timescale', 1))
-            start_number = int(segment_template.get('startNumber', 1))
-            media_template = segment_template.get('media', '')
-            
-            # Calcola numero di segmenti basato sulla durata del periodo
-            period_duration = 3600  # Default 1 ora se non specificato
-            segment_duration = duration / timescale
-            num_segments = int(period_duration / segment_duration)
-            
-            for i in range(num_segments):
-                segment_number = start_number + i
-                segment_url = media_template.replace('$Number$', str(segment_number))
-                
-                segments.append({
-                    'url': segment_url,
-                    'duration': segment_duration,
-                    'number': segment_number,
-                    'time': i * duration
-                })
-    
-    return segments
-    
-def get_mpd_cache_ttl(mpd_content):
-    """Determina TTL appropriato basato sul tipo di contenuto"""
-    if 'type="dynamic"' in mpd_content or 'type="live"' in mpd_content:
-        return 5  # Live: cache molto breve
-    elif 'minimumUpdatePeriod' in mpd_content:
-        return 10  # Semi-live
-    else:
-        return 60  # VOD: cache più lunga
-
-# Modifica la cache MPD per essere dinamica
-def setup_dynamic_mpd_cache():
-    """Configura cache MPD dinamica"""
-    global MPD_CACHE
-    MPD_CACHE = {}  # Usa dict normale per TTL dinamico
-
-setup_dynamic_mpd_cache()
 
 @app.route('/admin/cache/toggle', methods=['POST'])
 @login_required
@@ -1590,328 +1480,11 @@ def debug_env():
     
     return jsonify(env_vars)
 
-@app.route('/proxy/mpd')
-def proxy_mpd():
-    """Proxy per file MPD MPEG-DASH con supporto proxy e caching dinamico"""
-    mpd_url = request.args.get('url', '').strip()
-    if not mpd_url:
-        return "Errore: Parametro 'url' mancante", 400
-
-    # Cache key
-    cache_key = f"mpd_{mpd_url}"
-    
-    # Carica configurazione cache
-    config = config_manager.load_config()
-    cache_enabled = config.get('CACHE_ENABLED', True)
-    
-    if cache_enabled and cache_key in MPD_CACHE:
-        cached_data, cache_time, ttl = MPD_CACHE[cache_key]
-        if time.time() - cache_time < ttl:
-            app.logger.info(f"Cache HIT per MPD: {mpd_url}")
-            return Response(cached_data, content_type="application/dash+xml")
-        else:
-            del MPD_CACHE[cache_key]
-    
-    # Headers personalizzati
-    headers = {
-        unquote(key[2:]).replace("_", "-"): unquote(value).strip()
-        for key, value in request.args.items()
-        if key.lower().startswith("h_")
-    }
-
-    try:
-        proxy_config = get_proxy_for_url(mpd_url)
-        proxy_key = proxy_config['http'] if proxy_config else None
-        
-        response = make_persistent_request(
-            mpd_url,
-            headers=headers,
-            timeout=REQUEST_TIMEOUT,
-            proxy_url=proxy_key,
-            allow_redirects=True
-        )
-        response.raise_for_status()
-        
-        mpd_content = response.text
-        final_url = response.url
-        
-        # Modifica URLs nel manifest MPD
-        modified_mpd = modify_mpd_urls(mpd_content, final_url, headers)
-        
-        # Cache dinamico basato sul tipo
-        # Cache dinamico basato sul tipo
-        if cache_enabled:
-            ttl = get_mpd_cache_ttl(mpd_content)
-            MPD_CACHE[cache_key] = (modified_mpd, time.time(), ttl)
-            # Sposta il logger all'interno del blocco if, in modo che venga chiamato
-            # solo quando il file è stato effettivamente cachato.
-            app.logger.info(f"MPD cachato con TTL {ttl}s: {mpd_url}")
-        else:
-            # Aggiungi un log per quando la cache è disabilitata per maggiore chiarezza
-            app.logger.info(f"MPD servito senza cache: {mpd_url}")
-        
-        return Response(modified_mpd, content_type="application/dash+xml")
-        
-    except requests.RequestException as e:
-        app.logger.error(f"Errore durante il download del file MPD: {str(e)}")
-        return f"Errore durante il download del file MPD: {str(e)}", 500
-
-@app.route('/test/mpd-debug')
-@login_required
-def test_mpd_debug():
-    """Test e debug specifico per MPD"""
-    test_url = request.args.get('url', 'https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.mpd')
-    
-    try:
-        # Test diretto
-        response = requests.get(test_url, timeout=10)
-        if response.status_code != 200:
-            return jsonify({"error": f"Status code: {response.status_code}"})
-        
-        # Analizza MPD
-        root = ET.fromstring(response.text)
-        ns = {'dash': 'urn:mpeg:dash:schema:mpd:2011'}
-        
-        info = {
-            "url": test_url,
-            "status": "OK",
-            "type": root.get('type', 'static'),
-            "periods": len(root.findall('.//dash:Period', ns)),
-            "adaptation_sets": len(root.findall('.//dash:AdaptationSet', ns)),
-            "representations": len(root.findall('.//dash:Representation', ns)),
-            "segment_templates": len(root.findall('.//dash:SegmentTemplate', ns)),
-            "base_urls": [elem.text for elem in root.findall('.//dash:BaseURL', ns)],
-            "proxy_url": f"/proxy/mpd?url={quote(test_url)}"
-        }
-        
-        return jsonify(info)
-        
-    except Exception as e:
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()})
 
 
-def modify_mpd_urls(mpd_content, base_url, headers):
-    """Modifica gli URL nel manifest MPD per passare attraverso il proxy"""
-    try:
-        app.logger.info(f"Modificando MPD per base URL: {base_url}")
-        
-        # Parse XML con gestione errori migliorata
-        root = ET.fromstring(mpd_content)
-        app.logger.info("XML parsing completato con successo")
-        
-        # Namespace DASH
-        ns = {'dash': 'urn:mpeg:dash:schema:mpd:2011'}
-        
-        # MIGLIORAMENTO: Calcolo base URL più robusto
-        parsed_base = urlparse(base_url)
-        
-        # Controlla se c'è BaseURL nel MPD
-        base_url_elements = root.findall('.//dash:BaseURL', ns)
-        if base_url_elements and base_url_elements[0].text:
-            mpd_base = base_url_elements[0].text
-            if mpd_base.startswith('http'):
-                base_path = mpd_base
-            else:
-                base_path = urljoin(base_url, mpd_base)
-        else:
-            base_path = f"{parsed_base.scheme}://{parsed_base.netloc}{parsed_base.path.rsplit('/', 1)[0]}/"
-        
-        # Headers query string
-        headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in headers.items()])
-        
-        app.logger.info(f"Base path calcolato: {base_path}")
-        
-        # NUOVA: Gestione Period dinamici per live
-        periods = root.findall('.//dash:Period', ns)
-        for period in periods:
-            period_start = period.get('start', 'PT0S')
-            app.logger.info(f"Processando Period con start: {period_start}")
-        
-        # Modifica SegmentTemplate media URLs con parametri aggiuntivi
-        template_count = 0
-        for segment_template in root.findall('.//dash:SegmentTemplate', ns):
-            media = segment_template.get('media')
-            if media:
-                timescale = segment_template.get('timescale', '1')
-                # Verifica se c'è SegmentTimeline
-                has_timeline = segment_template.find('.//dash:SegmentTimeline', ns) is not None
-                if has_timeline:
-                    duration_param = ''
-                else:
-                    duration = segment_template.get('duration', '0')
-                    duration_param = f"&duration={duration}"
-                start_number = segment_template.get('startNumber', '1')
-        
-                new_media = (
-                    f"/proxy/dash-segment?template={quote(media)}"
-                    f"&base={quote(base_path)}"
-                    f"&timescale={timescale}"
-                    f"{duration_param}"
-                    f"&startNumber={start_number}"
-                    f"&{headers_query}"
-                )
-                segment_template.set('media', new_media)
-                app.logger.info(f"SegmentTemplate media modificato: {media} -> {new_media}")
-        
-            initialization = segment_template.get('initialization')
-            if initialization:
-                init_url = urljoin(base_path, initialization)
-                new_init = f"/proxy/dash-segment?url={quote(init_url)}&{headers_query}"
-                segment_template.set('initialization', new_init)
-        
-        app.logger.info(f"Modifiche completate: {template_count} SegmentTemplate")
-        
-        # Converti back to string
-        modified_content = ET.tostring(root, encoding='unicode', method='xml')
-        
-        # AGGIUNTA: Validazione del risultato
-        if not modified_content or len(modified_content) < 100:
-            app.logger.error("MPD modificato sembra troppo corto, possibile errore")
-            return mpd_content
-        
-        app.logger.info("MPD modificato con successo")
-        return modified_content
-        
-    except Exception as e:
-        app.logger.error(f"Errore nella modifica MPD: {e}")
-        app.logger.error(f"Traceback: {traceback.format_exc()}")
-        return mpd_content
 
-@app.route('/proxy/dash-segment')
-def proxy_dash_segment():
-    """Proxy per segmenti DASH con supporto template migliorato e caching"""
-    segment_url = request.args.get('url', '').strip()
-    template = request.args.get('template', '').strip()
-    base = request.args.get('base', '').strip()
 
-    if not segment_url and not (template and base):
-        return "Errore: Parametri mancanti (serve 'url' oppure 'template' e 'base')", 400
 
-    try:
-        if template and base:
-            # Decodifica i parametri
-            number = request.args.get('Number', request.args.get('number', '1'))
-            time = request.args.get('Time', request.args.get('time', '0'))
-            bandwidth = request.args.get('Bandwidth', request.args.get('bandwidth', '1000000'))
-            representation_id = request.args.get('RepresentationID', request.args.get('representation_id', 'video'))
-
-            # Sostituzione placeholder
-            segment_url = template
-            segment_url = segment_url.replace('$Number$', str(number))
-            segment_url = segment_url.replace('$Time$', str(time))
-            segment_url = segment_url.replace('$Bandwidth$', str(bandwidth))
-            segment_url = segment_url.replace('$RepresentationID$', str(representation_id))
-            segment_url = segment_url.replace('$$', '$')
-            segment_url = urljoin(base, segment_url)
-        elif segment_url:
-            pass  # già pronto
-        else:
-            return "Errore: Parametri mancanti", 400
-
-        # Scarica il segmento dal CDN
-        proxy_config = get_proxy_for_url(segment_url)
-        proxy_key = proxy_config['http'] if proxy_config else None
-        response = make_persistent_request(
-            segment_url,
-            timeout=REQUEST_TIMEOUT,
-            proxy_url=proxy_key,
-            allow_redirects=True
-        )
-        response.raise_for_status()
-        return Response(response.content, content_type=response.headers.get('Content-Type', 'application/octet-stream'))
-
-    except Exception as e:
-        app.logger.error(f"Errore proxy DASH segment: {e}")
-        app.logger.error(traceback.format_exc())
-        return f"Errore proxy DASH segment: {str(e)}", 502
-
-@app.route('/proxy/dash-master')
-def proxy_dash_master():
-    """Crea un master manifest DASH simile al metodo M3U8"""
-    stream_id = request.args.get('stream', '').strip()
-    if not stream_id:
-        return "Errore: Parametro 'stream' mancante", 400
-
-    try:
-        # Template MPD base
-        mpd_template = '''<?xml version="1.0" encoding="UTF-8"?>
-<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" 
-     profiles="urn:mpeg:dash:profile:isoff-live:2011"
-     type="dynamic"
-     minimumUpdatePeriod="PT30S"
-     suggestedPresentationDelay="PT30S"
-     availabilityStartTime="{start_time}"
-     publishTime="{publish_time}"
-     timeShiftBufferDepth="PT5M"
-     maxSegmentDuration="PT10S">
-  
-  <Period start="PT0S">
-    <AdaptationSet mimeType="video/mp4" segmentAlignment="true">
-      <Representation id="video" bandwidth="{bandwidth}" width="{width}" height="{height}" codecs="avc1.640028">
-        <SegmentTemplate media="/proxy/dash-segment?template=$Number$.m4s&amp;base={base_url}&amp;stream={stream_id}" 
-                        initialization="/proxy/dash-segment?url={init_url}&amp;stream={stream_id}"
-                        duration="10" 
-                        startNumber="1" />
-      </Representation>
-    </AdaptationSet>
-    
-    <AdaptationSet mimeType="audio/mp4" segmentAlignment="true">
-      <Representation id="audio" bandwidth="128000" codecs="mp4a.40.2">
-        <SegmentTemplate media="/proxy/dash-segment?template=audio_$Number$.m4s&amp;base={base_url}&amp;stream={stream_id}"
-                        initialization="/proxy/dash-segment?url={audio_init_url}&amp;stream={stream_id}"
-                        duration="10" 
-                        startNumber="1" />
-      </Representation>
-    </AdaptationSet>
-  </Period>
-</MPD>'''
-
-        # Valori di default o da database/configurazione
-        now = datetime.utcnow()
-        start_time = now.isoformat() + 'Z'
-        publish_time = start_time
-        
-        # Parametri stream (dovrebbero venire dal tuo database)
-        bandwidth = request.args.get('bandwidth', '2000000')
-        width = request.args.get('width', '1280')
-        height = request.args.get('height', '720')
-        base_url = request.args.get('base_url', 'https://example.com/stream/')
-        init_url = urljoin(base_url, 'init.mp4')
-        audio_init_url = urljoin(base_url, 'audio_init.mp4')
-        
-        mpd_content = mpd_template.format(
-            start_time=start_time,
-            publish_time=publish_time,
-            bandwidth=bandwidth,
-            width=width,
-            height=height,
-            base_url=quote(base_url),
-            stream_id=stream_id,
-            init_url=quote(init_url),
-            audio_init_url=quote(audio_init_url)
-        )
-        
-        return Response(mpd_content, content_type="application/dash+xml")
-        
-    except Exception as e:
-        app.logger.error(f"Errore nella creazione master MPD: {str(e)}")
-        return f"Errore nella creazione master MPD: {str(e)}", 500
-
-# Aggiorna la cache configuration per includere MPD
-def setup_dash_cache():
-    """Configura cache specifiche per DASH"""
-    global MPD_CACHE
-    config = config_manager.load_config()
-    
-    # Cache MPD con TTL più breve per live streams
-    mpd_ttl = config.get('CACHE_TTL_MPD', 30)
-    mpd_maxsize = config.get('CACHE_MAXSIZE_MPD', 100)
-    
-    MPD_CACHE = TTLCache(maxsize=mpd_maxsize, ttl=mpd_ttl)
-    app.logger.info(f"Cache DASH configurata: TTL={mpd_ttl}s, MaxSize={mpd_maxsize}")
-
-# Aggiungi questa chiamata all'inizializzazione
-setup_dash_cache()
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -2306,7 +1879,7 @@ def download_log(filename):
 @app.route('/admin/clear-cache', methods=['POST'])
 @login_required
 def clear_cache():
-    """Pulisce tutte le cache di sistema (M3U8, TS, KEY, MPD)."""
+    """Pulisce tutte le cache di sistema (M3U8, TS, KEY)."""
     try:
         # La funzione setup_all_caches() reinizializza le cache,
         # che è il modo più efficace per pulirle completamente.
@@ -2314,7 +1887,7 @@ def clear_cache():
         app.logger.info("Cache di sistema pulita manualmente dall'amministratore.")
         return jsonify({
             "status": "success", 
-            "message": "Tutte le cache (M3U8, TS, KEY, MPD) sono state pulite con successo."
+            "message": "Tutte le cache (M3U8, TS, KEY) sono state pulite con successo."
         })
     except Exception as e:
         app.logger.error(f"Errore durante la pulizia manuale della cache: {e}")
@@ -2585,7 +2158,7 @@ def get_stats():
     
     # Aggiungi campi mancanti per il template admin.html
     stats['active_connections'] = len(SESSION_POOL)
-    stats['cache_size'] = f"{len(M3U8_CACHE) + len(TS_CACHE) + len(KEY_CACHE) + len(MPD_CACHE)} items"
+    stats['cache_size'] = f"{len(M3U8_CACHE) + len(TS_CACHE) + len(KEY_CACHE)} items"
     
     # Calcola uptime (tempo dall'avvio del processo)
     try:
