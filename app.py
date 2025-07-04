@@ -50,6 +50,7 @@ class PlayReadyDRMManager:
         })
         self.license_cache = TTLCache(maxsize=100, ttl=3600)  # Cache licenses for 1 hour
         self.key_cache = TTLCache(maxsize=200, ttl=7200)  # Cache keys for 2 hours
+        self.drm_info_cache = TTLCache(maxsize=50, ttl=3600)  # Cache DRM info for 1 hour
         
     def extract_playready_header(self, segment_data):
         """Extract PlayReady header from MP4 segment"""
@@ -195,56 +196,166 @@ class PlayReadyDRMManager:
             app.logger.error(f"Error decrypting segment: {e}")
             return None
     
-    def process_drm_segment(self, segment_data, segment_url, headers=None):
-        """Process DRM-protected segment"""
+    def process_init_segment(self, segment_data, segment_url, headers=None):
+        """Process initialization segment to extract and cache DRM information"""
         try:
-            # Extract PlayReady header
+            # Extract PlayReady header from init segment
             pssh_data = self.extract_playready_header(segment_data)
             if not pssh_data:
-                app.logger.warning("No PlayReady header found in segment")
+                app.logger.info("No PlayReady header found in init segment")
                 return segment_data
             
             # Parse header
             header_info = self.parse_playready_header(pssh_data)
             if not header_info:
-                app.logger.warning("Could not parse PlayReady header")
+                app.logger.warning("Could not parse PlayReady header from init segment")
                 return segment_data
             
             license_url = header_info['license_url']
             key_id = header_info['key_id']
             
             if not license_url or not key_id:
-                app.logger.warning("Missing license URL or key ID")
+                app.logger.warning("Missing license URL or key ID in init segment")
                 return segment_data
             
-            # Check cache for existing license
+            # Cache DRM information for this stream
+            stream_key = self._get_stream_key(segment_url)
+            self.drm_info_cache[stream_key] = {
+                'license_url': license_url,
+                'key_id': key_id,
+                'pssh_data': pssh_data,
+                'header_info': header_info
+            }
+            
+            app.logger.info(f"DRM info cached for stream: {stream_key}")
+            app.logger.info(f"License URL: {license_url}")
+            app.logger.info(f"Key ID: {key_id}")
+            
+            # Pre-acquire license for this stream
             cache_key = f"{license_url}:{key_id}"
-            if cache_key in self.license_cache:
-                app.logger.info("Using cached license")
-                license_data = self.license_cache[cache_key]
-            else:
-                # Acquire new license
+            if cache_key not in self.license_cache:
+                app.logger.info("Pre-acquiring license for stream")
                 license_data = self.acquire_license(license_url, pssh_data, headers)
                 if license_data:
                     self.license_cache[cache_key] = license_data
-            
-            if not license_data:
-                app.logger.error("Failed to acquire license")
-                return segment_data
-            
-            # Extract content key
-            content_key = self.extract_content_key(license_data, key_id)
-            if not content_key:
-                app.logger.error("Failed to extract content key")
-                return segment_data
-            
-            # Decrypt segment
-            decrypted_data = self.decrypt_segment(segment_data, content_key)
-            if decrypted_data:
-                app.logger.info("Segment decrypted successfully")
-                return decrypted_data
+                    app.logger.info("License pre-acquired and cached")
             
             return segment_data
+            
+        except Exception as e:
+            app.logger.error(f"Error processing init segment: {e}")
+            return segment_data
+    
+    def _get_stream_key(self, segment_url):
+        """Extract stream identifier from segment URL"""
+        try:
+            # Extract stream identifier from URL
+            # Example: .../channel(skyarte)/1734018480618item-07item_Segment-...
+            # We want: channel(skyarte)/1734018480618item-07item
+            parts = segment_url.split('/')
+            for i, part in enumerate(parts):
+                if 'item-' in part and 'Segment' not in part:
+                    # Found the representation ID, get the stream key
+                    stream_parts = parts[i-1:i+1]  # channel + representation
+                    return '/'.join(stream_parts)
+            return segment_url
+        except Exception as e:
+            app.logger.error(f"Error extracting stream key: {e}")
+            return segment_url
+    
+    def process_drm_segment(self, segment_data, segment_url, headers=None):
+        """Process DRM-protected segment"""
+        try:
+            # Check if this is an initialization segment
+            if 'init' in segment_url.lower() or segment_url.endswith('.m4i'):
+                return self.process_init_segment(segment_data, segment_url, headers)
+            
+            # For regular segments, check if we have cached DRM info
+            stream_key = self._get_stream_key(segment_url)
+            if stream_key in self.drm_info_cache:
+                drm_info = self.drm_info_cache[stream_key]
+                app.logger.info(f"Using cached DRM info for segment: {stream_key}")
+                
+                license_url = drm_info['license_url']
+                key_id = drm_info['key_id']
+                pssh_data = drm_info['pssh_data']
+                
+                # Check cache for existing license
+                cache_key = f"{license_url}:{key_id}"
+                if cache_key in self.license_cache:
+                    app.logger.info("Using cached license")
+                    license_data = self.license_cache[cache_key]
+                else:
+                    # Acquire new license
+                    license_data = self.acquire_license(license_url, pssh_data, headers)
+                    if license_data:
+                        self.license_cache[cache_key] = license_data
+                
+                if not license_data:
+                    app.logger.error("Failed to acquire license")
+                    return segment_data
+                
+                # Extract content key
+                content_key = self.extract_content_key(license_data, key_id)
+                if not content_key:
+                    app.logger.error("Failed to extract content key")
+                    return segment_data
+                
+                # Decrypt segment
+                decrypted_data = self.decrypt_segment(segment_data, content_key)
+                if decrypted_data:
+                    app.logger.info("Segment decrypted successfully")
+                    return decrypted_data
+                
+                return segment_data
+            else:
+                # Try to extract PlayReady header directly from segment
+                pssh_data = self.extract_playready_header(segment_data)
+                if not pssh_data:
+                    app.logger.debug("No PlayReady header found in segment and no cached DRM info")
+                    return segment_data
+                
+                # Parse header
+                header_info = self.parse_playready_header(pssh_data)
+                if not header_info:
+                    app.logger.warning("Could not parse PlayReady header")
+                    return segment_data
+                
+                license_url = header_info['license_url']
+                key_id = header_info['key_id']
+                
+                if not license_url or not key_id:
+                    app.logger.warning("Missing license URL or key ID")
+                    return segment_data
+                
+                # Check cache for existing license
+                cache_key = f"{license_url}:{key_id}"
+                if cache_key in self.license_cache:
+                    app.logger.info("Using cached license")
+                    license_data = self.license_cache[cache_key]
+                else:
+                    # Acquire new license
+                    license_data = self.acquire_license(license_url, pssh_data, headers)
+                    if license_data:
+                        self.license_cache[cache_key] = license_data
+                
+                if not license_data:
+                    app.logger.error("Failed to acquire license")
+                    return segment_data
+                
+                # Extract content key
+                content_key = self.extract_content_key(license_data, key_id)
+                if not content_key:
+                    app.logger.error("Failed to extract content key")
+                    return segment_data
+                
+                # Decrypt segment
+                decrypted_data = self.decrypt_segment(segment_data, content_key)
+                if decrypted_data:
+                    app.logger.info("Segment decrypted successfully")
+                    return decrypted_data
+                
+                return segment_data
             
         except Exception as e:
             app.logger.error(f"Error processing DRM segment: {e}")
@@ -300,10 +411,13 @@ def proxy_drm_status():
             'drm_enabled': True,
             'license_cache_size': len(drm_manager.license_cache),
             'key_cache_size': len(drm_manager.key_cache),
+            'drm_info_cache_size': len(drm_manager.drm_info_cache),
             'license_cache_ttl': 3600,
             'key_cache_ttl': 7200,
+            'drm_info_cache_ttl': 3600,
             'supported_drm': ['PlayReady'],
-            'version': '1.0.0'
+            'version': '1.0.0',
+            'cached_streams': list(drm_manager.drm_info_cache.keys())
         }
         return jsonify(status)
     except Exception as e:
