@@ -1807,6 +1807,14 @@ def dashboard():
     stats = get_system_stats()
     daddy_base_url = get_daddylive_base_url()
     
+    # Aggiungi informazioni pre-buffer alle statistiche
+    stats['prebuffer_info'] = {
+        'active_streams': stats.get('prebuffer_streams', 0),
+        'buffered_segments': stats.get('prebuffer_segments', 0),
+        'buffer_size_mb': stats.get('prebuffer_size_mb', 0),
+        'active_threads': stats.get('prebuffer_threads', 0)
+    }
+    
     return render_template('dashboard.html', 
                          stats=stats, 
                          daddy_base_url=daddy_base_url,
@@ -1838,6 +1846,14 @@ def index():
     """Pagina principale migliorata con informazioni Vavoo"""
     stats = get_system_stats()
     base_url = get_daddylive_base_url()
+    
+    # Aggiungi informazioni pre-buffer alle statistiche
+    stats['prebuffer_info'] = {
+        'active_streams': stats.get('prebuffer_streams', 0),
+        'buffered_segments': stats.get('prebuffer_segments', 0),
+        'buffer_size_mb': stats.get('prebuffer_size_mb', 0),
+        'active_threads': stats.get('prebuffer_threads', 0)
+    }
     
     # Informazioni sulla funzionalità Vavoo
     vavoo_info = {
