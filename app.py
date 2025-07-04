@@ -55,16 +55,101 @@ class PlayReadyDRMManager:
     def extract_playready_header(self, segment_data):
         """Extract PlayReady header from MP4 segment"""
         try:
+            app.logger.info(f"Searching for PlayReady headers in segment, size: {len(segment_data)} bytes")
+            
             # Look for 'pssh' box in MP4
             offset = 0
+            boxes_found = []
+            pssh_boxes = []
+            
             while offset < len(segment_data) - 8:
-                box_size = struct.unpack('>I', segment_data[offset:offset+4])[0]
-                box_type = segment_data[offset+4:offset+8].decode('ascii', errors='ignore')
+                try:
+                    box_size = struct.unpack('>I', segment_data[offset:offset+4])[0]
+                    box_type = segment_data[offset+4:offset+8].decode('ascii', errors='ignore')
+                    
+                    boxes_found.append(f"{box_type}({box_size})")
+                    
+                    if box_type == 'pssh':
+                        # Found PSSH box
+                        pssh_data = segment_data[offset:offset+box_size]
+                        pssh_info = self._parse_pssh_box(pssh_data)
+                        pssh_boxes.append(pssh_info)
+                        app.logger.info(f"Found PSSH box, size: {box_size}, system: {pssh_info.get('system', 'unknown')}")
+                        
+                        # If it's PlayReady, return it
+                        if pssh_info.get('system') == 'playready':
+                            app.logger.info("Found PlayReady PSSH box")
+                            return pssh_data
+                    
+                    # Also look for 'moof' boxes which might contain DRM info
+                    elif box_type == 'moof':
+                        app.logger.info(f"Found moof box, size: {box_size}")
+                        # Search inside moof for pssh
+                        moof_data = segment_data[offset:offset+box_size]
+                        inner_pssh = self._search_pssh_in_box(moof_data)
+                        if inner_pssh:
+                            app.logger.info("Found PSSH box inside moof")
+                            return inner_pssh
+                        else:
+                            # Log what's inside the moof box for debugging
+                            self._log_moof_contents(moof_data)
+                    
+                    # Also look for 'traf' boxes which might contain DRM info
+                    elif box_type == 'traf':
+                        app.logger.info(f"Found traf box, size: {box_size}")
+                        # Search inside traf for pssh
+                        traf_data = segment_data[offset:offset+box_size]
+                        inner_pssh = self._search_pssh_in_box(traf_data)
+                        if inner_pssh:
+                            app.logger.info("Found PSSH box inside traf")
+                            return inner_pssh
+                    
+                    # Look for 'moov' boxes which might contain DRM info
+                    elif box_type == 'moov':
+                        app.logger.info(f"Found moov box, size: {box_size}")
+                        # Search inside moov for pssh
+                        moov_data = segment_data[offset:offset+box_size]
+                        inner_pssh = self._search_pssh_in_box(moov_data)
+                        if inner_pssh:
+                            app.logger.info("Found PSSH box inside moov")
+                            return inner_pssh
+                    
+                    offset += box_size
+                    if box_size == 0:
+                        break
+                        
+                except Exception as e:
+                    app.logger.warning(f"Error parsing box at offset {offset}: {e}")
+                    offset += 1
+                    if offset >= len(segment_data) - 8:
+                        break
+            
+            app.logger.info(f"Boxes found in segment: {', '.join(boxes_found[:10])}...")
+            
+            # If we found PSSH boxes but none were PlayReady, log them
+            if pssh_boxes:
+                app.logger.info(f"Found {len(pssh_boxes)} PSSH boxes:")
+                for i, pssh in enumerate(pssh_boxes):
+                    app.logger.info(f"  PSSH {i+1}: {pssh.get('system', 'unknown')}")
+            
+            app.logger.warning("No PlayReady PSSH box found in segment")
+            return None
+                    
+        except Exception as e:
+            app.logger.error(f"Error extracting PlayReady header: {e}")
+            
+        return None
+    
+    def _search_pssh_in_box(self, box_data):
+        """Search for PSSH box inside another box"""
+        try:
+            offset = 0
+            while offset < len(box_data) - 8:
+                box_size = struct.unpack('>I', box_data[offset:offset+4])[0]
+                box_type = box_data[offset+4:offset+8].decode('ascii', errors='ignore')
                 
                 if box_type == 'pssh':
-                    # Found PlayReady PSSH box
-                    pssh_data = segment_data[offset:offset+box_size]
-                    app.logger.info(f"Found PlayReady PSSH box, size: {box_size}")
+                    pssh_data = box_data[offset:offset+box_size]
                     return pssh_data
                 
                 offset += box_size
@@ -72,9 +157,343 @@ class PlayReadyDRMManager:
                     break
                     
         except Exception as e:
-            app.logger.error(f"Error extracting PlayReady header: {e}")
+            app.logger.debug(f"Error searching for PSSH in box: {e}")
             
         return None
+    
+    def _log_moof_contents(self, moof_data):
+        """Log the contents of a moof box for debugging"""
+        try:
+            offset = 0
+            boxes_found = []
+            
+            while offset < len(moof_data) - 8:
+                try:
+                    box_size = struct.unpack('>I', moof_data[offset:offset+4])[0]
+                    box_type = moof_data[offset+4:offset+8].decode('ascii', errors='ignore')
+                    
+                    boxes_found.append(f"{box_type}({box_size})")
+                    
+                    # Look for traf boxes which often contain DRM info
+                    if box_type == 'traf':
+                        app.logger.info(f"Found traf box inside moof, size: {box_size}")
+                        traf_data = moof_data[offset:offset+box_size]
+                        self._log_traf_contents(traf_data)
+                    
+                    # Look for mfhd box (Movie Fragment Header)
+                    elif box_type == 'mfhd':
+                        app.logger.info(f"Found mfhd box inside moof, size: {box_size}")
+                    
+                    offset += box_size
+                    if box_size == 0:
+                        break
+                        
+                except Exception as e:
+                    app.logger.debug(f"Error parsing moof box at offset {offset}: {e}")
+                    offset += 1
+                    if offset >= len(moof_data) - 8:
+                        break
+            
+            app.logger.info(f"Boxes found inside moof: {', '.join(boxes_found)}")
+            
+        except Exception as e:
+            app.logger.error(f"Error logging moof contents: {e}")
+    
+    def _search_cenc_info(self, segment_data):
+        """Search for CENC (Common Encryption) information"""
+        try:
+            offset = 0
+            cenc_info = {}
+            boxes_found = []
+            
+            while offset < len(segment_data) - 8:
+                try:
+                    box_size = struct.unpack('>I', segment_data[offset:offset+4])[0]
+                    box_type = segment_data[offset+4:offset+8].decode('ascii', errors='ignore')
+                    
+                    boxes_found.append(f"{box_type}({box_size})")
+                    
+                    # Look for tenc (Track Encryption) box
+                    if box_type == 'tenc':
+                        app.logger.info(f"Found tenc box, size: {box_size}")
+                        tenc_data = segment_data[offset:offset+box_size]
+                        cenc_info['tenc'] = self._parse_tenc_box(tenc_data)
+                    
+                    # Look for saiz (Sample Auxiliary Information Sizes) box
+                    elif box_type == 'saiz':
+                        app.logger.info(f"Found saiz box, size: {box_size}")
+                        cenc_info['saiz'] = True
+                    
+                    # Look for saio (Sample Auxiliary Information Offsets) box
+                    elif box_type == 'saio':
+                        app.logger.info(f"Found saio box, size: {box_size}")
+                        cenc_info['saio'] = True
+                    
+                    # Look for pssh box (Protection System Specific Header)
+                    elif box_type == 'pssh':
+                        app.logger.info(f"Found pssh box, size: {box_size}")
+                        pssh_data = segment_data[offset:offset+box_size]
+                        pssh_info = self._parse_pssh_box(pssh_data)
+                        cenc_info['pssh'] = pssh_info
+                        
+                        # If we found a PSSH box, also search inside it for more details
+                        if pssh_info.get('system') == 'playready':
+                            app.logger.info("Found PlayReady PSSH in CENC search")
+                        elif pssh_info.get('system') == 'widevine':
+                            app.logger.info("Found Widevine PSSH in CENC search")
+                        else:
+                            app.logger.info(f"Found unknown PSSH system: {pssh_info.get('system', 'unknown')}")
+                    
+                    # Look for schm (Scheme Type) box
+                    elif box_type == 'schm':
+                        app.logger.info(f"Found schm box, size: {box_size}")
+                        schm_data = segment_data[offset:offset+box_size]
+                        cenc_info['schm'] = self._parse_schm_box(schm_data)
+                    
+                    # Look for schi (Scheme Information) box
+                    elif box_type == 'schi':
+                        app.logger.info(f"Found schi box, size: {box_size}")
+                        schi_data = segment_data[offset:offset+box_size]
+                        cenc_info['schi'] = True
+                        # Search inside schi for more DRM info
+                        self._search_drm_in_schi(schi_data)
+                    
+                    # Look for moov/moof boxes and search inside them
+                    elif box_type in ['moov', 'moof']:
+                        app.logger.info(f"Found {box_type} box, size: {box_size}")
+                        box_data = segment_data[offset:offset+box_size]
+                        inner_cenc = self._search_cenc_in_box(box_data)
+                        if inner_cenc:
+                            cenc_info.update(inner_cenc)
+                    
+                    offset += box_size
+                    if box_size == 0:
+                        break
+                        
+                except Exception as e:
+                    app.logger.debug(f"Error parsing box at offset {offset}: {e}")
+                    offset += 1
+                    if offset >= len(segment_data) - 8:
+                        break
+            
+            app.logger.info(f"CENC search found boxes: {', '.join(boxes_found[:10])}...")
+            app.logger.info(f"CENC info found: {list(cenc_info.keys())}")
+            
+            return cenc_info
+            
+        except Exception as e:
+            app.logger.error(f"Error searching for CENC info: {e}")
+            return {}
+    
+    def _parse_tenc_box(self, tenc_data):
+        """Parse tenc (Track Encryption) box"""
+        try:
+            # Skip box header (8 bytes)
+            offset = 8
+            
+            # Read version and flags
+            version = tenc_data[offset]
+            offset += 4
+            
+            # Read default algorithm ID
+            algorithm_id = struct.unpack('>I', tenc_data[offset:offset+4])[0]
+            offset += 4
+            
+            # Read default IV size
+            iv_size = tenc_data[offset]
+            offset += 1
+            
+            # Read default KID (16 bytes)
+            kid = tenc_data[offset:offset+16]
+            kid_b64 = base64.b64encode(kid).decode('ascii')
+            
+            return {
+                'version': version,
+                'algorithm_id': algorithm_id,
+                'iv_size': iv_size,
+                'kid': kid_b64
+            }
+            
+        except Exception as e:
+            app.logger.error(f"Error parsing tenc box: {e}")
+            return {}
+    
+    def _parse_pssh_box(self, pssh_data):
+        """Parse pssh (Protection System Specific Header) box"""
+        try:
+            # Skip box header (8 bytes)
+            offset = 8
+            
+            # Read version and flags
+            version = pssh_data[offset]
+            offset += 4
+            
+            # Read system ID (16 bytes)
+            system_id = pssh_data[offset:offset+16]
+            system_id_hex = system_id.hex()
+            
+            # Check if it's PlayReady
+            if system_id_hex == '9a04f07998404286ab92e65be0885f95':
+                app.logger.info("Found PlayReady PSSH box")
+                return {'system': 'playready', 'data': pssh_data}
+            
+            # Check if it's Widevine
+            elif system_id_hex == 'edef8ba979d64acea3c827dcd51d21ed':
+                app.logger.info("Found Widevine PSSH box")
+                return {'system': 'widevine', 'data': pssh_data}
+            
+            else:
+                app.logger.info(f"Found unknown PSSH box, system ID: {system_id_hex}")
+                return {'system': 'unknown', 'data': pssh_data}
+            
+        except Exception as e:
+            app.logger.error(f"Error parsing pssh box: {e}")
+            return {}
+    
+    def _parse_schm_box(self, schm_data):
+        """Parse schm (Scheme Type) box"""
+        try:
+            # Skip box header (8 bytes)
+            offset = 8
+            
+            # Read version and flags
+            version = schm_data[offset]
+            offset += 4
+            
+            # Read scheme type (4 bytes)
+            scheme_type = schm_data[offset:offset+4].decode('ascii', errors='ignore')
+            offset += 4
+            
+            # Read scheme version
+            scheme_version = struct.unpack('>I', schm_data[offset:offset+4])[0]
+            
+            return {
+                'version': version,
+                'scheme_type': scheme_type,
+                'scheme_version': scheme_version
+            }
+            
+        except Exception as e:
+            app.logger.error(f"Error parsing schm box: {e}")
+            return {}
+    
+    def _search_drm_in_schi(self, schi_data):
+        """Search for DRM information inside schi (Scheme Information) box"""
+        try:
+            offset = 0
+            while offset < len(schi_data) - 8:
+                try:
+                    box_size = struct.unpack('>I', schi_data[offset:offset+4])[0]
+                    box_type = schi_data[offset+4:offset+8].decode('ascii', errors='ignore')
+                    
+                    if box_type == 'pssh':
+                        app.logger.info(f"Found PSSH box inside schi, size: {box_size}")
+                        pssh_data = schi_data[offset:offset+box_size]
+                        pssh_info = self._parse_pssh_box(pssh_data)
+                        app.logger.info(f"PSSH system: {pssh_info.get('system', 'unknown')}")
+                    
+                    elif box_type == 'tenc':
+                        app.logger.info(f"Found tenc box inside schi, size: {box_size}")
+                    
+                    offset += box_size
+                    if box_size == 0:
+                        break
+                        
+                except Exception as e:
+                    app.logger.debug(f"Error parsing schi box at offset {offset}: {e}")
+                    offset += 1
+                    if offset >= len(schi_data) - 8:
+                        break
+                        
+        except Exception as e:
+            app.logger.error(f"Error searching DRM in schi: {e}")
+    
+    def _search_cenc_in_box(self, box_data):
+        """Search for CENC information inside a box"""
+        try:
+            offset = 0
+            cenc_info = {}
+            
+            while offset < len(box_data) - 8:
+                try:
+                    box_size = struct.unpack('>I', box_data[offset:offset+4])[0]
+                    box_type = box_data[offset+4:offset+8].decode('ascii', errors='ignore')
+                    
+                    # Look for CENC-related boxes
+                    if box_type in ['tenc', 'saiz', 'saio', 'pssh', 'schm', 'schi']:
+                        app.logger.info(f"Found {box_type} box inside container, size: {box_size}")
+                        
+                        if box_type == 'tenc':
+                            tenc_data = box_data[offset:offset+box_size]
+                            cenc_info['tenc'] = self._parse_tenc_box(tenc_data)
+                        elif box_type == 'pssh':
+                            pssh_data = box_data[offset:offset+box_size]
+                            cenc_info['pssh'] = self._parse_pssh_box(pssh_data)
+                        elif box_type == 'schm':
+                            schm_data = box_data[offset:offset+box_size]
+                            cenc_info['schm'] = self._parse_schm_box(schm_data)
+                        elif box_type in ['saiz', 'saio']:
+                            cenc_info[box_type] = True
+                        elif box_type == 'schi':
+                            schi_data = box_data[offset:offset+box_size]
+                            cenc_info['schi'] = True
+                            self._search_drm_in_schi(schi_data)
+                    
+                    offset += box_size
+                    if box_size == 0:
+                        break
+                        
+                except Exception as e:
+                    app.logger.debug(f"Error parsing box at offset {offset}: {e}")
+                    offset += 1
+                    if offset >= len(box_data) - 8:
+                        break
+            
+            return cenc_info
+            
+        except Exception as e:
+            app.logger.error(f"Error searching CENC in box: {e}")
+            return {}
+    
+    def _log_traf_contents(self, traf_data):
+        """Log the contents of a traf box for debugging"""
+        try:
+            offset = 0
+            boxes_found = []
+            
+            while offset < len(traf_data) - 8:
+                try:
+                    box_size = struct.unpack('>I', traf_data[offset:offset+4])[0]
+                    box_type = traf_data[offset+4:offset+8].decode('ascii', errors='ignore')
+                    
+                    boxes_found.append(f"{box_type}({box_size})")
+                    
+                    # Look for saiz/saio boxes which indicate CENC encryption
+                    if box_type in ['saiz', 'saio', 'saiz', 'saio']:
+                        app.logger.info(f"Found CENC box: {box_type}, size: {box_size}")
+                    
+                    # Look for tenc boxes which contain encryption info
+                    elif box_type == 'tenc':
+                        app.logger.info(f"Found tenc box, size: {box_size}")
+                        # Log first few bytes of tenc for debugging
+                        tenc_data = traf_data[offset:offset+min(box_size, 20)]
+                        hex_data = ' '.join(f'{b:02x}' for b in tenc_data)
+                        app.logger.info(f"tenc box data: {hex_data}")
+                    
+                    offset += box_size
+                    if box_size == 0:
+                        break
+                        
+                except Exception as e:
+                    app.logger.debug(f"Error parsing traf box at offset {offset}: {e}")
+                    offset += 1
+                    if offset >= len(traf_data) - 8:
+                        break
+            
+            app.logger.info(f"Boxes found inside traf: {', '.join(boxes_found)}")
+            
+        except Exception as e:
+            app.logger.error(f"Error logging traf contents: {e}")
     
     def parse_playready_header(self, pssh_data):
         """Parse PlayReady header to extract license URL and key ID"""
@@ -199,52 +618,139 @@ class PlayReadyDRMManager:
     def process_init_segment(self, segment_data, segment_url, headers=None):
         """Process initialization segment to extract and cache DRM information"""
         try:
-            # Extract PlayReady header from init segment
-            pssh_data = self.extract_playready_header(segment_data)
-            if not pssh_data:
-                app.logger.info("No PlayReady header found in init segment")
+            app.logger.info(f"Processing init segment: {segment_url}")
+            
+            # Search for CENC information first
+            cenc_info = self._search_cenc_info(segment_data)
+            
+            if cenc_info:
+                app.logger.info(f"Found CENC info: {list(cenc_info.keys())}")
+                
+                # Cache CENC information for this stream
+                stream_key = self._get_stream_key(segment_url)
+                self.drm_info_cache[stream_key] = {
+                    'type': 'cenc',
+                    'cenc_info': cenc_info,
+                    'segment_url': segment_url
+                }
+                
+                app.logger.info(f"CENC info cached for stream: {stream_key}")
+                
+                # If we have PSSH data, try to extract PlayReady info
+                if 'pssh' in cenc_info and cenc_info['pssh']['system'] == 'playready':
+                    app.logger.info("Found PlayReady PSSH in CENC")
+                    pssh_data = cenc_info['pssh']['data']
+                    header_info = self.parse_playready_header(pssh_data)
+                    if header_info:
+                        self.drm_info_cache[stream_key].update({
+                            'license_url': header_info['license_url'],
+                            'key_id': header_info['key_id'],
+                            'pssh_data': pssh_data,
+                            'header_info': header_info
+                        })
+                        
+                        # Pre-acquire license
+                        license_url = header_info['license_url']
+                        key_id = header_info['key_id']
+                        cache_key = f"{license_url}:{key_id}"
+                        if cache_key not in self.license_cache:
+                            app.logger.info("Pre-acquiring PlayReady license for stream")
+                            license_data = self.acquire_license(license_url, pssh_data, headers)
+                            if license_data:
+                                self.license_cache[cache_key] = license_data
+                                app.logger.info("PlayReady license pre-acquired and cached")
+                
                 return segment_data
             
-            # Parse header
-            header_info = self.parse_playready_header(pssh_data)
-            if not header_info:
-                app.logger.warning("Could not parse PlayReady header from init segment")
-                return segment_data
-            
-            license_url = header_info['license_url']
-            key_id = header_info['key_id']
-            
-            if not license_url or not key_id:
-                app.logger.warning("Missing license URL or key ID in init segment")
-                return segment_data
-            
-            # Cache DRM information for this stream
-            stream_key = self._get_stream_key(segment_url)
-            self.drm_info_cache[stream_key] = {
-                'license_url': license_url,
-                'key_id': key_id,
-                'pssh_data': pssh_data,
-                'header_info': header_info
-            }
-            
-            app.logger.info(f"DRM info cached for stream: {stream_key}")
-            app.logger.info(f"License URL: {license_url}")
-            app.logger.info(f"Key ID: {key_id}")
-            
-            # Pre-acquire license for this stream
-            cache_key = f"{license_url}:{key_id}"
-            if cache_key not in self.license_cache:
-                app.logger.info("Pre-acquiring license for stream")
-                license_data = self.acquire_license(license_url, pssh_data, headers)
-                if license_data:
-                    self.license_cache[cache_key] = license_data
-                    app.logger.info("License pre-acquired and cached")
+            # If no CENC info found, check if this might be a different DRM system
+            app.logger.info("No CENC info found in init segment")
+            self._check_alternative_drm(segment_data, segment_url)
             
             return segment_data
             
         except Exception as e:
             app.logger.error(f"Error processing init segment: {e}")
             return segment_data
+    
+    def _check_alternative_drm(self, segment_data, segment_url):
+        """Check for alternative DRM systems or formats"""
+        try:
+            app.logger.info("Checking for alternative DRM systems...")
+            
+            # Check for Widevine PSSH
+            if b'edef8ba979d64acea3c827dcd51d21ed' in segment_data:
+                app.logger.info("Found Widevine DRM system")
+                return
+            
+            # Check for FairPlay
+            if b'fairplay' in segment_data.lower():
+                app.logger.info("Found FairPlay DRM system")
+                return
+            
+            # Check for Marlin
+            if b'marlin' in segment_data.lower():
+                app.logger.info("Found Marlin DRM system")
+                return
+            
+            # Check for CENC (Common Encryption)
+            if b'cenc' in segment_data.lower():
+                app.logger.info("Found CENC encryption")
+                return
+            
+            # Check for sample-aes
+            if b'sample-aes' in segment_data.lower():
+                app.logger.info("Found sample-aes encryption")
+                return
+            
+            # Check for clear content
+            if b'clear' in segment_data.lower():
+                app.logger.info("Content appears to be clear (unencrypted)")
+                return
+            
+            # Check for PlayReady system ID
+            if b'9a04f07998404286ab92e65be0885f95' in segment_data:
+                app.logger.info("Found PlayReady system ID in segment")
+                return
+            
+            # Check for encryption-related strings
+            encryption_indicators = [
+                b'encrypted', b'encryption', b'drm', b'protection',
+                b'license', b'key', b'cipher', b'aes'
+            ]
+            
+            for indicator in encryption_indicators:
+                if indicator in segment_data.lower():
+                    app.logger.info(f"Found encryption indicator: {indicator}")
+                    return
+            
+            # Check for MP4 boxes that might indicate encryption
+            mp4_boxes = [b'tenc', b'saiz', b'saio', b'schm', b'schi']
+            for box in mp4_boxes:
+                if box in segment_data:
+                    app.logger.info(f"Found MP4 box indicating encryption: {box}")
+                    return
+            
+            # Check for specific byte patterns that might indicate encryption
+            # Look for common encryption headers
+            if segment_data.startswith(b'\x00\x00\x00') or segment_data.startswith(b'\x00\x00\x01'):
+                app.logger.info("Segment starts with potential MP4 box header")
+            
+            # Log first 200 bytes for debugging (increased from 100)
+            hex_data = ' '.join(f'{b:02x}' for b in segment_data[:200])
+            app.logger.info(f"First 200 bytes of segment: {hex_data}")
+            
+            # Try to identify the segment type based on URL
+            if '.m4a' in segment_url.lower():
+                app.logger.info("Segment appears to be audio (m4a)")
+            elif '.m4v' in segment_url.lower():
+                app.logger.info("Segment appears to be video (m4v)")
+            elif '.m4i' in segment_url.lower():
+                app.logger.info("Segment appears to be initialization (m4i)")
+            
+            app.logger.info("No specific DRM system detected - content may be clear or use unknown encryption")
+            
+        except Exception as e:
+            app.logger.error(f"Error checking alternative DRM: {e}")
     
     def _get_stream_key(self, segment_url):
         """Extract stream identifier from segment URL"""
@@ -270,44 +776,54 @@ class PlayReadyDRMManager:
             if 'init' in segment_url.lower() or segment_url.endswith('.m4i'):
                 return self.process_init_segment(segment_data, segment_url, headers)
             
+            # Quick check for clear content first (performance optimization)
+            if self._is_clear_content(segment_data, segment_url):
+                app.logger.debug("Segment appears to be clear content - skipping DRM processing")
+                return segment_data
+            
             # For regular segments, check if we have cached DRM info
             stream_key = self._get_stream_key(segment_url)
             if stream_key in self.drm_info_cache:
                 drm_info = self.drm_info_cache[stream_key]
                 app.logger.info(f"Using cached DRM info for segment: {stream_key}")
                 
-                license_url = drm_info['license_url']
-                key_id = drm_info['key_id']
-                pssh_data = drm_info['pssh_data']
-                
-                # Check cache for existing license
-                cache_key = f"{license_url}:{key_id}"
-                if cache_key in self.license_cache:
-                    app.logger.info("Using cached license")
-                    license_data = self.license_cache[cache_key]
+                # Check if we have PlayReady info
+                if 'license_url' in drm_info and 'key_id' in drm_info:
+                    license_url = drm_info['license_url']
+                    key_id = drm_info['key_id']
+                    pssh_data = drm_info['pssh_data']
+                    
+                    # Check cache for existing license
+                    cache_key = f"{license_url}:{key_id}"
+                    if cache_key in self.license_cache:
+                        app.logger.info("Using cached license")
+                        license_data = self.license_cache[cache_key]
+                    else:
+                        # Acquire new license
+                        license_data = self.acquire_license(license_url, pssh_data, headers)
+                        if license_data:
+                            self.license_cache[cache_key] = license_data
+                    
+                    if not license_data:
+                        app.logger.error("Failed to acquire license")
+                        return segment_data
+                    
+                    # Extract content key
+                    content_key = self.extract_content_key(license_data, key_id)
+                    if not content_key:
+                        app.logger.error("Failed to extract content key")
+                        return segment_data
+                    
+                    # Decrypt segment
+                    decrypted_data = self.decrypt_segment(segment_data, content_key)
+                    if decrypted_data:
+                        app.logger.info("Segment decrypted successfully")
+                        return decrypted_data
+                    
+                    return segment_data
                 else:
-                    # Acquire new license
-                    license_data = self.acquire_license(license_url, pssh_data, headers)
-                    if license_data:
-                        self.license_cache[cache_key] = license_data
-                
-                if not license_data:
-                    app.logger.error("Failed to acquire license")
+                    app.logger.info("Cached DRM info found but no PlayReady license info - content may be clear")
                     return segment_data
-                
-                # Extract content key
-                content_key = self.extract_content_key(license_data, key_id)
-                if not content_key:
-                    app.logger.error("Failed to extract content key")
-                    return segment_data
-                
-                # Decrypt segment
-                decrypted_data = self.decrypt_segment(segment_data, content_key)
-                if decrypted_data:
-                    app.logger.info("Segment decrypted successfully")
-                    return decrypted_data
-                
-                return segment_data
             else:
                 # Try to extract PlayReady header directly from segment
                 pssh_data = self.extract_playready_header(segment_data)
@@ -360,6 +876,37 @@ class PlayReadyDRMManager:
         except Exception as e:
             app.logger.error(f"Error processing DRM segment: {e}")
             return segment_data
+    
+    def _is_clear_content(self, segment_data, segment_url):
+        """Check if segment appears to be clear (unencrypted) content"""
+        try:
+            # Check for common clear content indicators
+            if len(segment_data) < 100:
+                return False
+            
+            # Check if it starts with common MP4 box headers
+            if segment_data.startswith(b'\x00\x00\x00') or segment_data.startswith(b'\x00\x00\x01'):
+                # Look for common MP4 boxes that indicate clear content
+                clear_indicators = [b'ftyp', b'moov', b'mdat', b'styp', b'sidx']
+                for indicator in clear_indicators:
+                    if indicator in segment_data[:1000]:  # Check first 1KB
+                        app.logger.info(f"Found clear content indicator: {indicator}")
+                        return True
+            
+            # Check for absence of encryption indicators
+            encryption_indicators = [b'tenc', b'saiz', b'saio', b'pssh', b'schm', b'schi']
+            for indicator in encryption_indicators:
+                if indicator in segment_data:
+                    app.logger.info(f"Found encryption indicator: {indicator}")
+                    return False
+            
+            # If no encryption indicators found, it might be clear
+            app.logger.info("No encryption indicators found - content may be clear")
+            return True
+            
+        except Exception as e:
+            app.logger.error(f"Error checking if content is clear: {e}")
+            return False
 
 # Global DRM manager instance
 drm_manager = PlayReadyDRMManager()
@@ -422,6 +969,236 @@ def proxy_drm_status():
         return jsonify(status)
     except Exception as e:
         app.logger.error(f"Error getting DRM status: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/proxy/drm/test-init')
+def proxy_drm_test_init():
+    """Test DRM processing on initialization segment"""
+    try:
+        # Get a current MPD URL to extract fresh initialization segment URLs
+        mpd_url = "https://g003-lin-it-cmaf-prd-ak.pcdn07.cssott02.com/nowitlin1/Content/CMAF_CTR_S1/Live/channel(skyadventure)/master_2hr-aac.mpd"
+        
+        app.logger.info(f"Fetching current MPD: {mpd_url}")
+        
+        # Download the MPD
+        response = make_persistent_request(
+            mpd_url,
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=True
+        )
+        response.raise_for_status()
+        
+        mpd_content = response.text
+        app.logger.info(f"Downloaded MPD, size: {len(mpd_content)} bytes")
+        
+        # Extract initialization segment URL from MPD
+        import re
+        init_pattern = r'initialization="([^"]+)"'
+        init_matches = re.findall(init_pattern, mpd_content)
+        
+        if not init_matches:
+            return jsonify({'error': 'No initialization segment URL found in MPD'}), 404
+        
+        # Use the first initialization segment URL found
+        init_template = init_matches[0]
+        
+        # Handle template URLs with $RepresentationID$ placeholder
+        if '$RepresentationID$' in init_template:
+            # Extract representation ID from MPD
+            rep_pattern = r'id="([^"]+)"'
+            rep_matches = re.findall(rep_pattern, mpd_content)
+            
+            if rep_matches:
+                # Use the first valid representation ID (skip simple ones like "0", "1")
+                for rep_id in rep_matches:
+                    if 'item' in rep_id:  # Look for the complex IDs with "item"
+                        init_url = init_template.replace('$RepresentationID$', rep_id)
+                        app.logger.info(f"Resolved template URL: {init_template} -> {init_url}")
+                        break
+                else:
+                    # Fallback to first representation ID if no "item" found
+                    rep_id = rep_matches[0]
+                    init_url = init_template.replace('$RepresentationID$', rep_id)
+                    app.logger.info(f"Resolved template URL: {init_template} -> {init_url}")
+            else:
+                return jsonify({'error': 'No representation ID found in MPD'}), 404
+        else:
+            init_url = init_template
+        
+        if not init_url.startswith('http'):
+            # Make it absolute if it's relative
+            base_url = '/'.join(mpd_url.split('/')[:-1]) + '/'
+            init_url = base_url + init_url
+        
+        app.logger.info(f"Found initialization segment URL: {init_url}")
+        
+        # Download the initialization segment
+        try:
+            init_response = make_persistent_request(
+                init_url,
+                timeout=REQUEST_TIMEOUT,
+                allow_redirects=True
+            )
+            init_response.raise_for_status()
+            
+            segment_data = init_response.content
+            app.logger.info(f"Downloaded init segment, size: {len(segment_data)} bytes")
+            
+            # Test CENC search directly first
+            cenc_info = drm_manager._search_cenc_info(segment_data)
+            app.logger.info(f"CENC info found: {cenc_info}")
+            
+            # Process with DRM
+            processed_data = drm_manager.process_init_segment(segment_data, init_url, {})
+            
+        except Exception as e:
+            app.logger.error(f"Failed to download init segment: {e}")
+            segment_data = None
+            cenc_info = None
+            processed_data = None
+        
+        # Check if we have key_id and key from the original URL
+        key_id = request.args.get('key_id', '11158035ffbf17eebd02027e96383161')
+        key = request.args.get('key', '7e1ea10428e8c5cdfdac6c55b23018d2')
+        
+        if key_id and key:
+            app.logger.info(f"Using provided key_id: {key_id}")
+            app.logger.info(f"Using provided key: {key}")
+            
+            # Store this key information in the DRM cache
+            stream_key = drm_manager._get_stream_key(init_url)
+            drm_manager.drm_info_cache[stream_key] = {
+                'type': 'manual_key',
+                'key_id': key_id,
+                'key': key,
+                'segment_url': init_url
+            }
+        
+        cached_info = drm_manager.drm_info_cache.get(stream_key, {})
+        
+        # Extract all representation IDs from MPD for debugging
+        rep_pattern = r'id="([^"]+)"'
+        rep_matches = re.findall(rep_pattern, mpd_content)
+        
+        # Extract all initialization templates
+        init_pattern = r'initialization="([^"]+)"'
+        init_matches = re.findall(init_pattern, mpd_content)
+        
+        result = {
+            'mpd_url': mpd_url,
+            'mpd_size': len(mpd_content),
+            'representation_ids': rep_matches,
+            'initialization_templates': init_matches,
+            'resolved_init_url': init_url,
+            'segment_downloaded': segment_data is not None,
+            'segment_size': len(segment_data) if segment_data else 0,
+            'cenc_info': cenc_info,
+            'cached_drm_info': cached_info,
+            'drm_info_cache_size': len(drm_manager.drm_info_cache),
+            'cached_streams': list(drm_manager.drm_info_cache.keys()),
+            'license_cache_keys': list(drm_manager.license_cache.keys())
+        }
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        app.logger.error(f"Error testing DRM init segment: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/proxy/drm/test-segment')
+def proxy_drm_test_segment():
+    """Test DRM processing on a regular segment"""
+    try:
+        # Get a sample segment URL from the current stream
+        segment_url = request.args.get('url', '')
+        if not segment_url:
+            return jsonify({'error': 'Missing segment URL parameter'}), 400
+        
+        app.logger.info(f"Testing DRM processing on segment: {segment_url}")
+        
+        # Download the segment
+        response = make_persistent_request(
+            segment_url,
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=True
+        )
+        response.raise_for_status()
+        
+        segment_data = response.content
+        app.logger.info(f"Downloaded segment, size: {len(segment_data)} bytes")
+        
+        # Process the segment
+        processed_data = drm_manager.process_drm_segment(segment_data, segment_url)
+        
+        # Check if content appears to be clear
+        is_clear = drm_manager._is_clear_content(segment_data, segment_url)
+        
+        # Extract stream key
+        stream_key = drm_manager._get_stream_key(segment_url)
+        drm_info = drm_manager.drm_info_cache.get(stream_key, {})
+        
+        result = {
+            'segment_url': segment_url,
+            'original_size': len(segment_data),
+            'processed_size': len(processed_data),
+            'appears_clear': is_clear,
+            'drm_info_cached': bool(drm_info),
+            'drm_info': drm_info,
+            'stream_key': stream_key
+        }
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        app.logger.error(f"Error testing DRM segment: {e}")
+        app.logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/proxy/drm/test-cenc')
+def proxy_drm_test_cenc():
+    """Test CENC search functionality on a segment"""
+    try:
+        # Get a sample segment URL from the current stream
+        segment_url = request.args.get('url', '')
+        if not segment_url:
+            return jsonify({'error': 'Missing segment URL parameter'}), 400
+        
+        app.logger.info(f"Testing CENC search on segment: {segment_url}")
+        
+        # Download the segment
+        response = make_persistent_request(
+            segment_url,
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=True
+        )
+        response.raise_for_status()
+        
+        segment_data = response.content
+        app.logger.info(f"Downloaded segment, size: {len(segment_data)} bytes")
+        
+        # Test CENC search
+        cenc_info = drm_manager._search_cenc_info(segment_data)
+        
+        # Test PlayReady header extraction
+        pssh_data = drm_manager.extract_playready_header(segment_data)
+        
+        # Check if content appears to be clear
+        is_clear = drm_manager._is_clear_content(segment_data, segment_url)
+        
+        result = {
+            'segment_url': segment_url,
+            'segment_size': len(segment_data),
+            'cenc_info': cenc_info,
+            'pssh_found': pssh_data is not None,
+            'appears_clear': is_clear,
+            'first_200_bytes_hex': ' '.join(f'{b:02x}' for b in segment_data[:200])
+        }
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        app.logger.error(f"Error testing CENC search: {e}")
+        app.logger.error(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 # --- Classe VavooResolver per gestire i link Vavoo ---
