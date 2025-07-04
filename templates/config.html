@@ -487,28 +487,7 @@
                 </div>
             </div>
             
-            <!-- Sezione Cache DASH -->
-            <div class="config-section">
-                <h3><i class="fas fa-tv"></i> Configurazioni DASH</h3>
-                <div class="row">
-                    <div class="col">
-                        <div class="form-group">
-                            <label for="cache_ttl_mpd">TTL Cache MPD (secondi):</label>
-                            <input type="number" id="cache_ttl_mpd" name="CACHE_TTL_MPD" value="{{ config.CACHE_TTL_MPD or 30 }}" min="5" max="300">
-                            <i class="fas fa-file-video"></i>
-                            <small>Cache per manifest MPD (default: 30s)</small>
-                        </div>
-                    </div>
-                    <div class="col">
-                        <div class="form-group">
-                            <label for="cache_maxsize_mpd">Max Size Cache MPD:</label>
-                            <input type="number" id="cache_maxsize_mpd" name="CACHE_MAXSIZE_MPD" value="{{ config.CACHE_MAXSIZE_MPD or 100 }}" min="10" max="500">
-                            <i class="fas fa-list"></i>
-                            <small>Numero massimo di MPD in cache</small>
-                        </div>
-                    </div>
-                </div>
-            </div>
+
             
             <!-- Sezione Pre-Buffering -->
             <div class="config-section">
