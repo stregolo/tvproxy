@@ -924,7 +924,7 @@ def resolve_m3u8_link(url, headers=None):
                 resolved_vavoo, vavoo_headers = vavoo_resolver.resolve_vavoo_link(clean_url, verbose=True)
                 if resolved_vavoo:
                     app.logger.info(f"✅ Vavoo risolto con successo: {resolved_vavoo}")
-                    # Unisci headers estratti con quelli richiesti
+                    # Unisci headers estratti con quelli richiesti e propaga anche per fetch downstream
                     final_headers_with_vavoo = {**final_headers, **vavoo_headers}
                     return {
                         "resolved_url": resolved_vavoo,
@@ -968,7 +968,8 @@ def resolve_m3u8_link(url, headers=None):
         'Referer': daddylive_custom_headers['referer'],
         'Origin': daddylive_custom_headers['origin']
     }
-    final_headers_for_resolving = {**final_headers, **daddylive_headers}
+    # Propaga anche i custom headers downstream
+    final_headers_for_resolving = {**final_headers, **daddylive_headers, **daddylive_custom_headers}
 
     try:
         app.logger.info("Ottengo URL base dinamico...")
@@ -1077,7 +1078,7 @@ def resolve_m3u8_link(url, headers=None):
             'Referer': referer_raw,
             'Origin': referer_raw
         }
-        # Unisci anche i custom headers richiesti per DaddyLive
+        # Unisci anche i custom headers richiesti per DaddyLive e propaga downstream
         all_headers = {**final_headers, **final_headers_for_fetch, **daddylive_custom_headers}
         return {
             "resolved_url": clean_m3u8_url,
