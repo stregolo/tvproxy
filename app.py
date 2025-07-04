@@ -2091,14 +2091,24 @@ def proxy_m3u():
 
         headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in current_headers_for_proxy.items()])
 
+        # Se il link è stato risolto da Vavoo, aggiungi is_vavoo=1 ai segmenti e alle chiavi
+        is_vavoo = False
+        vavoo_headers_set = {"User-Agent": "VAVOO/2.6", "Referer": "https://vavoo.to/", "Origin": "https://vavoo.to"}
+        # Se tutti e 3 gli header sono presenti e corrispondono, consideriamo il link come Vavoo
+        if all(current_headers_for_proxy.get(k) == v for k, v in vavoo_headers_set.items()):
+            is_vavoo = True
+        vavoo_param = "&is_vavoo=1" if is_vavoo else ""
+
         modified_m3u8 = []
         for line in m3u_content.splitlines():
             line = line.strip()
             if line.startswith("#EXT-X-KEY") and 'URI="' in line:
-                line = replace_key_uri(line, headers_query)
+                # Aggiungi is_vavoo=1 alla chiave se necessario
+                line = replace_key_uri(line, headers_query + vavoo_param)
             elif line and not line.startswith("#"):
+                # Aggiungi is_vavoo=1 ai segmenti se necessario
                 segment_url = urljoin(base_url, line)
-                line = f"/proxy/ts?url={quote(segment_url)}&{headers_query}"
+                line = f"/proxy/ts?url={quote(segment_url)}&{headers_query}{vavoo_param}"
             modified_m3u8.append(line)
 
         modified_m3u8_content = "\n".join(modified_m3u8)
@@ -2188,6 +2198,13 @@ def proxy_ts():
         for key, value in request.args.items()
         if key.lower().startswith("h_")
     }
+
+    # Forza header Vavoo se necessario (anche tramite parametro is_vavoo)
+    is_vavoo = request.args.get('is_vavoo', '') == '1'
+    if is_vavoo or headers.get("Referer", "").startswith("https://vavoo.to"):
+        headers["User-Agent"] = "VAVOO/2.6"
+        headers["Referer"] = "https://vavoo.to/"
+        headers["Origin"] = "https://vavoo.to"
 
     proxy_config = get_proxy_for_url(ts_url)
     proxy_key = proxy_config['http'] if proxy_config else None
@@ -2370,6 +2387,13 @@ def proxy_key():
         for key, value in request.args.items()
         if key.lower().startswith("h_")
     }
+
+    # Forza header Vavoo se necessario (anche tramite parametro is_vavoo)
+    is_vavoo = request.args.get('is_vavoo', '') == '1'
+    if is_vavoo or headers.get("Referer", "").startswith("https://vavoo.to"):
+        headers["User-Agent"] = "VAVOO/2.6"
+        headers["Referer"] = "https://vavoo.to/"
+        headers["Origin"] = "https://vavoo.to"
 
     try:
         proxy_config = get_proxy_for_url(key_url)
