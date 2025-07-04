@@ -510,6 +510,44 @@
                 </div>
             </div>
             
+            <!-- Sezione Pre-Buffering -->
+            <div class="config-section">
+                <h3><i class="fas fa-forward"></i> Configurazioni Pre-Buffering</h3>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="prebuffer_enabled"><b>Pre-Buffering Abilitato:</b></label>
+                            <select id="prebuffer_enabled" name="PREBUFFER_ENABLED">
+                                <option value="true" {% if config.PREBUFFER_ENABLED %}selected{% endif %}>Abilitato</option>
+                                <option value="false" {% if not config.PREBUFFER_ENABLED %}selected{% endif %}>Disabilitato</option>
+                            </select>
+                            <i class="fas fa-toggle-on"></i>
+                            <small>Pre-scarica i segmenti successivi per evitare buffering durante la riproduzione</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="prebuffer_max_segments">Max Segmenti da Pre-Buffare:</label>
+                            <input type="number" id="prebuffer_max_segments" name="PREBUFFER_MAX_SEGMENTS" value="{{ config.PREBUFFER_MAX_SEGMENTS or 3 }}" min="1" max="10">
+                            <i class="fas fa-list-ol"></i>
+                            <small>Numero di segmenti da pre-scaricare in background (default: 3)</small>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="prebuffer_max_size_mb">Max Dimensione Buffer per Stream (MB):</label>
+                            <input type="number" id="prebuffer_max_size_mb" name="PREBUFFER_MAX_SIZE_MB" value="{{ config.PREBUFFER_MAX_SIZE_MB or 50 }}" min="10" max="200">
+                            <i class="fas fa-hdd"></i>
+                            <small>Dimensione massima del buffer in memoria per ogni stream (default: 50MB)</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="prebuffer_cleanup_interval">Intervallo Pulizia Buffer (secondi):</label>
+                            <input type="number" id="prebuffer_cleanup_interval" name="PREBUFFER_CLEANUP_INTERVAL" value="{{ config.PREBUFFER_CLEANUP_INTERVAL or 300 }}" min="60" max="1800">
+                            <i class="fas fa-clock"></i>
+                            <small>Intervallo per la pulizia automatica dei buffer inattivi (default: 300s)</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
             <!-- Sezione Sicurezza -->
             <div class="config-section" id="security">
                 <h3><i class="fas fa-shield-alt"></i> Configurazioni Sicurezza</h3>
@@ -561,6 +599,9 @@
                     </button>
                     <button type="button" class="btn btn-secondary" onclick="testConfig()">
                         <i class="fas fa-vial"></i> Test Configurazione
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="testPreBuffer()">
+                        <i class="fas fa-forward"></i> Test Pre-Buffer
                     </button>
                     <button type="button" class="btn btn-secondary" onclick="exportConfig()">
                         <i class="fas fa-download"></i> Esporta Config
@@ -681,6 +722,40 @@
             });
         }
         
+        function testPreBuffer() {
+            const testBtn = event.target;
+            testBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando Pre-Buffer...';
+            testBtn.disabled = true;
+            
+            fetch('/admin/prebuffer/test', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: JSON.stringify({
+                    test_url: 'https://dash.akamaized.net/akamai/bbb_30fps/bbb_30fps.m3u8'
+                })
+            })
+            .then(response => response.json())
+            .then(result => {
+                testBtn.innerHTML = '<i class="fas fa-forward"></i> Test Pre-Buffer';
+                testBtn.disabled = false;
+                
+                if (result.status === 'success') {
+                    const results = result.results;
+                    showAlert('success', `Test pre-buffer completato! Stream ID: ${results.stream_id}, Segmenti buffered: ${results.segments_buffered}, Dimensione: ${results.buffer_size_mb}MB`);
+                } else {
+                    showAlert('error', 'Test pre-buffer fallito: ' + result.message);
+                }
+            })
+            .catch(error => {
+                testBtn.innerHTML = '<i class="fas fa-forward"></i> Test Pre-Buffer';
+                testBtn.disabled = false;
+                showAlert('error', 'Errore durante il test pre-buffer: ' + error.message);
+            });
+        }
+        
         function exportConfig() {
             window.open('/admin/config/export', '_blank');
         }
@@ -693,50 +768,52 @@
             const file = event.target.files[0];
             if (!file) return;
             
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                try {
-                    const config = JSON.parse(e.target.result);
-                    populateFormWithConfig(config);
-                    showAlert('success', 'Configurazione importata con successo!');
-                } catch (error) {
-                    showAlert('error', 'Errore nel parsing del file: ' + error.message);
+            // Verifica estensione file
+            if (!file.name.endsWith('.json')) {
+                showAlert('error', 'Il file deve essere in formato JSON');
+                event.target.value = '';
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            // Mostra loading
+            const importBtn = document.querySelector('button[onclick="importConfig()"]');
+            const originalText = importBtn.innerHTML;
+            importBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Importando...';
+            importBtn.disabled = true;
+            
+            fetch('/admin/config/import', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(result => {
+                importBtn.innerHTML = originalText;
+                importBtn.disabled = false;
+                
+                if (result.status === 'success') {
+                    showAlert('success', result.message);
+                    // Ricarica la pagina per mostrare i nuovi valori
+                    setTimeout(() => {
+                        location.reload();
+                    }, 1500);
+                } else {
+                    showAlert('error', result.message);
                 }
-            };
-            
-            reader.onerror = function() {
-                showAlert('error', 'Errore nella lettura del file');
-            };
-            
-            reader.readAsText(file);
+            })
+            .catch(error => {
+                importBtn.innerHTML = originalText;
+                importBtn.disabled = false;
+                showAlert('error', 'Errore di connessione: ' + error.message);
+            });
             
             // Reset input file
             event.target.value = '';
         }
         
-        function populateFormWithConfig(config) {
-            // Popola tutti i campi del form con i valori importati
-            Object.keys(config).forEach(key => {
-                const element = document.querySelector(`[name="${key}"]`);
-                if (element) {
-                    if (element.type === 'checkbox') {
-                        element.checked = config[key] === 'true' || config[key] === true;
-                    } else if (element.type === 'select-one') {
-                        element.value = config[key].toString();
-                    } else {
-                        element.value = config[key];
-                    }
-                    
-                    // Aggiungi effetto visivo per i campi aggiornati
-                    element.style.backgroundColor = 'rgba(74, 222, 128, 0.1)';
-                    element.style.borderColor = '#4ade80';
-                    setTimeout(() => {
-                        element.style.backgroundColor = '';
-                        element.style.borderColor = '';
-                    }, 2000);
-                }
-            });
-        }
+
         
         // Add focus effects
         document.querySelectorAll('input, textarea, select').forEach(element => {
