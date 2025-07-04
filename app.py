@@ -2012,8 +2012,6 @@ def proxy_m3u():
     cache_key_headers = "&".join(sorted([f"{k}={v}" for k, v in request.args.items() if k.lower().startswith("h_")]))
     cache_key = f"{m3u_url}|{cache_key_headers}"
 
-    # Se è in cache, restituisci subito la cache
-    # Carica configurazione cache
     config = config_manager.load_config()
     cache_enabled = config.get('CACHE_ENABLED', True)
     
@@ -2024,22 +2022,13 @@ def proxy_m3u():
 
     app.logger.info(f"Cache MISS per M3U8: {m3u_url} (primo avvio, risposta diretta)")
 
-    daddy_base_url = get_daddylive_base_url()
-    daddy_origin = urlparse(daddy_base_url).scheme + "://" + urlparse(daddy_base_url).netloc
-
-    default_headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
-        "Referer": daddy_base_url,
-        "Origin": daddy_origin
-    }
-
     request_headers = {
         unquote(key[2:]).replace("_", "-"): unquote(value).strip()
         for key, value in request.args.items()
         if key.lower().startswith("h_")
     }
 
-    headers = {**default_headers, **request_headers}
+    headers = request_headers
     processed_url = process_daddylive_url(m3u_url)
 
     try:
@@ -2096,7 +2085,6 @@ def proxy_m3u():
 
         modified_m3u8_content = "\n".join(modified_m3u8)
 
-        # Salva la cache in background dopo aver risposto
         def cache_later():
             if not cache_enabled:
                 return
@@ -2124,22 +2112,13 @@ def proxy_resolve():
     if not url:
         return "Errore: Parametro 'url' mancante", 400
 
-    daddy_base_url = get_daddylive_base_url()
-    daddy_origin = urlparse(daddy_base_url).scheme + "://" + urlparse(daddy_base_url).netloc
-
-    default_headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
-        "Referer": daddy_base_url,
-        "Origin": daddy_origin
-    }
-
     request_headers = {
         unquote(key[2:]).replace("_", "-"): unquote(value).strip()
         for key, value in request.args.items()
         if key.lower().startswith("h_")
     }
 
-    headers = {**default_headers, **request_headers}
+    headers = request_headers
 
     try:
         processed_url = process_daddylive_url(url)
