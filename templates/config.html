@@ -565,9 +565,15 @@
                     <button type="button" class="btn btn-secondary" onclick="exportConfig()">
                         <i class="fas fa-download"></i> Esporta Config
                     </button>
+                    <button type="button" class="btn btn-secondary" onclick="importConfig()">
+                        <i class="fas fa-upload"></i> Importa Config
+                    </button>
                 </div>
             </div>
         </form>
+        
+        <!-- Input file nascosto per import -->
+        <input type="file" id="importFile" accept=".json,.txt" style="display: none;" onchange="handleFileImport(event)">
     </div>
 
     <script>
@@ -677,6 +683,59 @@
         
         function exportConfig() {
             window.open('/admin/config/export', '_blank');
+        }
+        
+        function importConfig() {
+            document.getElementById('importFile').click();
+        }
+        
+        function handleFileImport(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const config = JSON.parse(e.target.result);
+                    populateFormWithConfig(config);
+                    showAlert('success', 'Configurazione importata con successo!');
+                } catch (error) {
+                    showAlert('error', 'Errore nel parsing del file: ' + error.message);
+                }
+            };
+            
+            reader.onerror = function() {
+                showAlert('error', 'Errore nella lettura del file');
+            };
+            
+            reader.readAsText(file);
+            
+            // Reset input file
+            event.target.value = '';
+        }
+        
+        function populateFormWithConfig(config) {
+            // Popola tutti i campi del form con i valori importati
+            Object.keys(config).forEach(key => {
+                const element = document.querySelector(`[name="${key}"]`);
+                if (element) {
+                    if (element.type === 'checkbox') {
+                        element.checked = config[key] === 'true' || config[key] === true;
+                    } else if (element.type === 'select-one') {
+                        element.value = config[key].toString();
+                    } else {
+                        element.value = config[key];
+                    }
+                    
+                    // Aggiungi effetto visivo per i campi aggiornati
+                    element.style.backgroundColor = 'rgba(74, 222, 128, 0.1)';
+                    element.style.borderColor = '#4ade80';
+                    setTimeout(() => {
+                        element.style.backgroundColor = '';
+                        element.style.borderColor = '';
+                    }, 2000);
+                }
+            });
         }
         
         // Add focus effects
