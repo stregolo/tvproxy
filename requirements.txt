@@ -6,3 +6,4 @@ cachetools
 PySocks
 psutil
 flask-socketio
+gevent-websocket
