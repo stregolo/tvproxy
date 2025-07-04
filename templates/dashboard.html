@@ -531,7 +531,7 @@
                 </div>
                 <div class="stat-value" id="ramUsage">{{ "%.1f"|format(stats.ram_usage) }}%</div>
                 <div class="progress-bar">
-                    <div class="progress-fill" id="ramProgress" style="width: {{ stats.ram_usage }}%"></div>
+                    <div class="progress-fill" id="ramProgress"></div>
                 </div>
                 <div class="stat-subtitle">
                     <span id="ramUsed">{{ "%.2f"|format(stats.ram_used_gb) }}</span> GB / 
@@ -769,6 +769,9 @@
         // Inizializzazione
         document.addEventListener('DOMContentLoaded', function() {
             console.log('Dashboard moderna inizializzata');
+            // Set initial RAM progress bar width
+            const ramProgress = document.getElementById('ramProgress');
+            ramProgress.style.width = '{{ stats.ram_usage }}%';
         });
     </script>
     <script>
