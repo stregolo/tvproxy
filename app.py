@@ -1862,12 +1862,15 @@ def generate_mpd_playlist(mpd_content, base_url, profile_id, headers):
             if target_representation:
                 break
         
-        if not target_representation:
+        # Verifica se il representation è stato trovato
+        if target_representation is None:
             app.logger.error(f"Representation {profile_id} non trovato nel MPD")
             app.logger.error(f"Representation disponibili: {available_reps}")
             return "#EXTM3U\n#EXT-X-ERROR: Representation not found"
         
         app.logger.info(f"Procedendo con representation: {profile_id}")
+        app.logger.info(f"Target representation ID: {target_representation.get('id')}")
+        app.logger.info(f"Target adaptation set mimeType: {target_adaptation_set.get('mimeType') if target_adaptation_set else 'None'}")
         
         # Trova SegmentTemplate
         app.logger.info(f"Cercando SegmentTemplate per representation: {profile_id}")
