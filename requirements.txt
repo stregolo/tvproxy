@@ -9,3 +9,4 @@ flask-socketio
 mpegdash
 lxml
 defusedxml
+cryptography
