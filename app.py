@@ -916,16 +916,9 @@ def resolve_m3u8_link(url, headers=None):
                 resolved_vavoo = vavoo_resolver.resolve_vavoo_link(clean_url, verbose=True)
                 if resolved_vavoo:
                     app.logger.info(f"✅ Vavoo risolto con successo: {resolved_vavoo}")
-                    vavoo_headers = {
-                        "User-Agent": "VAVOO/2.6",
-                        "Referer": "https://vavoo.to/",
-                        "Origin": "https://vavoo.to"
-                    }
-                    # Precedenza agli header già presenti, ma questi sono obbligatori
-                    merged_headers = {**vavoo_headers, **final_headers}
                     return {
                         "resolved_url": resolved_vavoo,
-                        "headers": merged_headers
+                        "headers": final_headers
                     }
                 else:
                     app.logger.warning(f"❌ Impossibile risolvere il link Vavoo, passo l'originale: {clean_url}")
@@ -2089,36 +2082,14 @@ def proxy_m3u():
         parsed_url = urlparse(final_url)
         base_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path.rsplit('/', 1)[0]}/"
 
-        is_vavoo = False
-        if "vavoo.to" in m3u_url.lower():
-            is_vavoo = True
-        else:
-            vavoo_headers_set = {
-                "User-Agent": "VAVOO/2.6",
-                "Referer": "https://vavoo.to/",
-                "Origin": "https://vavoo.to"
-            }
-            if all(current_headers_for_proxy.get(k) == v for k, v in vavoo_headers_set.items()):
-                is_vavoo = True
-
-        if is_vavoo:
-            vavoo_headers = {
-                "User-Agent": "VAVOO/2.6",
-                "Referer": "https://vavoo.to/",
-                "Origin": "https://vavoo.to"
-            }
-            headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in vavoo_headers.items()])
-        else:
-            headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in current_headers_for_proxy.items()])
+        headers_query = "&".join([f"h_{quote(k)}={quote(v)}" for k, v in current_headers_for_proxy.items()])
 
         modified_m3u8 = []
         for line in m3u_content.splitlines():
             line = line.strip()
             if line.startswith("#EXT-X-KEY") and 'URI="' in line:
-                # Aggiungi is_vavoo=1 alla chiave se necessario
                 line = replace_key_uri(line, headers_query)
             elif line and not line.startswith("#"):
-                # Aggiungi is_vavoo=1 ai segmenti se necessario
                 segment_url = urljoin(base_url, line)
                 line = f"/proxy/ts?url={quote(segment_url)}&{headers_query}"
             modified_m3u8.append(line)
@@ -2210,13 +2181,6 @@ def proxy_ts():
         for key, value in request.args.items()
         if key.lower().startswith("h_")
     }
-
-    # Forza header Vavoo se necessario (anche tramite parametro is_vavoo)
-    is_vavoo = request.args.get('is_vavoo', '') == '1'
-    if is_vavoo or headers.get("Referer", "").startswith("https://vavoo.to"):
-        headers["User-Agent"] = "VAVOO/2.6"
-        headers["Referer"] = "https://vavoo.to/"
-        headers["Origin"] = "https://vavoo.to"
 
     proxy_config = get_proxy_for_url(ts_url)
     proxy_key = proxy_config['http'] if proxy_config else None
@@ -2399,13 +2363,6 @@ def proxy_key():
         for key, value in request.args.items()
         if key.lower().startswith("h_")
     }
-
-    # Forza header Vavoo se necessario (anche tramite parametro is_vavoo)
-    is_vavoo = request.args.get('is_vavoo', '') == '1'
-    if is_vavoo or headers.get("Referer", "").startswith("https://vavoo.to"):
-        headers["User-Agent"] = "VAVOO/2.6"
-        headers["Referer"] = "https://vavoo.to/"
-        headers["Origin"] = "https://vavoo.to"
 
     try:
         proxy_config = get_proxy_for_url(key_url)
