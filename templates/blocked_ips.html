@@ -99,6 +99,10 @@
             <div class="header text-center">
                 <h1><i class="fas fa-shield-alt"></i> Gestione IP Bloccati</h1>
                 <p class="mb-0">Blocca e sblocca indirizzi IP per controllare l'accesso al proxy</p>
+                <div class="alert alert-info mt-3" style="background: rgba(13, 202, 240, 0.1); border: 1px solid rgba(13, 202, 240, 0.3);">
+                    <i class="fas fa-info-circle"></i>
+                    <strong>Persistenza Attiva:</strong> Gli IP bloccati vengono salvati automaticamente su <code>blocked_ips.json</code> e mantenuti anche dopo il riavvio del server.
+                </div>
             </div>
 
             <!-- Navigation -->
@@ -153,9 +157,13 @@
                                 <span>IP Bloccati:</span>
                                 <span class="badge bg-danger" id="blockedCount">0</span>
                             </div>
-                            <div class="d-flex justify-content-between">
+                            <div class="d-flex justify-content-between mb-2">
                                 <span>Ultimo aggiornamento:</span>
                                 <span class="text-muted" id="lastUpdate">-</span>
+                            </div>
+                            <div class="d-flex justify-content-between">
+                                <span>File di salvataggio:</span>
+                                <span class="text-muted">blocked_ips.json</span>
                             </div>
                         </div>
                     </div>
@@ -172,6 +180,9 @@
                                 <button class="btn btn-outline-light btn-sm" onclick="refreshBlockedIPs()">
                                     <i class="fas fa-sync-alt"></i> Aggiorna
                                 </button>
+                                <a href="/admin/blocked-ips/export" class="btn btn-outline-info btn-sm ms-2">
+                                    <i class="fas fa-download"></i> Esporta
+                                </a>
                                 <button class="btn btn-outline-warning btn-sm ms-2" onclick="clearAllBlockedIPs()">
                                     <i class="fas fa-trash"></i> Svuota Tutti
                                 </button>
@@ -200,6 +211,7 @@
     <script>
         // Global variables
         let blockedIPs = [];
+        let blockedIPsDetailed = {};
 
         // Initialize page
         document.addEventListener('DOMContentLoaded', function() {
@@ -242,6 +254,7 @@
                 
                 if (data.success) {
                     blockedIPs = data.blocked_ips;
+                    blockedIPsDetailed = data.blocked_ips_detailed || {};
                     updateBlockedIPsList();
                     updateStats();
                 } else {
@@ -270,23 +283,35 @@
 
             let html = `
                 <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>Indirizzo IP</th>
-                                <th>Azioni</th>
-                            </tr>
-                        </thead>
-                        <tbody>
+                                    <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Indirizzo IP</th>
+                            <th>Data Blocco</th>
+                            <th>Motivo</th>
+                            <th>Azioni</th>
+                        </tr>
+                    </thead>
+                    <tbody>
             `;
 
             blockedIPs.forEach(ip => {
+                const ipDetails = blockedIPsDetailed[ip] || {};
+                const blockedAt = ipDetails.blocked_at || 'Sconosciuta';
+                const reason = ipDetails.reason || 'Admin block';
+                
                 html += `
                     <tr>
                         <td>
                             <span class="badge bg-danger">
                                 <i class="fas fa-ban"></i> ${ip}
                             </span>
+                        </td>
+                        <td>
+                            <small class="text-muted">${blockedAt}</small>
+                        </td>
+                        <td>
+                            <span class="badge bg-secondary">${reason}</span>
                         </td>
                         <td>
                             <button class="btn btn-success btn-sm" onclick="unblockIP('${ip}')">
