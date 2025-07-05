@@ -1006,19 +1006,7 @@ def setup_proxies():
     else:
         app.logger.info("Nessun proxy (SOCKS5, HTTP, HTTPS) configurato.")
 
-def get_proxy_for_url(url):
-    config = config_manager.load_config()
-    no_proxy_domains = [d.strip() for d in config.get('NO_PROXY_DOMAINS', '').split(',') if d.strip()]
-    if not PROXY_LIST:
-        return None
-    try:
-        parsed_url = urlparse(url)
-        if any(domain in parsed_url.netloc for domain in no_proxy_domains):
-            return None
-    except Exception:
-        pass
-    chosen_proxy = random.choice(PROXY_LIST)
-    return {'http': chosen_proxy, 'https': chosen_proxy}
+
 
 def get_proxy_with_fallback(url, max_retries=3):
     """Ottiene un proxy con fallback automatico in caso di errore"""
@@ -1109,6 +1097,17 @@ def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, **k
             **kwargs
         )
         return response
+    except requests.exceptions.ProxyError as e:
+        # Gestione specifica per errori proxy (incluso 429)
+        if "429" in str(e) and proxy_url:
+            app.logger.warning(f"Proxy {proxy_url} ha restituito errore 429, aggiungendo alla blacklist")
+            add_proxy_to_blacklist(proxy_url, "429")
+        app.logger.error(f"Errore proxy nella richiesta persistente: {e}")
+        # In caso di errore, rimuovi la sessione dal pool
+        with SESSION_LOCK:
+            if proxy_url in SESSION_POOL:
+                del SESSION_POOL[proxy_url]
+        raise
     except Exception as e:
         app.logger.error(f"Errore nella richiesta persistente: {e}")
         # In caso di errore, rimuovi la sessione dal pool
@@ -1351,27 +1350,9 @@ def resolve_m3u8_link(url, headers=None):
         final_headers_for_resolving['Origin'] = baseurl
 
         app.logger.info(f"Passo 1: Richiesta a {stream_url}")
-        max_retries = 3
-        for retry in range(max_retries):
-            try:
-                proxy_config = get_proxy_with_fallback(stream_url)
-                response = requests.get(stream_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config, verify=VERIFY_SSL)
-                response.raise_for_status()
-                break  # Success, exit retry loop
-            except requests.exceptions.ProxyError as e:
-                if "429" in str(e) and retry < max_retries - 1:
-                    app.logger.warning(f"Proxy rate limited (429), retry {retry + 1}/{max_retries}: {stream_url}")
-                    time.sleep(2 ** retry)  # Exponential backoff
-                    continue
-                else:
-                    raise
-            except requests.RequestException as e:
-                if retry < max_retries - 1:
-                    app.logger.warning(f"Request failed, retry {retry + 1}/{max_retries}: {stream_url}")
-                    time.sleep(1)
-                    continue
-                else:
-                    raise
+        proxy_config = get_proxy_for_url(stream_url)
+        response = safe_http_request(stream_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
+        response.raise_for_status()
 
         iframes = re.findall(r'<a[^>]*href="([^"]+)"[^>]*>\s*<button[^>]*>\s*Player\s*2\s*</button>', response.text)
         if not iframes:
@@ -1388,7 +1369,8 @@ def resolve_m3u8_link(url, headers=None):
         final_headers_for_resolving['Origin'] = url2
 
         app.logger.info(f"Passo 3: Richiesta a Player 2: {url2}")
-        response = requests.get(url2, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(url2), verify=VERIFY_SSL)
+        proxy_config = get_proxy_for_url(url2)
+        response = safe_http_request(url2, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         response.raise_for_status()
 
         iframes = re.findall(r'iframe src="([^"]*)', response.text)
@@ -1400,7 +1382,8 @@ def resolve_m3u8_link(url, headers=None):
         app.logger.info(f"Passo 4: Trovato iframe: {iframe_url}")
 
         app.logger.info(f"Passo 5: Richiesta iframe: {iframe_url}")
-        response = requests.get(iframe_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(iframe_url), verify=VERIFY_SSL)
+        proxy_config = get_proxy_for_url(iframe_url)
+        response = safe_http_request(iframe_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         response.raise_for_status()
 
         iframe_content = response.text
@@ -1426,7 +1409,8 @@ def resolve_m3u8_link(url, headers=None):
 
         auth_url = f'{auth_host}{auth_php}?channel_id={channel_key}&ts={auth_ts}&rnd={auth_rnd}&sig={auth_sig}'
         app.logger.info(f"Passo 6: Autenticazione: {auth_url}")
-        auth_response = requests.get(auth_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(auth_url), verify=VERIFY_SSL)
+        proxy_config = get_proxy_for_url(auth_url)
+        auth_response = safe_http_request(auth_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         auth_response.raise_for_status()
 
         host = re.findall('(?s)m3u8 =.*?:.*?:.*?".*?".*?"([^"]*)', iframe_content)[0]
@@ -1434,7 +1418,8 @@ def resolve_m3u8_link(url, headers=None):
         server_lookup_url = f"https://{urlparse(iframe_url).netloc}{server_lookup}{channel_key}"
         app.logger.info(f"Passo 7: Server lookup: {server_lookup_url}")
 
-        lookup_response = requests.get(server_lookup_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(server_lookup_url), verify=VERIFY_SSL)
+        proxy_config = get_proxy_for_url(server_lookup_url)
+        lookup_response = safe_http_request(server_lookup_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         lookup_response.raise_for_status()
         server_data = lookup_response.json()
         server_key = server_data['server_key']
@@ -3129,7 +3114,249 @@ def cleanup_clients_thread():
 cleanup_clients_thread_instance = Thread(target=cleanup_clients_thread, daemon=True)
 cleanup_clients_thread_instance.start()
 
+# --- Sistema di Blacklist Proxy per Errori 429 ---
+PROXY_BLACKLIST = {}  # {proxy_url: {'last_error': timestamp, 'error_count': count, 'blacklisted_until': timestamp}}
+PROXY_BLACKLIST_LOCK = Lock()
+BLACKLIST_DURATION = 300  # 5 minuti di blacklist per errore 429
+MAX_ERRORS_BEFORE_PERMANENT = 5  # Dopo 5 errori, blacklist permanente per 1 ora
 
+def add_proxy_to_blacklist(proxy_url, error_type="429"):
+    """Aggiunge un proxy alla blacklist temporanea"""
+    global PROXY_BLACKLIST
+    
+    with PROXY_BLACKLIST_LOCK:
+        current_time = time.time()
+        
+        if proxy_url not in PROXY_BLACKLIST:
+            PROXY_BLACKLIST[proxy_url] = {
+                'last_error': current_time,
+                'error_count': 1,
+                'blacklisted_until': current_time + BLACKLIST_DURATION,
+                'error_type': error_type
+            }
+        else:
+            # Incrementa il contatore errori
+            PROXY_BLACKLIST[proxy_url]['error_count'] += 1
+            PROXY_BLACKLIST[proxy_url]['last_error'] = current_time
+            
+            # Se troppi errori, blacklist più lunga
+            if PROXY_BLACKLIST[proxy_url]['error_count'] >= MAX_ERRORS_BEFORE_PERMANENT:
+                PROXY_BLACKLIST[proxy_url]['blacklisted_until'] = current_time + 3600  # 1 ora
+                app.logger.warning(f"Proxy {proxy_url} blacklistato permanentemente per {MAX_ERRORS_BEFORE_PERMANENT} errori {error_type}")
+            else:
+                PROXY_BLACKLIST[proxy_url]['blacklisted_until'] = current_time + BLACKLIST_DURATION
+            
+            PROXY_BLACKLIST[proxy_url]['error_type'] = error_type
+        
+        app.logger.info(f"Proxy {proxy_url} blacklistato fino a {datetime.fromtimestamp(PROXY_BLACKLIST[proxy_url]['blacklisted_until']).strftime('%H:%M:%S')}")
+
+def is_proxy_blacklisted(proxy_url):
+    """Verifica se un proxy è in blacklist"""
+    global PROXY_BLACKLIST
+    
+    with PROXY_BLACKLIST_LOCK:
+        if proxy_url not in PROXY_BLACKLIST:
+            return False
+        
+        current_time = time.time()
+        blacklist_info = PROXY_BLACKLIST[proxy_url]
+        
+        # Se il periodo di blacklist è scaduto, rimuovi dalla blacklist
+        if current_time > blacklist_info['blacklisted_until']:
+            del PROXY_BLACKLIST[proxy_url]
+            app.logger.info(f"Proxy {proxy_url} rimosso dalla blacklist (scaduto)")
+            return False
+        
+        return True
+
+def get_available_proxies():
+    """Restituisce solo i proxy non blacklistati"""
+    available_proxies = []
+    
+    for proxy in PROXY_LIST:
+        if not is_proxy_blacklisted(proxy):
+            available_proxies.append(proxy)
+    
+    return available_proxies
+
+def cleanup_expired_blacklist():
+    """Pulisce la blacklist dai proxy scaduti"""
+    global PROXY_BLACKLIST
+    
+    with PROXY_BLACKLIST_LOCK:
+        current_time = time.time()
+        expired_proxies = []
+        
+        for proxy_url, blacklist_info in PROXY_BLACKLIST.items():
+            if current_time > blacklist_info['blacklisted_until']:
+                expired_proxies.append(proxy_url)
+        
+        for proxy_url in expired_proxies:
+            del PROXY_BLACKLIST[proxy_url]
+            app.logger.info(f"Proxy {proxy_url} rimosso dalla blacklist (scaduto)")
+    
+    return len(expired_proxies)
+
+def get_proxy_for_url(url):
+    config = config_manager.load_config()
+    no_proxy_domains = [d.strip() for d in config.get('NO_PROXY_DOMAINS', '').split(',') if d.strip()]
+    
+    # Pulisci blacklist scaduta
+    cleanup_expired_blacklist()
+    
+    # Ottieni solo proxy disponibili (non blacklistati)
+    available_proxies = get_available_proxies()
+    
+    if not available_proxies:
+        app.logger.warning("Nessun proxy disponibile (tutti in blacklist)")
+        return None
+    
+    try:
+        parsed_url = urlparse(url)
+        if any(domain in parsed_url.netloc for domain in no_proxy_domains):
+            return None
+    except Exception:
+        pass
+    
+    chosen_proxy = random.choice(available_proxies)
+    return {'http': chosen_proxy, 'https': chosen_proxy}
+
+def safe_http_request(url, headers=None, timeout=None, proxies=None, **kwargs):
+    """Effettua una richiesta HTTP con gestione automatica degli errori 429 sui proxy"""
+    max_retries = 3
+    retry_delay = 1
+    
+    for attempt in range(max_retries):
+        try:
+            # Convert string proxy to dict format if needed
+            proxy_dict = None
+            if isinstance(proxies, dict):
+                proxy_dict = proxies
+            elif isinstance(proxies, str):
+                proxy_dict = {'http': proxies, 'https': proxies}
+            
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=timeout or REQUEST_TIMEOUT,
+                proxies=proxy_dict,
+                verify=VERIFY_SSL,
+                **kwargs
+            )
+            return response
+            
+        except requests.exceptions.ProxyError as e:
+            # Gestione specifica per errori proxy (incluso 429)
+            if "429" in str(e) and proxies:
+                # Estrai l'URL del proxy dall'errore
+                proxy_url = None
+                if isinstance(proxies, dict):
+                    proxy_url = proxies.get('http') or proxies.get('https')
+                elif isinstance(proxies, str):
+                    proxy_url = proxies
+                
+                if proxy_url:
+                    app.logger.warning(f"Proxy {proxy_url} ha restituito errore 429 (tentativo {attempt + 1}/{max_retries})")
+                    add_proxy_to_blacklist(proxy_url, "429")
+                    
+                    # Prova con un nuovo proxy se disponibile
+                    if attempt < max_retries - 1:
+                        new_proxy_config = get_proxy_for_url(url)
+                        if new_proxy_config:
+                            proxies = new_proxy_config
+                            app.logger.info(f"Tentativo con nuovo proxy per {url}")
+                            time.sleep(retry_delay)
+                            retry_delay *= 2  # Exponential backoff
+                            continue
+            
+            app.logger.error(f"Errore proxy nella richiesta HTTP: {e}")
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(retry_delay)
+            retry_delay *= 2
+            
+        except requests.RequestException as e:
+            app.logger.error(f"Errore nella richiesta HTTP: {e}")
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(retry_delay)
+            retry_delay *= 2
+    
+    # Se arriviamo qui, tutti i tentativi sono falliti
+    raise requests.RequestException(f"Tutti i {max_retries} tentativi falliti per {url}")
+
+@app.route('/admin/proxy/status')
+@login_required
+def proxy_status():
+    """Mostra lo stato dei proxy e della blacklist"""
+    try:
+        with PROXY_BLACKLIST_LOCK:
+            blacklist_info = {}
+            for proxy_url, info in PROXY_BLACKLIST.items():
+                blacklist_info[proxy_url] = {
+                    'error_count': info['error_count'],
+                    'error_type': info['error_type'],
+                    'last_error': datetime.fromtimestamp(info['last_error']).strftime('%H:%M:%S'),
+                    'blacklisted_until': datetime.fromtimestamp(info['blacklisted_until']).strftime('%H:%M:%S'),
+                    'is_expired': time.time() > info['blacklisted_until']
+                }
+        
+        available_proxies = get_available_proxies()
+        
+        return jsonify({
+            'status': 'success',
+            'total_proxies': len(PROXY_LIST),
+            'available_proxies': len(available_proxies),
+            'blacklisted_proxies': len(PROXY_BLACKLIST),
+            'blacklist_info': blacklist_info,
+            'available_proxy_list': available_proxies,
+            'all_proxy_list': PROXY_LIST
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero stato proxy: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f"Errore nel recupero stato: {str(e)}"
+        }), 500
+
+@app.route('/admin/proxy/clear-blacklist', methods=['POST'])
+@login_required
+def clear_proxy_blacklist():
+    """Pulisce la blacklist dei proxy"""
+    try:
+        with PROXY_BLACKLIST_LOCK:
+            cleared_count = len(PROXY_BLACKLIST)
+            PROXY_BLACKLIST.clear()
+        
+        app.logger.info(f"Blacklist proxy pulita: {cleared_count} proxy rimossi")
+        return jsonify({
+            'status': 'success',
+            'message': f"Blacklist proxy pulita: {cleared_count} proxy rimossi"
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella pulizia blacklist proxy: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f"Errore nella pulizia: {str(e)}"
+        }), 500
+
+# Thread per pulizia blacklist scaduta
+def cleanup_blacklist_thread():
+    """Thread per pulire automaticamente la blacklist scaduta"""
+    while True:
+        try:
+            time.sleep(60)  # Controlla ogni minuto
+            cleaned = cleanup_expired_blacklist()
+            if cleaned > 0:
+                app.logger.info(f"Pulizia automatica blacklist: {cleaned} proxy rimossi")
+        except Exception as e:
+            app.logger.error(f"Errore nella pulizia automatica blacklist: {e}")
+            time.sleep(300)  # In caso di errore, aspetta 5 minuti
+
+cleanup_blacklist_thread_instance = Thread(target=cleanup_blacklist_thread, daemon=True)
+cleanup_blacklist_thread_instance.start()
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
