@@ -102,6 +102,9 @@
                 <div class="alert alert-info mt-3" style="background: rgba(13, 202, 240, 0.1); border: 1px solid rgba(13, 202, 240, 0.3);">
                     <i class="fas fa-info-circle"></i>
                     <strong>Persistenza Attiva:</strong> Gli IP bloccati vengono salvati automaticamente su <code>data/blocked_ips.json</code> e mantenuti anche dopo il riavvio del container grazie al volume Docker.
+                    <button class="btn btn-sm btn-outline-info ms-2" onclick="checkPersistenceStatus()">
+                        <i class="fas fa-check-circle"></i> Verifica Stato
+                    </button>
                 </div>
             </div>
 
@@ -464,6 +467,35 @@
                     alert.remove();
                 }
             }, 5000);
+        }
+
+        async function checkPersistenceStatus() {
+            try {
+                const response = await fetch('/admin/blocked-ips/status');
+                const data = await response.json();
+                
+                if (data.success) {
+                    const status = data.status;
+                    let message = '<strong>Stato Persistenza:</strong><br>';
+                    message += `📁 Directory: ${status.data_directory_exists ? '✅' : '❌'} ${status.data_directory_path}<br>`;
+                    message += `📄 File: ${status.blocked_ips_file_exists ? '✅' : '❌'} ${status.blocked_ips_file_path}<br>`;
+                    message += `💾 Backup: ${status.backup_file_exists ? '✅' : '❌'}<br>`;
+                    message += `🔒 IP Bloccati: ${status.total_blocked_ips}<br>`;
+                    message += `✍️ Scrittura Directory: ${status.directory_writable ? '✅' : '❌'}<br>`;
+                    message += `✍️ Scrittura File: ${status.file_writable ? '✅' : '❌'}`;
+                    
+                    if (status.last_modified) {
+                        message += `<br>🕒 Ultimo aggiornamento: ${status.last_modified}`;
+                    }
+                    
+                    const alertType = (status.data_directory_exists && status.directory_writable) ? 'success' : 'warning';
+                    showAlert(message, alertType);
+                } else {
+                    showAlert('Errore nel controllo stato persistenza: ' + data.error, 'danger');
+                }
+            } catch (error) {
+                showAlert('Errore di connessione: ' + error.message, 'danger');
+            }
         }
 
         // Auto-refresh every 30 seconds
