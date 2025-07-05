@@ -252,6 +252,15 @@ def broadcast_stats():
             stats['daddy_base_url'] = get_daddylive_base_url()
             stats['session_count'] = len(SESSION_POOL)
             stats['proxy_count'] = len(PROXY_LIST)
+            
+            # Aggiungi statistiche proxy
+            available_proxies = get_available_proxies()
+            stats['proxy_status'] = {
+                'available_proxies': len(available_proxies),
+                'blacklisted_proxies': len(PROXY_BLACKLIST),
+                'total_proxies': len(PROXY_LIST)
+            }
+            
             stats['timestamp'] = time.time()
             
             # Aggiungi statistiche client se disponibile
@@ -2227,6 +2236,14 @@ def get_stats():
     stats['daddy_base_url'] = get_daddylive_base_url()
     stats['session_count'] = len(SESSION_POOL)
     stats['proxy_count'] = len(PROXY_LIST)
+    
+    # Aggiungi statistiche proxy
+    available_proxies = get_available_proxies()
+    stats['proxy_status'] = {
+        'available_proxies': len(available_proxies),
+        'blacklisted_proxies': len(PROXY_BLACKLIST),
+        'total_proxies': len(PROXY_LIST)
+    }
     
     # Aggiungi campi mancanti per il template admin.html
     stats['active_connections'] = len(SESSION_POOL)
