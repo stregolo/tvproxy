@@ -29,7 +29,7 @@ import math
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+socketio = SocketIO(app, cors_allowed_origins="*")
 app.permanent_session_lifetime = timedelta(minutes=5)
 
 load_dotenv()
@@ -198,17 +198,6 @@ def check_auth(username, password):
     """Verifica le credenziali di accesso"""
     return username == ADMIN_USERNAME and password == ADMIN_PASSWORD
 
-def check_ip_blocked(f):
-    """Decorator per verificare se l'IP è bloccato"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR'))
-        if client_tracker.is_ip_blocked(ip):
-            app.logger.warning(f"Richiesta bloccata da IP: {ip}")
-            return jsonify({'error': 'Accesso negato - IP bloccato'}), 403
-        return f(*args, **kwargs)
-    return decorated_function
-
 def check_ip_allowed():
     """Verifica se l'IP è nella lista degli IP consentiti - Lettura dinamica"""
     try:
@@ -340,7 +329,7 @@ setup_logging()
 # --- Configurazione Manager ---
 class ConfigManager:
     def __init__(self):
-        self.config_file = 'data/proxy_config.json'  # Sposta nella directory data per persistenza
+        self.config_file = 'proxy_config.json'
         self.default_config = {
             'SOCKS5_PROXY': '',
             'HTTP_PROXY': '',
@@ -445,22 +434,8 @@ class ConfigManager:
     def save_config(self, config):
         """Salva la configurazione nel file JSON"""
         try:
-            # Crea la directory data se non esiste
-            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
-            
-            # Salva con backup
-            backup_file = f"{self.config_file}.backup"
-            if os.path.exists(self.config_file):
-                try:
-                    import shutil
-                    shutil.copy2(self.config_file, backup_file)
-                except Exception as e:
-                    app.logger.warning(f"Impossibile creare backup configurazione: {e}")
-            
             with open(self.config_file, 'w') as f:
                 json.dump(config, f, indent=4)
-            
-            app.logger.info(f"Configurazione salvata su {self.config_file}")
             return True
         except Exception as e:
             app.logger.error(f"Errore nel salvataggio della configurazione: {e}")
@@ -473,30 +448,6 @@ class ConfigManager:
                 app.config[key] = value
             os.environ[key] = str(value)
         return True
-    
-    def get_config_info(self):
-        """Restituisce informazioni sulla configurazione"""
-        try:
-            config_exists = os.path.exists(self.config_file)
-            config_size = os.path.getsize(self.config_file) if config_exists else 0
-            backup_exists = os.path.exists(f"{self.config_file}.backup")
-            
-            return {
-                'config_file': self.config_file,
-                'config_exists': config_exists,
-                'config_size': config_size,
-                'backup_exists': backup_exists,
-                'last_modified': datetime.fromtimestamp(os.path.getmtime(self.config_file)).strftime('%Y-%m-%d %H:%M:%S') if config_exists else None
-            }
-        except Exception as e:
-            app.logger.error(f"Errore nel recupero info configurazione: {e}")
-            return {
-                'config_file': self.config_file,
-                'config_exists': False,
-                'config_size': 0,
-                'backup_exists': False,
-                'last_modified': None
-            }
 
 config_manager = ConfigManager()
 
@@ -1910,17 +1861,6 @@ def import_config():
         app.logger.error(f"Errore nell'importazione configurazione: {e}")
         return jsonify({"status": "error", "message": f"Errore nell'importazione: {str(e)}"}), 500
 
-@app.route('/admin/config/info')
-@login_required
-def get_config_info():
-    """Restituisce informazioni sulla configurazione"""
-    try:
-        config_info = config_manager.get_config_info()
-        return jsonify({'success': True, 'config_info': config_info})
-    except Exception as e:
-        app.logger.error(f"Errore nel recupero info configurazione: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
 @app.route('/admin/logs/stream/<filename>')
 @login_required
 def stream_logs(filename):
@@ -1981,7 +1921,6 @@ def clear_cache():
 
 # NUOVA ROTTA: Pre-buffering Avanzato
 @app.route('/proxy/prebuffer')
-@check_ip_blocked
 def proxy_prebuffer():
     """Endpoint per pre-buffering manuale di segmenti specifici"""
     m3u8_url = request.args.get('m3u8_url', '').strip()
@@ -2380,184 +2319,9 @@ def clear_client_stats():
             "message": f"Errore nella pulizia: {str(e)}"
         }), 500
 
-# --- Endpoints per gestione IP bloccati ---
-@app.route('/admin/blocked-ips')
-@login_required
-def admin_blocked_ips():
-    return render_template('blocked_ips.html')
-
-@app.route('/admin/blocked-ips/list')
-@login_required
-def get_blocked_ips():
-    try:
-        blocked_ips = client_tracker.get_blocked_ips()
-        blocked_ips_detailed = client_tracker.get_blocked_ips_detailed()
-        return jsonify({
-            'success': True, 
-            'blocked_ips': blocked_ips,
-            'blocked_ips_detailed': blocked_ips_detailed
-        })
-    except Exception as e:
-        app.logger.error(f"Errore nel recupero IP bloccati: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/admin/blocked-ips/block', methods=['POST'])
-@login_required
-def block_ip():
-    try:
-        data = request.get_json()
-        ip = data.get('ip')
-        reason = data.get('reason', 'Admin block')
-        
-        if not ip:
-            return jsonify({'success': False, 'error': 'IP richiesto'}), 400
-        
-        # Valida formato IP
-        import re
-        ip_pattern = r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
-        if not re.match(ip_pattern, ip):
-            return jsonify({'success': False, 'error': 'Formato IP non valido'}), 400
-        
-        success = client_tracker.block_ip(ip, reason)
-        return jsonify({'success': True, 'message': f'IP {ip} bloccato'})
-    except Exception as e:
-        app.logger.error(f"Errore nel blocco IP: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/admin/blocked-ips/unblock', methods=['POST'])
-@login_required
-def unblock_ip():
-    try:
-        data = request.get_json()
-        ip = data.get('ip')
-        
-        if not ip:
-            return jsonify({'success': False, 'error': 'IP richiesto'}), 400
-        
-        success = client_tracker.unblock_ip(ip)
-        if success:
-            return jsonify({'success': True, 'message': f'IP {ip} sbloccato'})
-        else:
-            return jsonify({'success': False, 'error': 'IP non trovato nella lista bloccati'}), 404
-    except Exception as e:
-        app.logger.error(f"Errore nello sblocco IP: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/admin/blocked-ips/clear', methods=['POST'])
-@login_required
-def clear_blocked_ips():
-    try:
-        count = client_tracker.clear_blocked_ips()
-        return jsonify({'success': True, 'message': f'Rimossi {count} IP bloccati'})
-    except Exception as e:
-        app.logger.error(f"Errore nella pulizia IP bloccati: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/admin/blocked-ips/export')
-@login_required
-def export_blocked_ips():
-    try:
-        blocked_ips_detailed = client_tracker.get_blocked_ips_detailed()
-        filename = f"blocked_ips_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
-        return Response(
-            json.dumps(blocked_ips_detailed, indent=2, ensure_ascii=False),
-            mimetype='application/json',
-            headers={
-                'Content-Disposition': f'attachment; filename={filename}',
-                'Cache-Control': 'no-cache'
-            }
-        )
-    except Exception as e:
-        app.logger.error(f"Errore nell'esportazione IP bloccati: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/admin/blocked-ips/status')
-@login_required
-def get_blocked_ips_status():
-    """Restituisce lo stato della persistenza degli IP bloccati"""
-    try:
-        blocked_ips_file = client_tracker.blocked_ips_file
-        data_dir = os.path.dirname(blocked_ips_file)
-        
-        # Verifica se siamo in un container Docker
-        in_docker = os.path.exists('/.dockerenv')
-        
-        status = {
-            'data_directory_exists': os.path.exists(data_dir),
-            'data_directory_path': data_dir,
-            'blocked_ips_file_exists': os.path.exists(blocked_ips_file),
-            'blocked_ips_file_path': blocked_ips_file,
-            'backup_file_exists': os.path.exists(f"{blocked_ips_file}.backup"),
-            'total_blocked_ips': len(client_tracker.get_blocked_ips()),
-            'directory_writable': os.access(data_dir, os.W_OK) if os.path.exists(data_dir) else False,
-            'file_writable': os.access(blocked_ips_file, os.W_OK) if os.path.exists(blocked_ips_file) else False,
-            'in_docker': in_docker,
-            'volume_mounted': False
-        }
-        
-        # Verifica se il volume è montato correttamente
-        if in_docker and os.path.exists(data_dir):
-            try:
-                # Prova a scrivere un file di test
-                test_file = os.path.join(data_dir, '.volume_test')
-                with open(test_file, 'w') as f:
-                    f.write('test')
-                os.remove(test_file)
-                status['volume_mounted'] = True
-            except Exception as e:
-                status['volume_error'] = str(e)
-        
-        if os.path.exists(blocked_ips_file):
-            try:
-                file_stat = os.stat(blocked_ips_file)
-                status.update({
-                    'file_size': file_stat.st_size,
-                    'last_modified': datetime.fromtimestamp(file_stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-                })
-            except Exception as e:
-                status['file_info_error'] = str(e)
-        
-        return jsonify({'success': True, 'status': status})
-    except Exception as e:
-        app.logger.error(f"Errore nel recupero stato persistenza: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/admin/blocked-ips/init', methods=['POST'])
-@login_required
-def initialize_blocked_ips_file():
-    """Inizializza il file blocked_ips.json se non esiste"""
-    try:
-        blocked_ips_file = client_tracker.blocked_ips_file
-        data_dir = os.path.dirname(blocked_ips_file)
-        
-        # Crea directory se non esiste
-        if not os.path.exists(data_dir):
-            os.makedirs(data_dir, exist_ok=True)
-            app.logger.info(f"Creata directory: {data_dir}")
-        
-        # Crea file se non esiste
-        if not os.path.exists(blocked_ips_file):
-            initial_data = {
-                "blocked_ips": {},
-                "last_updated": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                "total_blocked": 0
-            }
-            with open(blocked_ips_file, 'w', encoding='utf-8') as f:
-                json.dump(initial_data, f, indent=2, ensure_ascii=False)
-            app.logger.info(f"Creato file iniziale: {blocked_ips_file}")
-            return jsonify({'success': True, 'message': 'File inizializzato con successo'})
-        else:
-            return jsonify({'success': True, 'message': 'File già esistente'})
-            
-    except Exception as e:
-        app.logger.error(f"Errore nell'inizializzazione file: {e}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
 # --- Route Proxy (mantieni tutte le route proxy esistenti) ---
 
 @app.route('/proxy/vavoo')
-@check_ip_blocked
 def proxy_vavoo():
     """Route specifica per testare la risoluzione Vavoo"""
     # Traccia la richiesta
@@ -2607,7 +2371,6 @@ def proxy_vavoo():
         }), 500
 
 @app.route('/proxy/m3u')
-@check_ip_blocked
 def proxy_m3u():
     """Proxy per file M3U e M3U8 con supporto DaddyLive 2025, caching intelligente e pre-buffering"""
     # Traccia la richiesta
@@ -2729,7 +2492,6 @@ def proxy_m3u():
         return f"Errore generico durante l'elaborazione: {str(e)}", 500
 
 @app.route('/proxy/resolve')
-@check_ip_blocked
 def proxy_resolve():
     """Proxy per risolvere e restituire un URL M3U8 con metodo DaddyLive 2025"""
     url = request.args.get('url', '').strip()
@@ -2763,7 +2525,6 @@ def proxy_resolve():
         return f"Errore durante la risoluzione dell'URL: {str(e)}", 500
 
 @app.route('/proxy/ts')
-@check_ip_blocked
 def proxy_ts():
     """Proxy per segmenti .TS con connessioni persistenti, headers personalizzati, caching e pre-buffering"""
     # Traccia la richiesta
@@ -2860,7 +2621,6 @@ def proxy_ts():
     # If we get here, all retries failed
     return "Errore: Impossibile scaricare il segmento TS dopo tutti i tentativi", 500
 @app.route('/proxy')
-@check_ip_blocked
 def proxy():
     """Proxy per liste M3U che aggiunge automaticamente /proxy/m3u?url= con IP prima dei link"""
     # Traccia la richiesta
@@ -2965,7 +2725,6 @@ def proxy():
         return f"Errore generico: {str(e)}", 500
 
 @app.route('/proxy/key')
-@check_ip_blocked
 def proxy_key():
     """Proxy per la chiave AES-128 con headers personalizzati e caching"""
     # Traccia la richiesta
@@ -3015,18 +2774,6 @@ def proxy_key():
 
 # --- Inizializzazione dell'app ---
 
-# Crea le directory necessarie per la persistenza
-def ensure_data_directories():
-    """Crea le directory necessarie per la persistenza dei dati"""
-    directories = ['data', 'logs']
-    for directory in directories:
-        if not os.path.exists(directory):
-            os.makedirs(directory, exist_ok=True)
-            app.logger.info(f"Creata directory: {directory}")
-
-# Crea le directory all'avvio
-ensure_data_directories()
-
 # Carica e applica la configurazione salvata al startup
 saved_config = config_manager.load_config()
 config_manager.apply_config_to_app(saved_config)
@@ -3046,10 +2793,6 @@ class ClientTracker:
         self.client_lock = Lock()
         self.client_counter = 0
         self.session_clients = {}  # {session_id: client_id} per tracking sessioni Flask
-        self.blocked_ips = set()  # Set di IP bloccati
-        self.blocked_ips_lock = Lock()
-        self.blocked_ips_file = 'data/blocked_ips.json'  # File per persistenza nella directory data
-        self.load_blocked_ips()  # Carica IP bloccati all'avvio
     
     def get_client_id(self, request):
         """Genera un ID univoco per il client"""
@@ -3183,8 +2926,7 @@ class ClientTracker:
                     'has_session': client_data['session_id'] is not None,
                     'last_m3u_url': client_data.get('last_m3u_url'),
                     'url_types': list(client_data.get('url_types', set())),
-                    'is_m3u_user': '/proxy/m3u' in client_data['endpoints'],
-                    'is_blocked': client_tracker.is_ip_blocked(client_data['ip'])
+                    'is_m3u_user': '/proxy/m3u' in client_data['endpoints']
                 })
             
             # Ordina per ultima attività
@@ -3200,183 +2942,6 @@ class ClientTracker:
                 'total_requests': sum(client['requests'] for client in self.active_clients.values()),
                 'timestamp': time.time()
             }
-    
-    def is_ip_blocked(self, ip):
-        """Verifica se un IP è bloccato"""
-        with self.blocked_ips_lock:
-            return ip in self.blocked_ips
-    
-    def block_ip(self, ip, reason="Admin block"):
-        """Blocca un IP"""
-        with self.blocked_ips_lock:
-            self.blocked_ips.add(ip)
-            app.logger.warning(f"IP bloccato: {ip} - Motivo: {reason}")
-        
-        # Salva su file dopo il blocco con il motivo specificato
-        self.save_blocked_ip_with_reason(ip, reason)
-        return True
-    
-    def save_blocked_ip_with_reason(self, ip, reason):
-        """Salva un IP bloccato con motivo specifico"""
-        try:
-            # Crea la directory data se non esiste
-            data_dir = os.path.dirname(self.blocked_ips_file)
-            if not os.path.exists(data_dir):
-                os.makedirs(data_dir, exist_ok=True)
-                app.logger.info(f"Creata directory: {data_dir}")
-            
-            # Carica dati esistenti
-            existing_data = {}
-            if os.path.exists(self.blocked_ips_file):
-                try:
-                    with open(self.blocked_ips_file, 'r', encoding='utf-8') as f:
-                        existing_data = json.load(f).get('blocked_ips', {})
-                except:
-                    pass
-            
-            # Aggiorna o aggiunge l'IP con il motivo
-            existing_data[ip] = {
-                'blocked_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'reason': reason,
-                'blocked_by': 'admin'
-            }
-            
-            data = {
-                'blocked_ips': existing_data,
-                'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'total_blocked': len(existing_data)
-            }
-            
-            # Salva con backup
-            backup_file = f"{self.blocked_ips_file}.backup"
-            if os.path.exists(self.blocked_ips_file):
-                try:
-                    import shutil
-                    shutil.copy2(self.blocked_ips_file, backup_file)
-                except Exception as e:
-                    app.logger.warning(f"Impossibile creare backup: {e}")
-            
-            with open(self.blocked_ips_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            
-            app.logger.info(f"Salvato IP bloccato {ip} con motivo: {reason}")
-            return True
-        except Exception as e:
-            app.logger.error(f"Errore nel salvataggio IP bloccato: {e}")
-            return False
-    
-    def unblock_ip(self, ip):
-        """Sblocca un IP"""
-        with self.blocked_ips_lock:
-            if ip in self.blocked_ips:
-                self.blocked_ips.remove(ip)
-                app.logger.info(f"IP sbloccato: {ip}")
-                # Salva su file dopo lo sblocco
-                self.save_blocked_ips()
-                return True
-            return False
-    
-    def get_blocked_ips(self):
-        """Restituisce la lista degli IP bloccati"""
-        with self.blocked_ips_lock:
-            return list(self.blocked_ips)
-    
-    def clear_blocked_ips(self):
-        """Svuota la lista degli IP bloccati"""
-        with self.blocked_ips_lock:
-            count = len(self.blocked_ips)
-            self.blocked_ips.clear()
-            self.save_blocked_ips()  # Salva dopo la pulizia
-            app.logger.info(f"Rimossi {count} IP bloccati")
-            return count
-    
-    def load_blocked_ips(self):
-        """Carica gli IP bloccati dal file JSON"""
-        try:
-            if os.path.exists(self.blocked_ips_file):
-                with open(self.blocked_ips_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    blocked_ips_data = data.get('blocked_ips', {})
-                    
-                    with self.blocked_ips_lock:
-                        self.blocked_ips = set(blocked_ips_data.keys())
-                    
-                    app.logger.info(f"Caricati {len(self.blocked_ips)} IP bloccati dal file")
-                return True
-            else:
-                app.logger.info("File IP bloccati non trovato, partendo con lista vuota")
-                return False
-        except Exception as e:
-            app.logger.error(f"Errore nel caricamento IP bloccati: {e}")
-            return False
-    
-    def save_blocked_ips(self):
-        """Salva gli IP bloccati su file JSON"""
-        try:
-            # Crea la directory data se non esiste
-            data_dir = os.path.dirname(self.blocked_ips_file)
-            if not os.path.exists(data_dir):
-                os.makedirs(data_dir, exist_ok=True)
-                app.logger.info(f"Creata directory: {data_dir}")
-            
-            with self.blocked_ips_lock:
-                # Carica dati esistenti per mantenere informazioni originali
-                existing_data = {}
-                if os.path.exists(self.blocked_ips_file):
-                    try:
-                        with open(self.blocked_ips_file, 'r', encoding='utf-8') as f:
-                            existing_data = json.load(f).get('blocked_ips', {})
-                    except:
-                        pass
-                
-                blocked_ips_data = {}
-                for ip in self.blocked_ips:
-                    if ip in existing_data:
-                        # Mantieni informazioni originali
-                        blocked_ips_data[ip] = existing_data[ip]
-                    else:
-                        # Nuovo IP bloccato
-                        blocked_ips_data[ip] = {
-                            'blocked_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                            'reason': 'Admin block',
-                            'blocked_by': 'admin'
-                        }
-                
-                data = {
-                    'blocked_ips': blocked_ips_data,
-                    'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'total_blocked': len(self.blocked_ips)
-                }
-            
-            # Salva con backup
-            backup_file = f"{self.blocked_ips_file}.backup"
-            if os.path.exists(self.blocked_ips_file):
-                try:
-                    import shutil
-                    shutil.copy2(self.blocked_ips_file, backup_file)
-                except Exception as e:
-                    app.logger.warning(f"Impossibile creare backup: {e}")
-            
-            with open(self.blocked_ips_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            
-            app.logger.info(f"Salvati {len(self.blocked_ips)} IP bloccati su file")
-            return True
-        except Exception as e:
-            app.logger.error(f"Errore nel salvataggio IP bloccati: {e}")
-            return False
-    
-    def get_blocked_ips_detailed(self):
-        """Restituisce informazioni dettagliate sugli IP bloccati"""
-        try:
-            if os.path.exists(self.blocked_ips_file):
-                with open(self.blocked_ips_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    return data.get('blocked_ips', {})
-            return {}
-        except Exception as e:
-            app.logger.error(f"Errore nel recupero dettagli IP bloccati: {e}")
-            return {}
 
 # Istanza globale del tracker
 client_tracker = ClientTracker()
