@@ -336,6 +336,11 @@
     </nav>
     
     <div class="container">
+        <div class="alert alert-info" style="background: rgba(13, 202, 240, 0.1); border: 1px solid rgba(13, 202, 240, 0.3); color: #0c5460; margin-bottom: 2rem;">
+            <i class="fas fa-info-circle"></i>
+            <strong>Persistenza Attiva:</strong> Le configurazioni vengono salvate automaticamente su <code>data/proxy_config.json</code> e mantenute anche dopo il riavvio del container grazie al volume Docker.
+        </div>
+        
         <div class="alert alert-success" id="successAlert">
             <i class="fas fa-check-circle"></i> Configurazione salvata con successo!
         </div>
