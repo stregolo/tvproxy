@@ -197,12 +197,18 @@ class VavooResolver:
             }
         }
         try:
-            # Usa una sessione pulita senza proxy per la richiesta Vavoo
-            clean_session = requests.Session()
-            clean_session.trust_env = False  # Ignora variabili d'ambiente proxy
-            clean_session.headers.update(headers)
+            # Usa il sistema di proxy configurato
+            proxy_config = get_proxy_for_url("https://www.vavoo.tv/api/app/ping")
+            proxy_key = proxy_config['http'] if proxy_config else None
             
-            resp = clean_session.post("https://www.vavoo.tv/api/app/ping", json=data, timeout=10, verify=VERIFY_SSL)
+            # Usa make_persistent_request per sfruttare il sistema di proxy
+            resp = make_persistent_request(
+                "https://www.vavoo.tv/api/app/ping",
+                headers=headers,
+                timeout=10,
+                proxy_url=proxy_key,
+                json=data
+            )
             resp.raise_for_status()
             return resp.json().get("addonSig")
         except Exception as e:
@@ -240,12 +246,18 @@ class VavooResolver:
         }
         
         try:
-            # Usa una sessione pulita senza proxy per la risoluzione Vavoo
-            clean_session = requests.Session()
-            clean_session.trust_env = False  # Ignora variabili d'ambiente proxy
-            clean_session.headers.update(headers)
+            # Usa il sistema di proxy configurato
+            proxy_config = get_proxy_for_url("https://vavoo.to/mediahubmx-resolve.json")
+            proxy_key = proxy_config['http'] if proxy_config else None
             
-            resp = clean_session.post("https://vavoo.to/mediahubmx-resolve.json", json=data, timeout=10, verify=VERIFY_SSL)
+            # Usa make_persistent_request per sfruttare il sistema di proxy
+            resp = make_persistent_request(
+                "https://vavoo.to/mediahubmx-resolve.json",
+                headers=headers,
+                timeout=10,
+                proxy_url=proxy_key,
+                json=data
+            )
             resp.raise_for_status()
             
             if verbose:
