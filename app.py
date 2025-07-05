@@ -2480,6 +2480,9 @@ def get_blocked_ips_status():
         blocked_ips_file = client_tracker.blocked_ips_file
         data_dir = os.path.dirname(blocked_ips_file)
         
+        # Verifica se siamo in un container Docker
+        in_docker = os.path.exists('/.dockerenv')
+        
         status = {
             'data_directory_exists': os.path.exists(data_dir),
             'data_directory_path': data_dir,
@@ -2488,8 +2491,22 @@ def get_blocked_ips_status():
             'backup_file_exists': os.path.exists(f"{blocked_ips_file}.backup"),
             'total_blocked_ips': len(client_tracker.get_blocked_ips()),
             'directory_writable': os.access(data_dir, os.W_OK) if os.path.exists(data_dir) else False,
-            'file_writable': os.access(blocked_ips_file, os.W_OK) if os.path.exists(blocked_ips_file) else False
+            'file_writable': os.access(blocked_ips_file, os.W_OK) if os.path.exists(blocked_ips_file) else False,
+            'in_docker': in_docker,
+            'volume_mounted': False
         }
+        
+        # Verifica se il volume è montato correttamente
+        if in_docker and os.path.exists(data_dir):
+            try:
+                # Prova a scrivere un file di test
+                test_file = os.path.join(data_dir, '.volume_test')
+                with open(test_file, 'w') as f:
+                    f.write('test')
+                os.remove(test_file)
+                status['volume_mounted'] = True
+            except Exception as e:
+                status['volume_error'] = str(e)
         
         if os.path.exists(blocked_ips_file):
             try:
