@@ -1147,10 +1147,11 @@ def get_daddylive_base_url():
         github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
         
         # Always use direct connection for GitHub to avoid proxy rate limiting (429 errors)
-        main_url_req = requests.get(
+        session = requests.Session()
+        session.trust_env = False  # Ignore environment proxy variables
+        main_url_req = session.get(
             github_url,
             timeout=REQUEST_TIMEOUT,
-            proxies=None,  # Force direct connection for GitHub to avoid rate limiting
             verify=VERIFY_SSL
         )
         main_url_req.raise_for_status()
