@@ -26,6 +26,7 @@ from flask_socketio import SocketIO, emit
 import threading
 from datetime import datetime, timedelta
 import math
+import ipaddress
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
@@ -255,10 +256,28 @@ def broadcast_stats():
             
             # Aggiungi statistiche proxy
             available_proxies = get_available_proxies()
+            
+            # Calcola statistiche IP
+            ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+            for proxy in PROXY_LIST:
+                ip_version = get_proxy_ip_version(proxy)
+                if ip_version in ip_stats:
+                    ip_stats[ip_version] += 1
+            
+            available_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+            for proxy in available_proxies:
+                ip_version = get_proxy_ip_version(proxy)
+                if ip_version in available_ip_stats:
+                    available_ip_stats[ip_version] += 1
+            
             stats['proxy_status'] = {
                 'available_proxies': len(available_proxies),
                 'blacklisted_proxies': len(PROXY_BLACKLIST),
-                'total_proxies': len(PROXY_LIST)
+                'total_proxies': len(PROXY_LIST),
+                'ip_statistics': {
+                    'total': ip_stats,
+                    'available': available_ip_stats
+                }
             }
             
             stats['timestamp'] = time.time()
@@ -978,6 +997,9 @@ def setup_proxies():
     """Carica la lista di proxy SOCKS5, HTTP e HTTPS dalle variabili d'ambiente."""
     global PROXY_LIST
     proxies_found = []
+    ipv4_count = 0
+    ipv6_count = 0
+    hostname_count = 0
 
     socks_proxy_list_str = os.environ.get('SOCKS5_PROXY')
     if socks_proxy_list_str:
@@ -991,6 +1013,17 @@ def setup_proxies():
                     app.logger.info(f"Proxy SOCKS5 convertito per garantire la risoluzione DNS remota")
                 elif not proxy.startswith('socks5h://'):
                     app.logger.warning(f"ATTENZIONE: L'URL del proxy SOCKS5 non è un formato SOCKS5 valido (es. socks5:// o socks5h://). Potrebbe non funzionare.")
+                
+                # Analizza il tipo di IP
+                ip_version = get_proxy_ip_version(final_proxy_url)
+                if ip_version == "IPv6":
+                    ipv6_count += 1
+                    app.logger.info(f"Proxy IPv6 rilevato: {final_proxy_url}")
+                elif ip_version == "IPv4":
+                    ipv4_count += 1
+                else:
+                    hostname_count += 1
+                
                 proxies_found.append(final_proxy_url)
             app.logger.info("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
 
@@ -999,6 +1032,15 @@ def setup_proxies():
         http_proxies = [p.strip() for p in http_proxy_list_str.split(',') if p.strip()]
         if http_proxies:
             app.logger.info(f"Trovati {len(http_proxies)} proxy HTTP. Verranno usati a rotazione.")
+            for proxy in http_proxies:
+                ip_version = get_proxy_ip_version(proxy)
+                if ip_version == "IPv6":
+                    ipv6_count += 1
+                    app.logger.info(f"Proxy IPv6 rilevato: {proxy}")
+                elif ip_version == "IPv4":
+                    ipv4_count += 1
+                else:
+                    hostname_count += 1
             proxies_found.extend(http_proxies)
 
     https_proxy_list_str = os.environ.get('HTTPS_PROXY')
@@ -1006,12 +1048,25 @@ def setup_proxies():
         https_proxies = [p.strip() for p in https_proxy_list_str.split(',') if p.strip()]
         if https_proxies:
             app.logger.info(f"Trovati {len(https_proxies)} proxy HTTPS. Verranno usati a rotazione.")
+            for proxy in https_proxies:
+                ip_version = get_proxy_ip_version(proxy)
+                if ip_version == "IPv6":
+                    ipv6_count += 1
+                    app.logger.info(f"Proxy IPv6 rilevato: {proxy}")
+                elif ip_version == "IPv4":
+                    ipv4_count += 1
+                else:
+                    hostname_count += 1
             proxies_found.extend(https_proxies)
 
     PROXY_LIST = proxies_found
 
     if PROXY_LIST:
-        app.logger.info(f"Totale di {len(PROXY_LIST)} proxy configurati. Verranno usati a rotazione per ogni richiesta.")
+        app.logger.info(f"Totale di {len(PROXY_LIST)} proxy configurati:")
+        app.logger.info(f"  - IPv4: {ipv4_count}")
+        app.logger.info(f"  - IPv6: {ipv6_count}")
+        app.logger.info(f"  - Hostname: {hostname_count}")
+        app.logger.info("Verranno usati a rotazione per ogni richiesta.")
     else:
         app.logger.info("Nessun proxy (SOCKS5, HTTP, HTTPS) configurato.")
 
@@ -2244,10 +2299,28 @@ def get_stats():
     
     # Aggiungi statistiche proxy
     available_proxies = get_available_proxies()
+    
+    # Calcola statistiche IP
+    ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+    for proxy in PROXY_LIST:
+        ip_version = get_proxy_ip_version(proxy)
+        if ip_version in ip_stats:
+            ip_stats[ip_version] += 1
+    
+    available_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+    for proxy in available_proxies:
+        ip_version = get_proxy_ip_version(proxy)
+        if ip_version in available_ip_stats:
+            available_ip_stats[ip_version] += 1
+    
     stats['proxy_status'] = {
         'available_proxies': len(available_proxies),
         'blacklisted_proxies': len(PROXY_BLACKLIST),
-        'total_proxies': len(PROXY_LIST)
+        'total_proxies': len(PROXY_LIST),
+        'ip_statistics': {
+            'total': ip_stats,
+            'available': available_ip_stats
+        }
     }
     
     # Aggiungi campi mancanti per il template admin.html
@@ -3324,16 +3397,35 @@ def proxy_status():
                     'error_type': info['error_type'],
                     'last_error': datetime.fromtimestamp(info['last_error']).strftime('%H:%M:%S'),
                     'blacklisted_until': datetime.fromtimestamp(info['blacklisted_until']).strftime('%H:%M:%S'),
-                    'is_expired': time.time() > info['blacklisted_until']
+                    'is_expired': time.time() > info['blacklisted_until'],
+                    'ip_version': get_proxy_ip_version(proxy_url)
                 }
         
         available_proxies = get_available_proxies()
+        
+        # Analizza i tipi di IP per tutti i proxy
+        ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+        for proxy in PROXY_LIST:
+            ip_version = get_proxy_ip_version(proxy)
+            if ip_version in ip_stats:
+                ip_stats[ip_version] += 1
+        
+        # Analizza i tipi di IP per i proxy disponibili
+        available_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+        for proxy in available_proxies:
+            ip_version = get_proxy_ip_version(proxy)
+            if ip_version in available_ip_stats:
+                available_ip_stats[ip_version] += 1
         
         return jsonify({
             'status': 'success',
             'total_proxies': len(PROXY_LIST),
             'available_proxies': len(available_proxies),
             'blacklisted_proxies': len(PROXY_BLACKLIST),
+            'ip_statistics': {
+                'total': ip_stats,
+                'available': available_ip_stats
+            },
             'blacklist_info': blacklist_info,
             'available_proxy_list': available_proxies,
             'all_proxy_list': PROXY_LIST
@@ -3428,6 +3520,133 @@ def test_github_connection():
         return jsonify({
             'status': 'error',
             'message': f'Errore generico nel test GitHub: {str(e)}'
+        }), 500
+
+def is_ipv6_address(ip_str):
+    """Verifica se un indirizzo è IPv6"""
+    try:
+        ipaddress.IPv6Address(ip_str)
+        return True
+    except ipaddress.AddressValueError:
+        return False
+
+def is_ipv4_address(ip_str):
+    """Verifica se un indirizzo è IPv4"""
+    try:
+        ipaddress.IPv4Address(ip_str)
+        return True
+    except ipaddress.AddressValueError:
+        return False
+
+def extract_ip_from_proxy_url(proxy_url):
+    """Estrae l'IP da un URL proxy"""
+    try:
+        parsed = urlparse(proxy_url)
+        host = parsed.hostname
+        if host:
+            # Rimuovi le parentesi quadre se presenti (IPv6)
+            if host.startswith('[') and host.endswith(']'):
+                host = host[1:-1]
+            return host
+    except Exception:
+        pass
+    return None
+
+def get_proxy_ip_version(proxy_url):
+    """Determina la versione IP di un proxy (IPv4/IPv6)"""
+    ip = extract_ip_from_proxy_url(proxy_url)
+    if not ip:
+        return "unknown"
+    
+    if is_ipv6_address(ip):
+        return "IPv6"
+    elif is_ipv4_address(ip):
+        return "IPv4"
+    else:
+        return "hostname"  # Dominio invece di IP
+
+@app.route('/admin/test/ipv6-proxies', methods=['POST'])
+@login_required
+def test_ipv6_proxies():
+    """Testa specificamente i proxy IPv6"""
+    try:
+        # Filtra solo i proxy IPv6
+        ipv6_proxies = []
+        for proxy in PROXY_LIST:
+            if get_proxy_ip_version(proxy) == "IPv6":
+                ipv6_proxies.append(proxy)
+        
+        if not ipv6_proxies:
+            return jsonify({
+                'status': 'info',
+                'message': 'Nessun proxy IPv6 configurato',
+                'ipv6_proxies': []
+            })
+        
+        results = []
+        test_url = 'https://httpbin.org/ip'
+        
+        for proxy in ipv6_proxies:
+            try:
+                # Test con timeout ridotto per IPv6
+                proxies = {'http': proxy, 'https': proxy}
+                response = requests.get(test_url, proxies=proxies, timeout=10, verify=VERIFY_SSL)
+                
+                if response.status_code == 200:
+                    ip_info = response.json()
+                    results.append({
+                        'proxy': proxy,
+                        'status': 'success',
+                        'response_time': response.elapsed.total_seconds(),
+                        'ip_detected': ip_info.get('origin', 'unknown'),
+                        'message': f'IPv6 proxy funzionante in {response.elapsed.total_seconds():.2f}s'
+                    })
+                else:
+                    results.append({
+                        'proxy': proxy,
+                        'status': 'error',
+                        'message': f'Status code: {response.status_code}'
+                    })
+                    
+            except requests.exceptions.Timeout:
+                results.append({
+                    'proxy': proxy,
+                    'status': 'timeout',
+                    'message': 'Timeout nella connessione IPv6'
+                })
+            except requests.exceptions.ConnectionError as e:
+                results.append({
+                    'proxy': proxy,
+                    'status': 'connection_error',
+                    'message': f'Errore di connessione IPv6: {str(e)}'
+                })
+            except Exception as e:
+                results.append({
+                    'proxy': proxy,
+                    'status': 'error',
+                    'message': f'Errore generico: {str(e)}'
+                })
+        
+        # Calcola statistiche
+        successful = len([r for r in results if r['status'] == 'success'])
+        total = len(results)
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'Test IPv6 completato: {successful}/{total} proxy funzionanti',
+            'ipv6_proxies': ipv6_proxies,
+            'results': results,
+            'statistics': {
+                'total': total,
+                'successful': successful,
+                'failed': total - successful
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore nel test IPv6: {str(e)}'
         }), 500
 
 if __name__ == '__main__':
