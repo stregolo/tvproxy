@@ -2342,7 +2342,12 @@ def admin_blocked_ips():
 def get_blocked_ips():
     try:
         blocked_ips = client_tracker.get_blocked_ips()
-        return jsonify({'success': True, 'blocked_ips': blocked_ips})
+        blocked_ips_detailed = client_tracker.get_blocked_ips_detailed()
+        return jsonify({
+            'success': True, 
+            'blocked_ips': blocked_ips,
+            'blocked_ips_detailed': blocked_ips_detailed
+        })
     except Exception as e:
         app.logger.error(f"Errore nel recupero IP bloccati: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -2397,6 +2402,25 @@ def clear_blocked_ips():
         return jsonify({'success': True, 'message': f'Rimossi {count} IP bloccati'})
     except Exception as e:
         app.logger.error(f"Errore nella pulizia IP bloccati: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/admin/blocked-ips/export')
+@login_required
+def export_blocked_ips():
+    try:
+        blocked_ips_detailed = client_tracker.get_blocked_ips_detailed()
+        filename = f"blocked_ips_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        
+        return Response(
+            json.dumps(blocked_ips_detailed, indent=2, ensure_ascii=False),
+            mimetype='application/json',
+            headers={
+                'Content-Disposition': f'attachment; filename={filename}',
+                'Cache-Control': 'no-cache'
+            }
+        )
+    except Exception as e:
+        app.logger.error(f"Errore nell'esportazione IP bloccati: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 # --- Route Proxy (mantieni tutte le route proxy esistenti) ---
@@ -2881,6 +2905,8 @@ class ClientTracker:
         self.session_clients = {}  # {session_id: client_id} per tracking sessioni Flask
         self.blocked_ips = set()  # Set di IP bloccati
         self.blocked_ips_lock = Lock()
+        self.blocked_ips_file = 'blocked_ips.json'  # File per persistenza
+        self.load_blocked_ips()  # Carica IP bloccati all'avvio
     
     def get_client_id(self, request):
         """Genera un ID univoco per il client"""
@@ -3042,7 +3068,53 @@ class ClientTracker:
         with self.blocked_ips_lock:
             self.blocked_ips.add(ip)
             app.logger.warning(f"IP bloccato: {ip} - Motivo: {reason}")
+        
+        # Salva su file dopo il blocco con il motivo specificato
+        self.save_blocked_ip_with_reason(ip, reason)
+        return True
+    
+    def save_blocked_ip_with_reason(self, ip, reason):
+        """Salva un IP bloccato con motivo specifico"""
+        try:
+            # Carica dati esistenti
+            existing_data = {}
+            if os.path.exists(self.blocked_ips_file):
+                try:
+                    with open(self.blocked_ips_file, 'r', encoding='utf-8') as f:
+                        existing_data = json.load(f).get('blocked_ips', {})
+                except:
+                    pass
+            
+            # Aggiorna o aggiunge l'IP con il motivo
+            existing_data[ip] = {
+                'blocked_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'reason': reason,
+                'blocked_by': 'admin'
+            }
+            
+            data = {
+                'blocked_ips': existing_data,
+                'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'total_blocked': len(existing_data)
+            }
+            
+            # Salva con backup
+            backup_file = f"{self.blocked_ips_file}.backup"
+            if os.path.exists(self.blocked_ips_file):
+                try:
+                    import shutil
+                    shutil.copy2(self.blocked_ips_file, backup_file)
+                except Exception as e:
+                    app.logger.warning(f"Impossibile creare backup: {e}")
+            
+            with open(self.blocked_ips_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            
+            app.logger.info(f"Salvato IP bloccato {ip} con motivo: {reason}")
             return True
+        except Exception as e:
+            app.logger.error(f"Errore nel salvataggio IP bloccato: {e}")
+            return False
     
     def unblock_ip(self, ip):
         """Sblocca un IP"""
@@ -3050,6 +3122,8 @@ class ClientTracker:
             if ip in self.blocked_ips:
                 self.blocked_ips.remove(ip)
                 app.logger.info(f"IP sbloccato: {ip}")
+                # Salva su file dopo lo sblocco
+                self.save_blocked_ips()
                 return True
             return False
     
@@ -3063,8 +3137,91 @@ class ClientTracker:
         with self.blocked_ips_lock:
             count = len(self.blocked_ips)
             self.blocked_ips.clear()
+            self.save_blocked_ips()  # Salva dopo la pulizia
             app.logger.info(f"Rimossi {count} IP bloccati")
             return count
+    
+    def load_blocked_ips(self):
+        """Carica gli IP bloccati dal file JSON"""
+        try:
+            if os.path.exists(self.blocked_ips_file):
+                with open(self.blocked_ips_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    blocked_ips_data = data.get('blocked_ips', {})
+                    
+                    with self.blocked_ips_lock:
+                        self.blocked_ips = set(blocked_ips_data.keys())
+                    
+                    app.logger.info(f"Caricati {len(self.blocked_ips)} IP bloccati dal file")
+                return True
+            else:
+                app.logger.info("File IP bloccati non trovato, partendo con lista vuota")
+                return False
+        except Exception as e:
+            app.logger.error(f"Errore nel caricamento IP bloccati: {e}")
+            return False
+    
+    def save_blocked_ips(self):
+        """Salva gli IP bloccati su file JSON"""
+        try:
+            with self.blocked_ips_lock:
+                # Carica dati esistenti per mantenere informazioni originali
+                existing_data = {}
+                if os.path.exists(self.blocked_ips_file):
+                    try:
+                        with open(self.blocked_ips_file, 'r', encoding='utf-8') as f:
+                            existing_data = json.load(f).get('blocked_ips', {})
+                    except:
+                        pass
+                
+                blocked_ips_data = {}
+                for ip in self.blocked_ips:
+                    if ip in existing_data:
+                        # Mantieni informazioni originali
+                        blocked_ips_data[ip] = existing_data[ip]
+                    else:
+                        # Nuovo IP bloccato
+                        blocked_ips_data[ip] = {
+                            'blocked_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                            'reason': 'Admin block',
+                            'blocked_by': 'admin'
+                        }
+                
+                data = {
+                    'blocked_ips': blocked_ips_data,
+                    'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'total_blocked': len(self.blocked_ips)
+                }
+            
+            # Salva con backup
+            backup_file = f"{self.blocked_ips_file}.backup"
+            if os.path.exists(self.blocked_ips_file):
+                try:
+                    import shutil
+                    shutil.copy2(self.blocked_ips_file, backup_file)
+                except Exception as e:
+                    app.logger.warning(f"Impossibile creare backup: {e}")
+            
+            with open(self.blocked_ips_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            
+            app.logger.info(f"Salvati {len(self.blocked_ips)} IP bloccati su file")
+            return True
+        except Exception as e:
+            app.logger.error(f"Errore nel salvataggio IP bloccati: {e}")
+            return False
+    
+    def get_blocked_ips_detailed(self):
+        """Restituisce informazioni dettagliate sugli IP bloccati"""
+        try:
+            if os.path.exists(self.blocked_ips_file):
+                with open(self.blocked_ips_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return data.get('blocked_ips', {})
+            return {}
+        except Exception as e:
+            app.logger.error(f"Errore nel recupero dettagli IP bloccati: {e}")
+            return {}
 
 # Istanza globale del tracker
 client_tracker = ClientTracker()
