@@ -7,3 +7,4 @@ PySocks
 psutil
 flask-socketio
 gevent-websocket
+urllib3
