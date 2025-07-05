@@ -477,18 +477,30 @@
                 if (data.success) {
                     const status = data.status;
                     let message = '<strong>Stato Persistenza:</strong><br>';
+                    message += `🐳 Docker: ${status.in_docker ? '✅' : '❌'}<br>`;
                     message += `📁 Directory: ${status.data_directory_exists ? '✅' : '❌'} ${status.data_directory_path}<br>`;
                     message += `📄 File: ${status.blocked_ips_file_exists ? '✅' : '❌'} ${status.blocked_ips_file_path}<br>`;
                     message += `💾 Backup: ${status.backup_file_exists ? '✅' : '❌'}<br>`;
                     message += `🔒 IP Bloccati: ${status.total_blocked_ips}<br>`;
                     message += `✍️ Scrittura Directory: ${status.directory_writable ? '✅' : '❌'}<br>`;
-                    message += `✍️ Scrittura File: ${status.file_writable ? '✅' : '❌'}`;
+                    message += `✍️ Scrittura File: ${status.file_writable ? '✅' : '❌'}<br>`;
+                    message += `🔗 Volume Montato: ${status.volume_mounted ? '✅' : '❌'}`;
+                    
+                    if (status.volume_error) {
+                        message += `<br>⚠️ Errore Volume: ${status.volume_error}`;
+                    }
                     
                     if (status.last_modified) {
                         message += `<br>🕒 Ultimo aggiornamento: ${status.last_modified}`;
                     }
                     
-                    const alertType = (status.data_directory_exists && status.directory_writable) ? 'success' : 'warning';
+                    let alertType = 'warning';
+                    if (status.data_directory_exists && status.directory_writable && status.volume_mounted) {
+                        alertType = 'success';
+                    } else if (status.data_directory_exists && status.directory_writable) {
+                        alertType = 'info';
+                    }
+                    
                     showAlert(message, alertType);
                 } else {
                     showAlert('Errore nel controllo stato persistenza: ' + data.error, 'danger');
