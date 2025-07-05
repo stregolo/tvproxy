@@ -42,7 +42,6 @@ VOLUME ["/app/data"]
 CMD ["gunicorn", "app:app", \
      "-w", "4", \
      "--worker-class", "eventlet", \
-     "--worker-connections", "100", \
      "-b", "0.0.0.0:7860", \
      "--timeout", "120", \
      "--keep-alive", "5", \
