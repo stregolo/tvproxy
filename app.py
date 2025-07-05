@@ -2905,7 +2905,7 @@ class ClientTracker:
         self.session_clients = {}  # {session_id: client_id} per tracking sessioni Flask
         self.blocked_ips = set()  # Set di IP bloccati
         self.blocked_ips_lock = Lock()
-        self.blocked_ips_file = 'blocked_ips.json'  # File per persistenza
+        self.blocked_ips_file = 'data/blocked_ips.json'  # File per persistenza nella directory data
         self.load_blocked_ips()  # Carica IP bloccati all'avvio
     
     def get_client_id(self, request):
