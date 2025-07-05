@@ -411,7 +411,26 @@ def detect_proxy_type(proxy_url):
     elif proxy_url_lower.startswith('https://'):
         return 'https'
     else:
-        # Se non ha protocollo, assume HTTP
+        # Se non ha protocollo, prova a indovinare dalla porta
+        try:
+            # Estrai la porta dall'URL
+            if ':' in proxy_url:
+                host_port = proxy_url.split('@')[-1] if '@' in proxy_url else proxy_url
+                if ':' in host_port:
+                    port = int(host_port.split(':')[-1])
+                    # Porta 1080 è tipicamente SOCKS5
+                    if port == 1080:
+                        return 'socks5'
+                    # Porte 8080, 3128, 8888 sono tipicamente HTTP
+                    elif port in [8080, 3128, 8888]:
+                        return 'http'
+                    # Porte 8443, 443 sono tipicamente HTTPS
+                    elif port in [8443, 443]:
+                        return 'https'
+        except (ValueError, IndexError):
+            pass
+        
+        # Default: assume HTTP
         return 'http'
 
 # --- Sistema di Blacklist Proxy per Errori 429 ---
@@ -748,9 +767,7 @@ class ConfigManager:
     def __init__(self):
         self.config_file = 'proxy_config.json'
         self.default_config = {
-            'SOCKS5_PROXY': '',
-            'HTTP_PROXY': '',
-            'HTTPS_PROXY': '',
+            'PROXY': '',  # Proxy unificati con riconoscimento automatico
             'DADDY_PROXY': '',  # Proxy dedicati per DaddyLive
             'REQUEST_TIMEOUT': 30,
             'VERIFY_SSL': False,
@@ -791,8 +808,8 @@ class ConfigManager:
             except Exception as e:
                 app.logger.error(f"Errore nel caricamento della configurazione: {e}")
         
-        # Combina proxy da variabili d'ambiente con quelli del file
-        proxy_keys = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY', 'DADDY_PROXY']
+        # Gestione proxy unificati
+        proxy_keys = ['PROXY', 'DADDY_PROXY']
         
         for key in config.keys():
             if key not in proxy_keys:
@@ -861,7 +878,7 @@ class ConfigManager:
     
     def apply_config_to_app(self, config):
         """Applica la configurazione all'app Flask"""
-        proxy_keys = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY', 'DADDY_PROXY']
+        proxy_keys = ['PROXY', 'DADDY_PROXY']
         
         for key, value in config.items():
             if hasattr(app, 'config'):
@@ -1315,7 +1332,7 @@ connection_thread.start()
 PROXY_LIST = []
 
 def setup_proxies():
-    """Carica la lista di proxy SOCKS5, HTTP e HTTPS dalle variabili d'ambiente."""
+    """Carica la lista di proxy unificati dalla variabile d'ambiente PROXY con riconoscimento automatico del tipo."""
     global PROXY_LIST, DADDY_PROXY_LIST
     proxies_found = []
     daddy_proxies_found = []
@@ -1326,64 +1343,73 @@ def setup_proxies():
     daddy_ipv6_count = 0
     daddy_hostname_count = 0
 
-    # Configurazione proxy normali
-    socks_proxy_list_str = os.environ.get('SOCKS5_PROXY')
-    if socks_proxy_list_str:
-        raw_socks_list = [p.strip() for p in socks_proxy_list_str.split(',') if p.strip()]
-        if raw_socks_list:
-            app.logger.info(f"Trovati {len(raw_socks_list)} proxy SOCKS5. Verranno usati a rotazione.")
-            for proxy in raw_socks_list:
+    # Migrazione automatica dalle vecchie variabili d'ambiente
+    def migrate_old_proxy_vars():
+        """Migra automaticamente le vecchie variabili d'ambiente alle nuove"""
+        old_vars = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']
+        migrated_proxies = []
+        
+        for old_var in old_vars:
+            old_value = os.environ.get(old_var)
+            if old_value and old_value.strip():
+                app.logger.info(f"Migrazione automatica: trovata variabile {old_var}")
+                proxies = [p.strip() for p in old_value.split(',') if p.strip()]
+                migrated_proxies.extend(proxies)
+        
+        if migrated_proxies:
+            app.logger.info(f"Migrazione completata: {len(migrated_proxies)} proxy migrati dalle vecchie variabili")
+            return ','.join(migrated_proxies)
+        return None
+
+    # Configurazione proxy unificati
+    proxy_list_str = os.environ.get('PROXY')
+    
+    # Se non c'è PROXY, prova a migrare dalle vecchie variabili
+    if not proxy_list_str:
+        migrated_proxies = migrate_old_proxy_vars()
+        if migrated_proxies:
+            proxy_list_str = migrated_proxies
+            app.logger.info("Proxy migrati automaticamente dalle vecchie variabili d'ambiente")
+    
+    if proxy_list_str:
+        raw_proxy_list = [p.strip() for p in proxy_list_str.split(',') if p.strip()]
+        if raw_proxy_list:
+            app.logger.info(f"Trovati {len(raw_proxy_list)} proxy unificati. Riconoscimento automatico del tipo in corso...")
+            for proxy in raw_proxy_list:
+                # Riconosci automaticamente il tipo di proxy
+                proxy_type = detect_proxy_type(proxy)
+                
+                # Normalizza l'URL del proxy
                 final_proxy_url = proxy
-                if proxy.startswith('socks5://'):
-                    final_proxy_url = 'socks5h' + proxy[len('socks5'):]
-                    app.logger.info(f"Proxy SOCKS5 convertito per garantire la risoluzione DNS remota")
-                elif not proxy.startswith('socks5h://'):
-                    app.logger.warning(f"ATTENZIONE: L'URL del proxy SOCKS5 non è un formato SOCKS5 valido (es. socks5:// o socks5h://). Potrebbe non funzionare.")
+                if proxy_type == 'socks5':
+                    if proxy.startswith('socks5://'):
+                        final_proxy_url = 'socks5h' + proxy[len('socks5'):]
+                        app.logger.info(f"Proxy SOCKS5 convertito per garantire la risoluzione DNS remota: {final_proxy_url}")
+                    elif not proxy.startswith('socks5h://'):
+                        app.logger.warning(f"ATTENZIONE: L'URL del proxy SOCKS5 non è in formato valido: {proxy}")
+                        app.logger.info("Formati supportati: socks5://user:pass@host:port o socks5h://user:pass@host:port")
+                elif proxy_type == 'http' and not proxy.startswith('http://'):
+                    final_proxy_url = 'http://' + proxy
+                    app.logger.info(f"Proxy HTTP normalizzato: {final_proxy_url}")
+                elif proxy_type == 'https' and not proxy.startswith('https://'):
+                    final_proxy_url = 'https://' + proxy
+                    app.logger.info(f"Proxy HTTPS normalizzato: {final_proxy_url}")
                 
                 # Analizza il tipo di IP
                 ip_version = get_proxy_ip_version(final_proxy_url)
                 if ip_version == "IPv6":
                     ipv6_count += 1
-                    app.logger.info(f"Proxy IPv6 rilevato: {final_proxy_url}")
+                    app.logger.info(f"Proxy IPv6 rilevato ({proxy_type}): {final_proxy_url}")
                 elif ip_version == "IPv4":
                     ipv4_count += 1
                 else:
                     hostname_count += 1
                 
                 proxies_found.append(final_proxy_url)
-            app.logger.info("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
-
-    http_proxy_list_str = os.environ.get('HTTP_PROXY')
-    if http_proxy_list_str:
-        http_proxies = [p.strip() for p in http_proxy_list_str.split(',') if p.strip()]
-        if http_proxies:
-            app.logger.info(f"Trovati {len(http_proxies)} proxy HTTP. Verranno usati a rotazione.")
-            for proxy in http_proxies:
-                ip_version = get_proxy_ip_version(proxy)
-                if ip_version == "IPv6":
-                    ipv6_count += 1
-                    app.logger.info(f"Proxy IPv6 rilevato: {proxy}")
-                elif ip_version == "IPv4":
-                    ipv4_count += 1
-                else:
-                    hostname_count += 1
-            proxies_found.extend(http_proxies)
-
-    https_proxy_list_str = os.environ.get('HTTPS_PROXY')
-    if https_proxy_list_str:
-        https_proxies = [p.strip() for p in https_proxy_list_str.split(',') if p.strip()]
-        if https_proxies:
-            app.logger.info(f"Trovati {len(https_proxies)} proxy HTTPS. Verranno usati a rotazione.")
-            for proxy in https_proxies:
-                ip_version = get_proxy_ip_version(proxy)
-                if ip_version == "IPv6":
-                    ipv6_count += 1
-                    app.logger.info(f"Proxy IPv6 rilevato: {proxy}")
-                elif ip_version == "IPv4":
-                    ipv4_count += 1
-                else:
-                    hostname_count += 1
-            proxies_found.extend(https_proxies)
+                app.logger.info(f"Proxy configurato ({proxy_type}): {final_proxy_url}")
+            
+            if any('socks5' in p for p in proxies_found):
+                app.logger.info("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
 
     # Configurazione proxy DaddyLive
     daddy_proxy_list_str = os.environ.get('DADDY_PROXY')
@@ -1879,11 +1905,11 @@ def toggle_cache():
 @app.route('/admin/debug/proxies')
 @login_required
 def debug_proxies():
-    """Debug dei proxy combinati"""
+    """Debug dei proxy unificati"""
     config = config_manager.load_config()
     
     proxy_info = {}
-    for proxy_type in ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']:
+    for proxy_type in ['PROXY', 'DADDY_PROXY']:
         proxy_string = config.get(proxy_type, '')
         if proxy_string:
             proxies = [p.strip() for p in proxy_string.split(',') if p.strip()]
@@ -1891,14 +1917,26 @@ def debug_proxies():
                 'count': len(proxies),
                 'proxies': proxies,
                 'env_value': os.environ.get(proxy_type, 'NON_IMPOSTATA'),
-                'combined': proxy_string
+                'combined': proxy_string,
+                'detected_types': []
             }
+            
+            # Analizza i tipi di proxy rilevati
+            for proxy in proxies:
+                detected_type = detect_proxy_type(proxy)
+                ip_version = get_proxy_ip_version(proxy)
+                proxy_info[proxy_type]['detected_types'].append({
+                    'proxy': proxy,
+                    'type': detected_type,
+                    'ip_version': ip_version
+                })
         else:
             proxy_info[proxy_type] = {
                 'count': 0,
                 'proxies': [],
                 'env_value': os.environ.get(proxy_type, 'NON_IMPOSTATA'),
-                'combined': ''
+                'combined': '',
+                'detected_types': []
             }
     
     return jsonify(proxy_info)
@@ -1921,7 +1959,91 @@ def debug_env():
             'current_config': config_manager.load_config().get(key, 'NON_TROVATA')
         }
     
+    # Aggiungi informazioni sulla migrazione proxy
+    old_proxy_vars = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']
+    new_proxy_vars = ['PROXY', 'DADDY_PROXY']
+    
+    proxy_migration_info = {
+        'old_variables': {},
+        'new_variables': {},
+        'migration_status': 'not_needed'
+    }
+    
+    # Controlla le vecchie variabili
+    for old_var in old_proxy_vars:
+        old_value = os.environ.get(old_var, 'NON_IMPOSTATA')
+        proxy_migration_info['old_variables'][old_var] = old_value
+    
+    # Controlla le nuove variabili
+    for new_var in new_proxy_vars:
+        new_value = os.environ.get(new_var, 'NON_IMPOSTATA')
+        proxy_migration_info['new_variables'][new_var] = new_value
+    
+    # Determina lo stato della migrazione
+    has_old_vars = any(v != 'NON_IMPOSTATA' for v in proxy_migration_info['old_variables'].values())
+    has_new_vars = any(v != 'NON_IMPOSTATA' for v in proxy_migration_info['new_variables'].values())
+    
+    if has_old_vars and not has_new_vars:
+        proxy_migration_info['migration_status'] = 'needed'
+    elif has_old_vars and has_new_vars:
+        proxy_migration_info['migration_status'] = 'mixed'
+    elif not has_old_vars and has_new_vars:
+        proxy_migration_info['migration_status'] = 'completed'
+    
+    env_vars['proxy_migration'] = proxy_migration_info
+    
     return jsonify(env_vars)
+
+@app.route('/admin/proxy/formats')
+@login_required
+def proxy_formats():
+    """Mostra i formati supportati per i proxy"""
+    formats = {
+        'supported_formats': {
+            'socks5': [
+                'socks5://user:pass@host:port',
+                'socks5h://user:pass@host:port',
+                'socks5://host:port',
+                'socks5h://host:port'
+            ],
+            'http': [
+                'http://user:pass@host:port',
+                'http://host:port',
+                'host:port'  # Auto-riconosciuto come HTTP
+            ],
+            'https': [
+                'https://user:pass@host:port',
+                'https://host:port'
+            ]
+        },
+        'examples': {
+            'single_proxy': 'PROXY=socks5://user:pass@proxy1.com:1080',
+            'multiple_proxies': 'PROXY=socks5://user:pass@proxy1.com:1080,http://user:pass@proxy2.com:8080,https://user:pass@proxy3.com:8443',
+            'mixed_types': 'PROXY=socks5://proxy1.com:1080,proxy2.com:8080,https://proxy3.com:8443'
+        },
+        'migration_examples': {
+            'from_old_format': {
+                'SOCKS5_PROXY': 'socks5://user:pass@proxy1.com:1080',
+                'HTTP_PROXY': 'http://user:pass@proxy2.com:8080',
+                'HTTPS_PROXY': 'http://user:pass@proxy2.com:8080'
+            },
+            'to_new_format': {
+                'PROXY': 'socks5://user:pass@proxy1.com:1080,http://user:pass@proxy2.com:8080'
+            }
+        },
+        'auto_detection': {
+            'description': 'Il sistema riconosce automaticamente il tipo di proxy basandosi sul protocollo o sulla porta',
+            'rules': [
+                'socks5:// o socks5h:// → SOCKS5',
+                'http:// → HTTP',
+                'https:// → HTTPS',
+                'porta 1080 senza protocollo → SOCKS5',
+                'altre porte senza protocollo → HTTP'
+            ]
+        }
+    }
+    
+    return jsonify(formats)
 
 
 
@@ -2173,20 +2295,19 @@ def test_config():
             except Exception as e:
                 return f"❌ {url} {proto} {proxy}: {str(e)}"
 
-        # Test proxy SOCKS5, HTTP, HTTPS su httpbin
+        # Test proxy unificati su httpbin
         proxy_tests = []
-        if config.get('SOCKS5_PROXY'):
-            proxies = [p.strip() for p in config['SOCKS5_PROXY'].split(',') if p.strip()]
+        if config.get('PROXY'):
+            proxies = [p.strip() for p in config['PROXY'].split(',') if p.strip()]
             for proxy in proxies:
-                proxy_tests.append(('SOCKS5', proxy, 'https://httpbin.org/ip', None))
-        if config.get('HTTP_PROXY'):
-            proxies = [p.strip() for p in config['HTTP_PROXY'].split(',') if p.strip()]
-            for proxy in proxies:
-                proxy_tests.append(('HTTP', proxy, 'http://httpbin.org/ip', None))
-        if config.get('HTTPS_PROXY'):
-            proxies = [p.strip() for p in config['HTTPS_PROXY'].split(',') if p.strip()]
-            for proxy in proxies:
-                proxy_tests.append(('HTTPS', proxy, 'https://httpbin.org/ip', None))
+                proxy_type = detect_proxy_type(proxy)
+                if proxy_type == 'socks5':
+                    test_url = 'https://httpbin.org/ip'
+                elif proxy_type == 'http':
+                    test_url = 'http://httpbin.org/ip'
+                else:  # https
+                    test_url = 'https://httpbin.org/ip'
+                proxy_tests.append((proxy_type.upper(), proxy, test_url, None))
 
         # DaddyLive e Vavoo URLs
         daddy_url = "https://new.newkso.ru/wind/"
@@ -2197,19 +2318,19 @@ def test_config():
             'origin': 'https://vavoo.to'
         }
 
-        # Test DaddyLive con tutti i proxy
-        for proto, key in [('SOCKS5', 'SOCKS5_PROXY'), ('HTTP', 'HTTP_PROXY'), ('HTTPS', 'HTTPS_PROXY')]:
-            if config.get(key):
-                proxies = [p.strip() for p in config[key].split(',') if p.strip()]
-                for proxy in proxies:
-                    proxy_tests.append((proto, proxy, daddy_url, None))
+        # Test DaddyLive con proxy unificati
+        if config.get('PROXY'):
+            proxies = [p.strip() for p in config['PROXY'].split(',') if p.strip()]
+            for proxy in proxies:
+                proxy_type = detect_proxy_type(proxy)
+                proxy_tests.append((proxy_type.upper(), proxy, daddy_url, None))
 
-        # Test Vavoo con tutti i proxy
-        for proto, key in [('SOCKS5', 'SOCKS5_PROXY'), ('HTTP', 'HTTP_PROXY'), ('HTTPS', 'HTTPS_PROXY')]:
-            if config.get(key):
-                proxies = [p.strip() for p in config[key].split(',') if p.strip()]
-                for proxy in proxies:
-                    proxy_tests.append((proto, proxy, vavoo_url, vavoo_headers))
+        # Test Vavoo con proxy unificati
+        if config.get('PROXY'):
+            proxies = [p.strip() for p in config['PROXY'].split(',') if p.strip()]
+            for proxy in proxies:
+                proxy_type = detect_proxy_type(proxy)
+                proxy_tests.append((proxy_type.upper(), proxy, vavoo_url, vavoo_headers))
 
         # Esegui tutti i test in parallelo (max 50 thread)
         with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
@@ -3977,6 +4098,24 @@ if __name__ == '__main__':
     app.logger.info("="*50)
     app.logger.info(f"Porta: {port}")
     app.logger.info(f"WebSocket abilitato per aggiornamenti real-time")
+    app.logger.info("="*50)
+    
+    # Informazioni sulla nuova configurazione proxy
+    proxy_env = os.environ.get('PROXY')
+    old_proxy_vars = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']
+    has_old_vars = any(os.environ.get(var) for var in old_proxy_vars)
+    
+    if proxy_env:
+        app.logger.info("✅ Configurazione proxy unificata rilevata (PROXY)")
+        app.logger.info(f"   Proxy configurati: {len(proxy_env.split(','))}")
+    elif has_old_vars:
+        app.logger.info("⚠️  Variabili proxy legacy rilevate - migrazione automatica attiva")
+        app.logger.info("   Considera l'uso della variabile PROXY unificata")
+    else:
+        app.logger.info("ℹ️  Nessun proxy configurato - connessioni dirette")
+    
+    app.logger.info("📖 Formati supportati: /admin/proxy/formats")
+    app.logger.info("🔧 Debug proxy: /admin/debug/proxies")
     app.logger.info("="*50)
     
     # Usa socketio.run invece di app.run
