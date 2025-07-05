@@ -517,9 +517,9 @@
                         </div>
                         <div class="form-group">
                             <label for="prebuffer_max_segments">Max Segmenti da Pre-Buffare:</label>
-                            <input type="number" id="prebuffer_max_segments" name="PREBUFFER_MAX_SEGMENTS" value="{{ config.PREBUFFER_MAX_SEGMENTS or 3 }}" min="1" max="10">
+                            <input type="number" id="prebuffer_max_segments" name="PREBUFFER_MAX_SEGMENTS" value="{{ config.PREBUFFER_MAX_SEGMENTS or 3 }}" min="1" max="20">
                             <i class="fas fa-list-ol"></i>
-                            <small>Numero di segmenti da pre-scaricare in background (default: 3)</small>
+                            <small>Numero di segmenti da pre-scaricare in background (max 20, default: 3)</small>
                         </div>
                     </div>
                     <div class="col">
@@ -543,17 +543,17 @@
                     <div class="col">
                         <div class="form-group">
                             <label for="prebuffer_max_memory_percent">Max Memoria Buffer (% RAM):</label>
-                            <input type="number" id="prebuffer_max_memory_percent" name="PREBUFFER_MAX_MEMORY_PERCENT" value="{{ config.PREBUFFER_MAX_MEMORY_PERCENT or 20 }}" min="5" max="50">
+                            <input type="number" id="prebuffer_max_memory_percent" name="PREBUFFER_MAX_MEMORY_PERCENT" value="{{ config.PREBUFFER_MAX_MEMORY_PERCENT or 20 }}" min="5" max="80">
                             <i class="fas fa-memory"></i>
-                            <small>Percentuale massima di RAM utilizzabile per il buffer (default: 20%)</small>
+                            <small>Percentuale massima di RAM utilizzabile per il buffer (max 80%, default: 20%)</small>
                         </div>
                     </div>
                     <div class="col">
                         <div class="form-group">
                             <label for="prebuffer_emergency_threshold">Soglia Emergenza (% RAM):</label>
-                            <input type="number" id="prebuffer_emergency_threshold" name="PREBUFFER_EMERGENCY_THRESHOLD" value="{{ config.PREBUFFER_EMERGENCY_THRESHOLD or 80 }}" min="70" max="95">
+                            <input type="number" id="prebuffer_emergency_threshold" name="PREBUFFER_EMERGENCY_THRESHOLD" value="{{ config.PREBUFFER_EMERGENCY_THRESHOLD or 80 }}" min="70" max="99">
                             <i class="fas fa-exclamation-triangle"></i>
-                            <small>Soglia per pulizia di emergenza quando la RAM è critica (default: 80%)</small>
+                            <small>Soglia per pulizia di emergenza quando la RAM è critica (max 99%, default: 80%)</small>
                         </div>
                     </div>
                 </div>
