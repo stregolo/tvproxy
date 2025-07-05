@@ -254,9 +254,26 @@ def broadcast_stats():
             stats['proxy_count'] = len(PROXY_LIST)
             stats['timestamp'] = time.time()
             
-            # Aggiungi statistiche client
-            client_stats = client_tracker.get_realtime_stats()
-            stats.update(client_stats)
+            # Aggiungi statistiche client se disponibile
+            try:
+                if 'client_tracker' in globals():
+                    client_stats = client_tracker.get_realtime_stats()
+                    stats.update(client_stats)
+                else:
+                    # Fallback se client_tracker non è ancora disponibile
+                    stats['active_clients'] = 0
+                    stats['active_sessions'] = 0
+                    stats['total_requests'] = 0
+                    stats['m3u_clients'] = 0
+                    stats['m3u_requests'] = 0
+            except Exception as e:
+                app.logger.warning(f"Errore nel recupero statistiche client: {e}")
+                # Fallback con valori di default
+                stats['active_clients'] = 0
+                stats['active_sessions'] = 0
+                stats['total_requests'] = 0
+                stats['m3u_clients'] = 0
+                stats['m3u_requests'] = 0
             
             socketio.emit('stats_update', stats)
             time.sleep(2)  # Aggiorna ogni 2 secondi
@@ -270,6 +287,28 @@ def handle_connect():
     app.logger.info("Client connesso")
     # Invia immediatamente le statistiche correnti
     stats = get_system_stats()
+    
+    # Aggiungi statistiche client se disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_stats = client_tracker.get_realtime_stats()
+            stats.update(client_stats)
+        else:
+            # Fallback se client_tracker non è ancora disponibile
+            stats['active_clients'] = 0
+            stats['active_sessions'] = 0
+            stats['total_requests'] = 0
+            stats['m3u_clients'] = 0
+            stats['m3u_requests'] = 0
+    except Exception as e:
+        app.logger.warning(f"Errore nel recupero statistiche client per nuova connessione: {e}")
+        # Fallback con valori di default
+        stats['active_clients'] = 0
+        stats['active_sessions'] = 0
+        stats['total_requests'] = 0
+        stats['m3u_clients'] = 0
+        stats['m3u_requests'] = 0
+    
     emit('stats_update', stats)
 
 @socketio.on('disconnect')
@@ -1493,8 +1532,12 @@ def debug_env():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     """Pagina di login"""
-    # Traccia la richiesta
-    client_tracker.track_request(request, '/login')
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/login')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta login: {e}")
     
     if not check_ip_allowed():
         app.logger.warning(f"Tentativo di accesso da IP non autorizzato: {request.remote_addr}")
@@ -1506,8 +1549,12 @@ def login():
         if check_auth(username, password):
             session['logged_in'] = True
             session['username'] = username
-            # Traccia la sessione
-            client_tracker.track_session(session.get('_id', str(id(session))), request)
+            # Traccia la sessione se client_tracker è disponibile
+            try:
+                if 'client_tracker' in globals():
+                    client_tracker.track_session(session.get('_id', str(id(session))), request)
+            except Exception as e:
+                app.logger.warning(f"Errore nel tracking sessione login: {e}")
             app.logger.info(f"Login riuscito per utente: {username}")
             return redirect(url_for('dashboard'))
         else:
@@ -1521,8 +1568,12 @@ def login():
 @login_required
 def dashboard():
     """Dashboard avanzata con statistiche di sistema"""
-    # Traccia la richiesta
-    client_tracker.track_request(request, '/dashboard')
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/dashboard')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta dashboard: {e}")
     
     stats = get_system_stats()
     daddy_base_url = get_daddylive_base_url()
@@ -1564,8 +1615,12 @@ def admin_logs():
 @app.route('/')
 def index():
     """Pagina principale migliorata con informazioni Vavoo"""
-    # Traccia la richiesta
-    client_tracker.track_request(request, '/')
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta index: {e}")
     
     stats = get_system_stats()
     base_url = get_daddylive_base_url()
@@ -1601,14 +1656,22 @@ def index():
 @app.route('/logout')
 def logout():
     """Logout"""
-    # Traccia la richiesta
-    client_tracker.track_request(request, '/logout')
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/logout')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta logout: {e}")
     
     username = session.get('username', 'unknown')
     session_id = session.get('_id', str(id(session)))
     
-    # Rimuovi la sessione dal tracker
-    client_tracker.remove_session(session_id)
+    # Rimuovi la sessione dal tracker se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.remove_session(session_id)
+    except Exception as e:
+        app.logger.warning(f"Errore nella rimozione sessione logout: {e}")
     
     session.pop('logged_in', None)
     session.pop('username', None)
@@ -2204,8 +2267,25 @@ def get_stats():
     }
     
     # Aggiungi statistiche client
-    client_stats = client_tracker.get_realtime_stats()
-    stats.update(client_stats)
+    try:
+        if 'client_tracker' in globals():
+            client_stats = client_tracker.get_realtime_stats()
+            stats.update(client_stats)
+        else:
+            # Fallback se client_tracker non è ancora disponibile
+            stats['active_clients'] = 0
+            stats['active_sessions'] = 0
+            stats['total_requests'] = 0
+            stats['m3u_clients'] = 0
+            stats['m3u_requests'] = 0
+    except Exception as e:
+        app.logger.warning(f"Errore nel recupero statistiche client per /stats: {e}")
+        # Fallback con valori di default
+        stats['active_clients'] = 0
+        stats['active_sessions'] = 0
+        stats['total_requests'] = 0
+        stats['m3u_clients'] = 0
+        stats['m3u_requests'] = 0
     
     # Debug log per verificare i dati
     app.logger.info(f"Stats endpoint chiamato - RAM: {stats.get('ram_usage', 0)}%, Cache: {stats.get('cache_size', '0')}, Sessions: {stats.get('session_count', 0)}, Clients: {stats.get('active_clients', 0)}, Pre-buffer: {stats.get('prebuffer_streams', 0)} streams")
@@ -2222,13 +2302,52 @@ def admin_clients():
 @login_required
 def get_client_stats():
     """Endpoint per ottenere statistiche dettagliate sui client"""
-    return jsonify(client_tracker.get_client_stats())
+    try:
+        if 'client_tracker' in globals():
+            return jsonify(client_tracker.get_client_stats())
+        else:
+            return jsonify({
+                'total_clients': 0,
+                'total_sessions': 0,
+                'client_counter': 0,
+                'active_clients': 0,
+                'active_sessions': 0,
+                'total_requests': 0,
+                'm3u_clients': 0,
+                'm3u_requests': 0,
+                'avg_connection_time': 0,
+                'clients': []
+            })
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero statistiche client: {e}")
+        return jsonify({
+            'total_clients': 0,
+            'total_sessions': 0,
+            'client_counter': 0,
+            'active_clients': 0,
+            'active_sessions': 0,
+            'total_requests': 0,
+            'm3u_clients': 0,
+            'm3u_requests': 0,
+            'avg_connection_time': 0,
+            'clients': []
+        }), 500
 
 @app.route('/admin/clients/m3u-stats')
 @login_required
 def get_m3u_client_stats():
     """Endpoint per ottenere statistiche specifiche sui client che usano /proxy/m3u"""
     try:
+        if 'client_tracker' not in globals():
+            return jsonify({
+                'total_m3u_clients': 0,
+                'total_m3u_requests': 0,
+                'url_type_distribution': {},
+                'top_urls': [],
+                'clients': [],
+                'timestamp': datetime.now().isoformat()
+            })
+        
         stats = client_tracker.get_client_stats()
         
         # Filtra solo client che usano /proxy/m3u
@@ -2273,6 +2392,9 @@ def get_m3u_client_stats():
 def export_client_stats():
     """Esporta le statistiche dei client in formato CSV"""
     try:
+        if 'client_tracker' not in globals():
+            return jsonify({"status": "error", "message": "Client tracker non disponibile"}), 500
+        
         stats = client_tracker.get_client_stats()
         
         # Crea CSV
@@ -2301,6 +2423,9 @@ def export_client_stats():
 def clear_client_stats():
     """Pulisce le statistiche dei client"""
     try:
+        if 'client_tracker' not in globals():
+            return jsonify({"status": "error", "message": "Client tracker non disponibile"}), 500
+        
         with client_tracker.client_lock:
             cleared_count = len(client_tracker.active_clients)
             client_tracker.active_clients.clear()
@@ -2324,8 +2449,12 @@ def clear_client_stats():
 @app.route('/proxy/vavoo')
 def proxy_vavoo():
     """Route specifica per testare la risoluzione Vavoo"""
-    # Traccia la richiesta
-    client_tracker.track_request(request, '/proxy/vavoo')
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/proxy/vavoo')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta Vavoo: {e}")
     
     url = request.args.get('url', '').strip()
     if not url:
@@ -2373,8 +2502,12 @@ def proxy_vavoo():
 @app.route('/proxy/m3u')
 def proxy_m3u():
     """Proxy per file M3U e M3U8 con supporto DaddyLive 2025, caching intelligente e pre-buffering"""
-    # Traccia la richiesta
-    client_tracker.track_request(request, '/proxy/m3u')
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/proxy/m3u')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta M3U: {e}")
     
     m3u_url = request.args.get('url', '').strip()
     if not m3u_url:
@@ -2527,8 +2660,12 @@ def proxy_resolve():
 @app.route('/proxy/ts')
 def proxy_ts():
     """Proxy per segmenti .TS con connessioni persistenti, headers personalizzati, caching e pre-buffering"""
-    # Traccia la richiesta
-    client_tracker.track_request(request, '/proxy/ts')
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/proxy/ts')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta TS: {e}")
     
     ts_url = request.args.get('url', '').strip()
     stream_id = request.args.get('stream_id', '').strip()
@@ -2620,11 +2757,16 @@ def proxy_ts():
     
     # If we get here, all retries failed
     return "Errore: Impossibile scaricare il segmento TS dopo tutti i tentativi", 500
+
 @app.route('/proxy')
 def proxy():
     """Proxy per liste M3U che aggiunge automaticamente /proxy/m3u?url= con IP prima dei link"""
-    # Traccia la richiesta
-    client_tracker.track_request(request, '/proxy')
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/proxy')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta proxy: {e}")
     
     m3u_url = request.args.get('url', '').strip()
     if not m3u_url:
@@ -2727,8 +2869,12 @@ def proxy():
 @app.route('/proxy/key')
 def proxy_key():
     """Proxy per la chiave AES-128 con headers personalizzati e caching"""
-    # Traccia la richiesta
-    client_tracker.track_request(request, '/proxy/key')
+    # Traccia la richiesta se client_tracker è disponibile
+    try:
+        if 'client_tracker' in globals():
+            client_tracker.track_request(request, '/proxy/key')
+    except Exception as e:
+        app.logger.warning(f"Errore nel tracking richiesta key: {e}")
     
     key_url = request.args.get('url', '').strip()
     if not key_url:
