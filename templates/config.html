@@ -645,6 +645,9 @@
                     <button type="button" class="btn btn-secondary" onclick="repairConfig()">
                         <i class="fas fa-wrench"></i> Ripara Config
                     </button>
+                    <button type="button" class="btn btn-success" onclick="forceSaveConfig()">
+                        <i class="fas fa-save"></i> Forza Salvataggio
+                    </button>
                     <button type="button" class="btn btn-secondary" onclick="exportConfig()">
                         <i class="fas fa-download"></i> Esporta Config
                     </button>
@@ -973,6 +976,48 @@
                 repairBtn.innerHTML = '<i class="fas fa-wrench"></i> Ripara Config';
                 repairBtn.disabled = false;
                 showAlert('error', 'Errore nella riparazione: ' + error.message);
+            });
+        }
+        
+        function forceSaveConfig() {
+            const forceBtn = event.target;
+            forceBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Forzando Salvataggio...';
+            forceBtn.disabled = true;
+            
+            fetch('/admin/debug/force-save-config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                forceBtn.innerHTML = '<i class="fas fa-save"></i> Forza Salvataggio';
+                forceBtn.disabled = false;
+                
+                if (result.status === 'success') {
+                    let message = `💾 <strong>Salvataggio Forzato Completato</strong><br><br>`;
+                    message += `✅ <strong>Risultato:</strong> ${result.message}<br>`;
+                    message += `📊 <strong>Valori Salvati:</strong> ${result.saved_values_count}/${result.total_values}<br>`;
+                    message += `🌐 <strong>Ambiente:</strong> ${result.config_status.is_huggingface ? 'HuggingFace' : 'Standard'}<br>`;
+                    message += `💾 <strong>Cache Memoria:</strong> ${result.config_status.has_memory_cache ? 'Sì' : 'No'}<br>`;
+                    message += `🔧 <strong>Fonte Config:</strong> ${result.config_status.current_config_source}`;
+                    
+                    showAlert('info', message);
+                    
+                    // Ricarica la pagina per mostrare la configurazione salvata
+                    setTimeout(() => {
+                        location.reload();
+                    }, 3000);
+                } else {
+                    showAlert('error', result.message);
+                }
+            })
+            .catch(error => {
+                forceBtn.innerHTML = '<i class="fas fa-save"></i> Forza Salvataggio';
+                forceBtn.disabled = false;
+                showAlert('error', 'Errore nel salvataggio forzato: ' + error.message);
             });
         }
         
