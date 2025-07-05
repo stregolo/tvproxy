@@ -1343,33 +1343,8 @@ def setup_proxies():
     daddy_ipv6_count = 0
     daddy_hostname_count = 0
 
-    # Migrazione automatica dalle vecchie variabili d'ambiente
-    def migrate_old_proxy_vars():
-        """Migra automaticamente le vecchie variabili d'ambiente alle nuove"""
-        old_vars = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']
-        migrated_proxies = []
-        
-        for old_var in old_vars:
-            old_value = os.environ.get(old_var)
-            if old_value and old_value.strip():
-                app.logger.info(f"Migrazione automatica: trovata variabile {old_var}")
-                proxies = [p.strip() for p in old_value.split(',') if p.strip()]
-                migrated_proxies.extend(proxies)
-        
-        if migrated_proxies:
-            app.logger.info(f"Migrazione completata: {len(migrated_proxies)} proxy migrati dalle vecchie variabili")
-            return ','.join(migrated_proxies)
-        return None
-
     # Configurazione proxy unificati
     proxy_list_str = os.environ.get('PROXY')
-    
-    # Se non c'è PROXY, prova a migrare dalle vecchie variabili
-    if not proxy_list_str:
-        migrated_proxies = migrate_old_proxy_vars()
-        if migrated_proxies:
-            proxy_list_str = migrated_proxies
-            app.logger.info("Proxy migrati automaticamente dalle vecchie variabili d'ambiente")
     
     if proxy_list_str:
         raw_proxy_list = [p.strip() for p in proxy_list_str.split(',') if p.strip()]
@@ -1959,38 +1934,25 @@ def debug_env():
             'current_config': config_manager.load_config().get(key, 'NON_TROVATA')
         }
     
-    # Aggiungi informazioni sulla migrazione proxy
-    old_proxy_vars = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']
-    new_proxy_vars = ['PROXY', 'DADDY_PROXY']
+    # Informazioni sui proxy
+    proxy_vars = ['PROXY', 'DADDY_PROXY']
     
-    proxy_migration_info = {
-        'old_variables': {},
-        'new_variables': {},
-        'migration_status': 'not_needed'
+    proxy_info = {
+        'variables': {},
+        'status': 'not_configured'
     }
     
-    # Controlla le vecchie variabili
-    for old_var in old_proxy_vars:
-        old_value = os.environ.get(old_var, 'NON_IMPOSTATA')
-        proxy_migration_info['old_variables'][old_var] = old_value
+    # Controlla le variabili proxy
+    for proxy_var in proxy_vars:
+        value = os.environ.get(proxy_var, 'NON_IMPOSTATA')
+        proxy_info['variables'][proxy_var] = value
     
-    # Controlla le nuove variabili
-    for new_var in new_proxy_vars:
-        new_value = os.environ.get(new_var, 'NON_IMPOSTATA')
-        proxy_migration_info['new_variables'][new_var] = new_value
+    # Determina lo stato
+    has_proxy = any(v != 'NON_IMPOSTATA' for v in proxy_info['variables'].values())
+    if has_proxy:
+        proxy_info['status'] = 'configured'
     
-    # Determina lo stato della migrazione
-    has_old_vars = any(v != 'NON_IMPOSTATA' for v in proxy_migration_info['old_variables'].values())
-    has_new_vars = any(v != 'NON_IMPOSTATA' for v in proxy_migration_info['new_variables'].values())
-    
-    if has_old_vars and not has_new_vars:
-        proxy_migration_info['migration_status'] = 'needed'
-    elif has_old_vars and has_new_vars:
-        proxy_migration_info['migration_status'] = 'mixed'
-    elif not has_old_vars and has_new_vars:
-        proxy_migration_info['migration_status'] = 'completed'
-    
-    env_vars['proxy_migration'] = proxy_migration_info
+    env_vars['proxy_info'] = proxy_info
     
     return jsonify(env_vars)
 
@@ -2021,15 +1983,10 @@ def proxy_formats():
             'multiple_proxies': 'PROXY=socks5://user:pass@proxy1.com:1080,http://user:pass@proxy2.com:8080,https://user:pass@proxy3.com:8443',
             'mixed_types': 'PROXY=socks5://proxy1.com:1080,proxy2.com:8080,https://proxy3.com:8443'
         },
-        'migration_examples': {
-            'from_old_format': {
-                'SOCKS5_PROXY': 'socks5://user:pass@proxy1.com:1080',
-                'HTTP_PROXY': 'http://user:pass@proxy2.com:8080',
-                'HTTPS_PROXY': 'http://user:pass@proxy2.com:8080'
-            },
-            'to_new_format': {
-                'PROXY': 'socks5://user:pass@proxy1.com:1080,http://user:pass@proxy2.com:8080'
-            }
+        'examples': {
+            'single_proxy': 'PROXY=socks5://user:pass@proxy1.com:1080',
+            'multiple_proxies': 'PROXY=socks5://user:pass@proxy1.com:1080,http://user:pass@proxy2.com:8080,https://user:pass@proxy3.com:8443',
+            'mixed_types': 'PROXY=socks5://proxy1.com:1080,proxy2.com:8080,https://proxy3.com:8443'
         },
         'auto_detection': {
             'description': 'Il sistema riconosce automaticamente il tipo di proxy basandosi sul protocollo o sulla porta',
@@ -4100,17 +4057,12 @@ if __name__ == '__main__':
     app.logger.info(f"WebSocket abilitato per aggiornamenti real-time")
     app.logger.info("="*50)
     
-    # Informazioni sulla nuova configurazione proxy
+    # Informazioni sulla configurazione proxy
     proxy_env = os.environ.get('PROXY')
-    old_proxy_vars = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']
-    has_old_vars = any(os.environ.get(var) for var in old_proxy_vars)
     
     if proxy_env:
         app.logger.info("✅ Configurazione proxy unificata rilevata (PROXY)")
         app.logger.info(f"   Proxy configurati: {len(proxy_env.split(','))}")
-    elif has_old_vars:
-        app.logger.info("⚠️  Variabili proxy legacy rilevate - migrazione automatica attiva")
-        app.logger.info("   Considera l'uso della variabile PROXY unificata")
     else:
         app.logger.info("ℹ️  Nessun proxy configurato - connessioni dirette")
     
