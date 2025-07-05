@@ -340,7 +340,7 @@ setup_logging()
 # --- Configurazione Manager ---
 class ConfigManager:
     def __init__(self):
-        self.config_file = 'proxy_config.json'
+        self.config_file = 'data/proxy_config.json'  # Sposta nella directory data per persistenza
         self.default_config = {
             'SOCKS5_PROXY': '',
             'HTTP_PROXY': '',
@@ -445,8 +445,22 @@ class ConfigManager:
     def save_config(self, config):
         """Salva la configurazione nel file JSON"""
         try:
+            # Crea la directory data se non esiste
+            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+            
+            # Salva con backup
+            backup_file = f"{self.config_file}.backup"
+            if os.path.exists(self.config_file):
+                try:
+                    import shutil
+                    shutil.copy2(self.config_file, backup_file)
+                except Exception as e:
+                    app.logger.warning(f"Impossibile creare backup configurazione: {e}")
+            
             with open(self.config_file, 'w') as f:
                 json.dump(config, f, indent=4)
+            
+            app.logger.info(f"Configurazione salvata su {self.config_file}")
             return True
         except Exception as e:
             app.logger.error(f"Errore nel salvataggio della configurazione: {e}")
@@ -459,6 +473,30 @@ class ConfigManager:
                 app.config[key] = value
             os.environ[key] = str(value)
         return True
+    
+    def get_config_info(self):
+        """Restituisce informazioni sulla configurazione"""
+        try:
+            config_exists = os.path.exists(self.config_file)
+            config_size = os.path.getsize(self.config_file) if config_exists else 0
+            backup_exists = os.path.exists(f"{self.config_file}.backup")
+            
+            return {
+                'config_file': self.config_file,
+                'config_exists': config_exists,
+                'config_size': config_size,
+                'backup_exists': backup_exists,
+                'last_modified': datetime.fromtimestamp(os.path.getmtime(self.config_file)).strftime('%Y-%m-%d %H:%M:%S') if config_exists else None
+            }
+        except Exception as e:
+            app.logger.error(f"Errore nel recupero info configurazione: {e}")
+            return {
+                'config_file': self.config_file,
+                'config_exists': False,
+                'config_size': 0,
+                'backup_exists': False,
+                'last_modified': None
+            }
 
 config_manager = ConfigManager()
 
@@ -1871,6 +1909,17 @@ def import_config():
     except Exception as e:
         app.logger.error(f"Errore nell'importazione configurazione: {e}")
         return jsonify({"status": "error", "message": f"Errore nell'importazione: {str(e)}"}), 500
+
+@app.route('/admin/config/info')
+@login_required
+def get_config_info():
+    """Restituisce informazioni sulla configurazione"""
+    try:
+        config_info = config_manager.get_config_info()
+        return jsonify({'success': True, 'config_info': config_info})
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero info configurazione: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/admin/logs/stream/<filename>')
 @login_required
