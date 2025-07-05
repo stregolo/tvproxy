@@ -648,6 +648,12 @@
                     <button type="button" class="btn btn-success" onclick="forceSaveConfig()">
                         <i class="fas fa-save"></i> Forza Salvataggio
                     </button>
+                    <button type="button" class="btn btn-info" onclick="reloadProxies()">
+                        <i class="fas fa-sync"></i> Ricarica Proxy
+                    </button>
+                    <button type="button" class="btn btn-warning" onclick="checkProxyStatus()">
+                        <i class="fas fa-search"></i> Stato Proxy
+                    </button>
                     <button type="button" class="btn btn-secondary" onclick="exportConfig()">
                         <i class="fas fa-download"></i> Esporta Config
                     </button>
@@ -1018,6 +1024,129 @@
                 forceBtn.innerHTML = '<i class="fas fa-save"></i> Forza Salvataggio';
                 forceBtn.disabled = false;
                 showAlert('error', 'Errore nel salvataggio forzato: ' + error.message);
+            });
+        }
+        
+        function reloadProxies() {
+            const reloadBtn = event.target;
+            reloadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Ricaricando Proxy...';
+            reloadBtn.disabled = true;
+            
+            fetch('/admin/debug/reload-proxies', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                reloadBtn.innerHTML = '<i class="fas fa-sync"></i> Ricarica Proxy';
+                reloadBtn.disabled = false;
+                
+                if (result.status === 'success') {
+                    const stats = result.proxy_stats;
+                    let message = `🔄 <strong>Proxy Ricaricati</strong><br><br>`;
+                    message += `✅ <strong>Risultato:</strong> ${result.message}<br>`;
+                    message += `📊 <strong>Proxy Normali:</strong> ${stats.total_proxies} totali, ${stats.available_proxies} disponibili<br>`;
+                    message += `⭐ <strong>Proxy DaddyLive:</strong> ${stats.total_daddy_proxies} totali, ${stats.available_daddy_proxies} disponibili<br>`;
+                    message += `🌐 <strong>Statistiche IP Normali:</strong> IPv4: ${stats.ip_statistics.IPv4}, IPv6: ${stats.ip_statistics.IPv6}, Hostname: ${stats.ip_statistics.hostname}<br>`;
+                    message += `🌐 <strong>Statistiche IP DaddyLive:</strong> IPv4: ${stats.daddy_ip_statistics.IPv4}, IPv6: ${stats.daddy_ip_statistics.IPv6}, Hostname: ${stats.daddy_ip_statistics.hostname}`;
+                    
+                    if (result.proxy_list && result.proxy_list.length > 0) {
+                        message += `<br><br><strong>🔍 Primi Proxy Normali:</strong><br>`;
+                        result.proxy_list.forEach((proxy, index) => {
+                            message += `${index + 1}. ${proxy}<br>`;
+                        });
+                    }
+                    
+                    if (result.daddy_proxy_list && result.daddy_proxy_list.length > 0) {
+                        message += `<br><strong>🔍 Primi Proxy DaddyLive:</strong><br>`;
+                        result.daddy_proxy_list.forEach((proxy, index) => {
+                            message += `${index + 1}. ${proxy}<br>`;
+                        });
+                    }
+                    
+                    showAlert('info', message);
+                } else {
+                    showAlert('error', result.message);
+                }
+            })
+            .catch(error => {
+                reloadBtn.innerHTML = '<i class="fas fa-sync"></i> Ricarica Proxy';
+                reloadBtn.disabled = false;
+                showAlert('error', 'Errore nel ricaricamento proxy: ' + error.message);
+            });
+        }
+        
+        function checkProxyStatus() {
+            const statusBtn = event.target;
+            statusBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Controllando...';
+            statusBtn.disabled = true;
+            
+            fetch('/admin/debug/proxy-status')
+            .then(response => response.json())
+            .then(result => {
+                statusBtn.innerHTML = '<i class="fas fa-search"></i> Stato Proxy';
+                statusBtn.disabled = false;
+                
+                if (result.status === 'success') {
+                    const proxyStatus = result.proxy_status;
+                    const configProxies = result.config_proxies;
+                    
+                    let message = `🔍 <strong>Stato Dettagliato Proxy</strong><br><br>`;
+                    message += `📊 <strong>Proxy Normali:</strong> ${proxyStatus.total_proxies} totali, ${proxyStatus.available_proxies} disponibili, ${proxyStatus.blacklisted_proxies} in blacklist<br>`;
+                    message += `⭐ <strong>Proxy DaddyLive:</strong> ${proxyStatus.total_daddy_proxies} totali, ${proxyStatus.available_daddy_proxies} disponibili, ${proxyStatus.blacklisted_daddy_proxies} in blacklist<br>`;
+                    message += `🌐 <strong>Statistiche IP Normali:</strong> IPv4: ${proxyStatus.ip_statistics.IPv4}, IPv6: ${proxyStatus.ip_statistics.IPv6}, Hostname: ${proxyStatus.ip_statistics.hostname}<br>`;
+                    message += `🌐 <strong>Statistiche IP DaddyLive:</strong> IPv4: ${proxyStatus.daddy_ip_statistics.IPv4}, IPv6: ${proxyStatus.daddy_ip_statistics.IPv6}, Hostname: ${proxyStatus.daddy_ip_statistics.hostname}`;
+                    
+                    message += `<br><br><strong>⚙️ Configurazione Proxy:</strong><br>`;
+                    message += `• Config PROXY: ${configProxies.PROXY || 'NON_CONFIGURATO'}<br>`;
+                    message += `• Config DADDY_PROXY: ${configProxies.DADDY_PROXY || 'NON_CONFIGURATO'}<br>`;
+                    message += `• Env PROXY: ${configProxies.env_PROXY}<br>`;
+                    message += `• Env DADDY_PROXY: ${configProxies.env_DADDY_PROXY}`;
+                    
+                    if (result.proxy_list && result.proxy_list.length > 0) {
+                        message += `<br><br><strong>🔍 Proxy Normali Caricati:</strong><br>`;
+                        result.proxy_list.forEach((proxy, index) => {
+                            message += `${index + 1}. ${proxy}<br>`;
+                        });
+                    } else {
+                        message += `<br><br><strong>⚠️ Nessun proxy normale caricato</strong>`;
+                    }
+                    
+                    if (result.daddy_proxy_list && result.daddy_proxy_list.length > 0) {
+                        message += `<br><strong>🔍 Proxy DaddyLive Caricati:</strong><br>`;
+                        result.daddy_proxy_list.forEach((proxy, index) => {
+                            message += `${index + 1}. ${proxy}<br>`;
+                        });
+                    } else {
+                        message += `<br><strong>⚠️ Nessun proxy DaddyLive caricato</strong>`;
+                    }
+                    
+                    if (result.blacklist_info.normal_proxies.length > 0) {
+                        message += `<br><br><strong>🚫 Proxy Normali in Blacklist:</strong><br>`;
+                        result.blacklist_info.normal_proxies.forEach((proxy, index) => {
+                            message += `${index + 1}. ${proxy}<br>`;
+                        });
+                    }
+                    
+                    if (result.blacklist_info.daddy_proxies.length > 0) {
+                        message += `<br><strong>🚫 Proxy DaddyLive in Blacklist:</strong><br>`;
+                        result.blacklist_info.daddy_proxies.forEach((proxy, index) => {
+                            message += `${index + 1}. ${proxy}<br>`;
+                        });
+                    }
+                    
+                    showAlert('info', message);
+                } else {
+                    showAlert('error', result.message);
+                }
+            })
+            .catch(error => {
+                statusBtn.innerHTML = '<i class="fas fa-search"></i> Stato Proxy';
+                statusBtn.disabled = false;
+                showAlert('error', 'Errore nel controllo stato proxy: ' + error.message);
             });
         }
         
