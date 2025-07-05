@@ -916,23 +916,38 @@ class ConfigManager:
                 
                 app.logger.info(f"Proxy combinati per {key}: {len(unique_proxies)} totali")
         
-        # Per le altre variabili, mantieni la priorità alle env vars
+        # Per le altre variabili, mantieni la priorità alle env vars SOLO se non sono già state caricate
         for key in config.keys():
             if key not in proxy_keys:  # Salta i proxy che abbiamo già gestito
                 env_value = os.environ.get(key)
                 if env_value is not None:
-                    # Converti il tipo appropriato
-                    if key in ['VERIFY_SSL', 'CACHE_ENABLED']:
-                        config[key] = env_value.lower() in ('true', '1', 'yes')
-                    elif key in ['REQUEST_TIMEOUT', 'KEEP_ALIVE_TIMEOUT', 'MAX_KEEP_ALIVE_REQUESTS', 
-                                'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'CACHE_TTL_M3U8', 'CACHE_TTL_TS', 
-                                'CACHE_TTL_KEY', 'CACHE_MAXSIZE_M3U8', 'CACHE_MAXSIZE_TS', 'CACHE_MAXSIZE_KEY']:
-                        try:
-                            config[key] = int(env_value)
-                        except ValueError:
-                            app.logger.warning(f"Valore non valido per {key}: {env_value}")
+                    # Controlla se il valore è già stato caricato da file/cache (non è il default)
+                    current_value = config[key]
+                    default_value = self.default_config.get(key)
+                    
+                    # Sovrascrivi solo se il valore corrente è uguale al default (non è stato salvato)
+                    if current_value == default_value:
+                        # Converti il tipo appropriato
+                        if key in ['VERIFY_SSL', 'CACHE_ENABLED', 'PREBUFFER_ENABLED']:
+                            config[key] = env_value.lower() in ('true', '1', 'yes')
+                        elif key in ['REQUEST_TIMEOUT', 'KEEP_ALIVE_TIMEOUT', 'MAX_KEEP_ALIVE_REQUESTS', 
+                                    'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'CACHE_TTL_M3U8', 'CACHE_TTL_TS', 
+                                    'CACHE_TTL_KEY', 'CACHE_MAXSIZE_M3U8', 'CACHE_MAXSIZE_TS', 'CACHE_MAXSIZE_KEY',
+                                    'PREBUFFER_MAX_SEGMENTS', 'PREBUFFER_MAX_SIZE_MB', 'PREBUFFER_CLEANUP_INTERVAL']:
+                            try:
+                                config[key] = int(env_value)
+                            except ValueError:
+                                app.logger.warning(f"Valore non valido per {key}: {env_value}")
+                        elif key in ['PREBUFFER_MAX_MEMORY_PERCENT', 'PREBUFFER_EMERGENCY_THRESHOLD']:
+                            try:
+                                config[key] = float(env_value)
+                            except ValueError:
+                                app.logger.warning(f"Valore non valido per {key}: {env_value}")
+                        else:
+                            config[key] = env_value
+                        app.logger.debug(f"Variabile d'ambiente {key} sovrascrive default: {env_value}")
                     else:
-                        config[key] = env_value
+                        app.logger.debug(f"Valore salvato per {key} ({current_value}) ha priorità su env var ({env_value})")
         
         return config
     
@@ -2069,6 +2084,29 @@ def debug_config_status():
     config_status = config_manager.get_config_status()
     current_config = config_manager.load_config()
     
+    # Confronta con i valori di default per identificare cosa è stato salvato
+    default_config = config_manager.default_config
+    saved_values = {}
+    env_overrides = {}
+    
+    for key, value in current_config.items():
+        if key in default_config:
+            if value != default_config[key]:
+                saved_values[key] = {
+                    'current': value,
+                    'default': default_config[key],
+                    'source': 'saved'
+                }
+            else:
+                # Controlla se c'è una variabile d'ambiente che sovrascrive
+                env_value = os.environ.get(key)
+                if env_value is not None:
+                    env_overrides[key] = {
+                        'current': value,
+                        'env_value': env_value,
+                        'source': 'environment'
+                    }
+    
     return jsonify({
         'config_status': config_status,
         'current_config_keys': list(current_config.keys()),
@@ -2078,7 +2116,10 @@ def debug_config_status():
             'daddy_proxy_configured': bool(current_config.get('DADDY_PROXY')),
             'cache_enabled': current_config.get('CACHE_ENABLED', True),
             'prebuffer_enabled': current_config.get('PREBUFFER_ENABLED', True)
-        }
+        },
+        'saved_values': saved_values,
+        'environment_overrides': env_overrides,
+        'default_config': default_config
     })
 
 @app.route('/admin/debug/test-import', methods=['POST'])
@@ -4262,6 +4303,48 @@ def repair_config():
         return jsonify({
             'status': 'error',
             'message': f'Errore nella riparazione: {str(e)}'
+        }), 500
+
+@app.route('/admin/debug/force-save-config', methods=['POST'])
+@login_required
+def force_save_config():
+    """Forza il salvataggio della configurazione corrente"""
+    try:
+        # Carica la configurazione corrente
+        current_config = config_manager.load_config()
+        
+        # Forza il salvataggio
+        save_result = config_manager.save_config(current_config)
+        
+        if save_result:
+            # Ricarica per verificare
+            reloaded_config = config_manager.load_config()
+            
+            # Conta quanti valori sono stati salvati (diversi dal default)
+            saved_count = 0
+            for key, value in reloaded_config.items():
+                if key in config_manager.default_config:
+                    if value != config_manager.default_config[key]:
+                        saved_count += 1
+            
+            return jsonify({
+                'status': 'success',
+                'message': f'Configurazione forzatamente salvata ({saved_count} valori personalizzati)',
+                'config_status': config_manager.get_config_status(),
+                'saved_values_count': saved_count,
+                'total_values': len(reloaded_config)
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Errore nel salvataggio forzato'
+            }), 500
+            
+    except Exception as e:
+        app.logger.error(f"Errore nel salvataggio forzato: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore nel salvataggio forzato: {str(e)}'
         }), 500
 
 @app.route('/admin/debug/websocket-status')
