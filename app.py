@@ -35,6 +35,91 @@ app.permanent_session_lifetime = timedelta(minutes=5)
 
 load_dotenv()
 
+# --- Variabili globali ---
+PROXY_LIST = []
+SESSION_POOL = {}
+PROXY_BLACKLIST = {}
+system_stats = {}
+DADDYLIVE_BASE_URL = None
+LAST_FETCH_TIME = 0
+FETCH_INTERVAL = 3600
+client_tracker = None  # Sarà inizializzato dopo la definizione della classe
+
+# --- Funzioni di utilità ---
+def get_system_stats():
+    """Ottiene le statistiche di sistema in tempo reale"""
+    global system_stats
+    
+    # Memoria RAM
+    memory = psutil.virtual_memory()
+    system_stats['ram_usage'] = memory.percent
+    system_stats['ram_used_gb'] = memory.used / (1024**3)  # GB
+    system_stats['ram_total_gb'] = memory.total / (1024**3)  # GB
+    
+    # Utilizzo di rete
+    net_io = psutil.net_io_counters()
+    system_stats['network_sent'] = net_io.bytes_sent / (1024**2)  # MB
+    system_stats['network_recv'] = net_io.bytes_recv / (1024**2)  # MB
+    
+    # Statistiche pre-buffer
+    try:
+        with pre_buffer_manager.pre_buffer_lock:
+            total_segments = sum(len(segments) for segments in pre_buffer_manager.pre_buffer.values())
+            total_size = sum(
+                sum(len(content) for content in segments.values())
+                for segments in pre_buffer_manager.pre_buffer.values()
+            )
+            system_stats['prebuffer_streams'] = len(pre_buffer_manager.pre_buffer)
+            system_stats['prebuffer_segments'] = total_segments
+            system_stats['prebuffer_size_mb'] = round(total_size / (1024 * 1024), 2)
+            system_stats['prebuffer_threads'] = len(pre_buffer_manager.pre_buffer_threads)
+    except Exception as e:
+        app.logger.error(f"Errore nel calcolo statistiche pre-buffer: {e}")
+        system_stats['prebuffer_streams'] = 0
+        system_stats['prebuffer_segments'] = 0
+        system_stats['prebuffer_size_mb'] = 0
+        system_stats['prebuffer_threads'] = 0
+    
+    return system_stats
+
+def get_daddylive_base_url():
+    """Fetches and caches the dynamic base URL for DaddyLive."""
+    global DADDYLIVE_BASE_URL, LAST_FETCH_TIME
+    current_time = time.time()
+    
+    if DADDYLIVE_BASE_URL and (current_time - LAST_FETCH_TIME < FETCH_INTERVAL):
+        return DADDYLIVE_BASE_URL
+
+    try:
+        app.logger.info("Fetching dynamic DaddyLive base URL from GitHub...")
+        github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
+        
+        # Always use direct connection for GitHub to avoid proxy rate limiting (429 errors)
+        session = requests.Session()
+        session.trust_env = False  # Ignore environment proxy variables
+        main_url_req = session.get(
+            github_url,
+            timeout=REQUEST_TIMEOUT,
+            verify=VERIFY_SSL
+        )
+        main_url_req.raise_for_status()
+        content = main_url_req.text
+        match = re.search(r'src\s*=\s*"([^"]*)"', content)
+        if match:
+            base_url = match.group(1)
+            if not base_url.endswith('/'):
+                base_url += '/'
+            DADDYLIVE_BASE_URL = base_url
+            LAST_FETCH_TIME = current_time
+            app.logger.info(f"Dynamic DaddyLive base URL updated to: {DADDYLIVE_BASE_URL}")
+            return DADDYLIVE_BASE_URL
+    except requests.RequestException as e:
+        app.logger.error(f"Error fetching dynamic DaddyLive URL: {e}. Using fallback.")
+    
+    DADDYLIVE_BASE_URL = "https://daddylive.sx/"
+    app.logger.info(f"Using fallback DaddyLive URL: {DADDYLIVE_BASE_URL}")
+    return DADDYLIVE_BASE_URL
+
 # --- Classe VavooResolver per gestire i link Vavoo ---
 class VavooResolver:
     def __init__(self):
@@ -414,7 +499,7 @@ def broadcast_stats():
             
             # Aggiungi statistiche client se disponibile
             try:
-                if 'client_tracker' in globals():
+                if client_tracker is not None:
                     client_stats = client_tracker.get_realtime_stats()
                     stats.update(client_stats)
                 else:
@@ -448,7 +533,7 @@ def handle_connect():
     
     # Aggiungi statistiche client se disponibile
     try:
-        if 'client_tracker' in globals():
+        if client_tracker is not None:
             client_stats = client_tracker.get_realtime_stats()
             stats.update(client_stats)
         else:
