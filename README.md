@@ -123,7 +123,7 @@ CACHE_ENABLED=False
 2. Repository: `https://github.com/nzo66/tvproxy` → **Connect**.
 3. Scegli un nome, **Instance Type** `Free` (o superiore).
 4. Aggiungi le variabili `ADMIN_PASSWORD` e `SECRET_KEY` nell'area **Environment**.
-5. (Opzionale) Aggiungi `SOCKS5_PROXY`, `HTTP_PROXY`, `HTTPS_PROXY`, `DADDY_PROXY`.
+5. (Opzionale) Aggiungi `PROXY`, `DADDY_PROXY`.
 6. **Create Web Service**.
 
 ### 🤖 HuggingFace Spaces
@@ -132,7 +132,7 @@ CACHE_ENABLED=False
 2. Carica `DockerfileHF` come `Dockerfile`.
 3. Vai in **Settings → Secrets** e aggiungi `ADMIN_PASSWORD` e `SECRET_KEY`.
 4. **OBBLIGATORIO**: Aggiungi `DADDY_PROXY` per servizi DaddyLive (SOCKS5 non supportato su HF).
-5. (Opzionale) Aggiungi `HTTP_PROXY` + `HTTPS_PROXY` per proxy generali.
+5. (Opzionale) Aggiungi `PROXY` per proxy generali.
 6. Dopo ogni modifica alle variabili fai **Factory Rebuild**.
 
 #### **Configurazione Ottimizzata per HuggingFace**
@@ -311,8 +311,7 @@ http://<server-ip>:7860/proxy/key?url=<URL_CHIAVE>&h_<HEADER>=<VALORE>
 | Variabile          | Descrizione                                                  | Esempio                                   |
 |--------------------|--------------------------------------------------------------|-------------------------------------------|
 | `SOCKS5_PROXY`     | Uno o più proxy SOCKS5, separati da virgola                  | `socks5://user:pass@host:port,...`        |
-| `HTTP_PROXY`       | Proxy HTTP (usare in coppia con `HTTPS_PROXY`)               | `http://user:pass@host:port,...`          |
-| `HTTPS_PROXY`      | Proxy HTTPS (di solito uguale a `HTTP_PROXY`)                | `http://user:pass@host:port,...`          |
+| `PROXY`            | Proxy HTTP, HTTPS e SOCKS5                                   | `http://user:pass@host:port,...`          |
 | `NO_PROXY_DOMAINS` | Domini da escludere dal proxy, separati da virgola           | `github.com,vavoo.to`                     |
 
 ### 🌟 Proxy DaddyLive Dedicati
@@ -330,9 +329,7 @@ ADMIN_PASSWORD=tua_password_sicura
 SECRET_KEY=chiave_segreta_generata
 
 # Proxy Generali
-SOCKS5_PROXY=socks5://user:pass@host1:1080,socks5://user:pass@host2:1080
-HTTP_PROXY=http://user:pass@host:8080
-HTTPS_PROXY=http://user:pass@host:8080
+PROXY=http://user:pass@host:8080,socks5://user:pass@host1:1080
 
 # Proxy DaddyLive Dedicati
 DADDY_PROXY=socks5://user:pass@daddy1:1080,http://user:pass@daddy2:8080
