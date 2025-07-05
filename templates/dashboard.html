@@ -642,13 +642,23 @@
     <div class="connection-status" id="connectionStatus">
         <i class="fas fa-sync-alt" id="statusIcon"></i>
         <span id="statusText">Connessione in corso...</span>
+        <button id="reconnectBtn" onclick="manualReconnect()" style="display: none; margin-left: 10px; padding: 5px 10px; background: #007bff; color: white; border: none; border-radius: 3px; cursor: pointer;">
+            <i class="fas fa-redo"></i> Riconnetti
+        </button>
     </div>
 
     <script>
-        // Inizializzazione WebSocket
-        const socket = io();
+        // Inizializzazione WebSocket con riconnessione automatica
+        let socket = io({
+            reconnection: true,
+            reconnectionAttempts: 10,
+            reconnectionDelay: 1000,
+            reconnectionDelayMax: 5000,
+            timeout: 20000
+        });
         let isConnected = false;
         let lastUpdateTime = Date.now();
+        let reconnectAttempts = 0;
 
         // Elementi DOM
         const connectionIndicator = document.getElementById('connectionIndicator');
@@ -659,15 +669,51 @@
         // Gestione connessione WebSocket
         socket.on('connect', function() {
             isConnected = true;
+            reconnectAttempts = 0;
             updateConnectionStatus(true);
             console.log('WebSocket connesso');
         });
 
-        socket.on('disconnect', function() {
+        socket.on('disconnect', function(reason) {
             isConnected = false;
             updateConnectionStatus(false);
-            console.log('WebSocket disconnesso');
+            console.log('WebSocket disconnesso:', reason);
+            
+            // Se la disconnessione non è volontaria, mostra messaggio di riconnessione
+            if (reason !== 'io client disconnect') {
+                statusText.textContent = 'Disconnesso - Riconnessione automatica...';
+            }
         });
+
+        socket.on('reconnect', function(attemptNumber) {
+            console.log('WebSocket riconnesso dopo', attemptNumber, 'tentativi');
+            updateConnectionStatus(true);
+        });
+
+        socket.on('reconnect_attempt', function(attemptNumber) {
+            reconnectAttempts = attemptNumber;
+            statusText.textContent = `Riconnessione tentativo ${attemptNumber}/10...`;
+            console.log('Tentativo di riconnessione:', attemptNumber);
+        });
+
+        socket.on('reconnect_failed', function() {
+            statusText.textContent = 'Connessione fallita - Usa il pulsante Riconnetti';
+            document.getElementById('reconnectBtn').style.display = 'inline-block';
+            console.log('Tutti i tentativi di riconnessione falliti');
+        });
+
+        // Funzione per riconnessione manuale
+        function manualReconnect() {
+            console.log('Riconnessione manuale richiesta');
+            statusText.textContent = 'Riconnessione manuale in corso...';
+            document.getElementById('reconnectBtn').style.display = 'none';
+            
+            // Disconnetti e riconnetti
+            socket.disconnect();
+            setTimeout(() => {
+                socket.connect();
+            }, 1000);
+        }
 
         // Aggiornamento statistiche in tempo reale
         socket.on('stats_update', function(data) {
@@ -681,11 +727,16 @@
                 connectionStatus.classList.remove('disconnected');
                 statusIcon.className = 'fas fa-check-circle';
                 statusText.textContent = 'Connesso - Aggiornamenti real-time';
+                statusIcon.style.color = '#28a745';
             } else {
                 connectionIndicator.classList.add('disconnected');
                 connectionStatus.classList.add('disconnected');
                 statusIcon.className = 'fas fa-exclamation-triangle';
-                statusText.textContent = 'Disconnesso - Riconnessione...';
+                statusIcon.style.color = '#dc3545';
+                // Non sovrascrivere il messaggio se è già impostato per la riconnessione
+                if (!statusText.textContent.includes('Riconnessione')) {
+                    statusText.textContent = 'Disconnesso - Riconnessione automatica...';
+                }
             }
         }
 
