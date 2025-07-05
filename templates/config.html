@@ -654,6 +654,12 @@
                     <button type="button" class="btn btn-warning" onclick="checkProxyStatus()">
                         <i class="fas fa-search"></i> Stato Proxy
                     </button>
+                    <button type="button" class="btn btn-primary" onclick="reloadCurrentConfig()">
+                        <i class="fas fa-refresh"></i> Ricarica Config
+                    </button>
+                    <button type="button" class="btn btn-dark" onclick="checkConfigChanges()">
+                        <i class="fas fa-diff"></i> Verifica Cambiamenti
+                    </button>
                     <button type="button" class="btn btn-secondary" onclick="exportConfig()">
                         <i class="fas fa-download"></i> Esporta Config
                     </button>
@@ -686,7 +692,38 @@
         // Controlla l'ambiente al caricamento della pagina
         document.addEventListener('DOMContentLoaded', function() {
             checkHuggingFaceEnvironment();
+            
+            // Controlla automaticamente la configurazione corrente dopo 2 secondi
+            setTimeout(() => {
+                checkCurrentConfig();
+            }, 2000);
         });
+        
+        function checkCurrentConfig() {
+            fetch('/admin/config/current')
+            .then(response => response.json())
+            .then(result => {
+                if (result.status === 'success') {
+                    const config = result.config;
+                    const configStatus = result.config_status;
+                    
+                    // Aggiorna i campi del form con i valori correnti
+                    updateFormFields(config);
+                    
+                    // Log silenzioso delle informazioni di configurazione
+                    console.log('Configurazione corrente caricata:', {
+                        ambiente: configStatus.is_huggingface ? 'HuggingFace' : 'Standard',
+                        fonte: configStatus.current_config_source,
+                        file_scrivibile: configStatus.file_writable,
+                        proxy_count: config.PROXY ? config.PROXY.split(',').length : 0,
+                        daddy_proxy_count: config.DADDY_PROXY ? config.DADDY_PROXY.split(',').length : 0
+                    });
+                }
+            })
+            .catch(error => {
+                console.warn('Errore nel controllo automatico configurazione:', error);
+            });
+        }
         
         document.getElementById('configForm').addEventListener('submit', function(e) {
             e.preventDefault();
@@ -1147,6 +1184,144 @@
                 statusBtn.innerHTML = '<i class="fas fa-search"></i> Stato Proxy';
                 statusBtn.disabled = false;
                 showAlert('error', 'Errore nel controllo stato proxy: ' + error.message);
+            });
+        }
+        
+        function reloadCurrentConfig() {
+            const reloadBtn = event.target;
+            reloadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Ricaricando...';
+            reloadBtn.disabled = true;
+            
+            fetch('/admin/config/current')
+            .then(response => response.json())
+            .then(result => {
+                reloadBtn.innerHTML = '<i class="fas fa-refresh"></i> Ricarica Config';
+                reloadBtn.disabled = false;
+                
+                if (result.status === 'success') {
+                    const config = result.config;
+                    const configStatus = result.config_status;
+                    
+                    // Aggiorna i campi del form con i valori correnti
+                    updateFormFields(config);
+                    
+                    let message = `🔄 <strong>Configurazione Ricaricata</strong><br><br>`;
+                    message += `✅ <strong>Timestamp:</strong> ${result.timestamp}<br>`;
+                    message += `🌐 <strong>Ambiente:</strong> ${configStatus.is_huggingface ? 'HuggingFace' : 'Standard'}<br>`;
+                    message += `💾 <strong>Cache Memoria:</strong> ${configStatus.has_memory_cache ? 'Sì' : 'No'}<br>`;
+                    message += `🔧 <strong>Fonte Config:</strong> ${configStatus.current_config_source}<br>`;
+                    message += `📁 <strong>File Config:</strong> ${configStatus.config_file}<br>`;
+                    message += `✏️ <strong>File Scrivibile:</strong> ${configStatus.file_writable ? 'Sì' : 'No'}`;
+                    
+                    // Mostra alcuni valori chiave
+                    const keyFields = ['PROXY', 'DADDY_PROXY', 'CACHE_ENABLED', 'PREBUFFER_ENABLED'];
+                    message += `<br><br><strong>🔍 Valori Chiave:</strong><br>`;
+                    keyFields.forEach(field => {
+                        const value = config[field];
+                        if (field.includes('PROXY')) {
+                            const proxyCount = value ? value.split(',').length : 0;
+                            message += `• ${field}: ${proxyCount} proxy configurati<br>`;
+                        } else {
+                            message += `• ${field}: ${value}<br>`;
+                        }
+                    });
+                    
+                    showAlert('info', message);
+                } else {
+                    showAlert('error', result.message);
+                }
+            })
+            .catch(error => {
+                reloadBtn.innerHTML = '<i class="fas fa-refresh"></i> Ricarica Config';
+                reloadBtn.disabled = false;
+                showAlert('error', 'Errore nel ricaricamento configurazione: ' + error.message);
+            });
+        }
+        
+        function updateFormFields(config) {
+            // Aggiorna i campi del form con i valori correnti
+            let updatedCount = 0;
+            Object.keys(config).forEach(key => {
+                const field = document.getElementById(key);
+                if (field) {
+                    let oldValue;
+                    if (field.type === 'checkbox') {
+                        oldValue = field.checked;
+                        field.checked = config[key];
+                    } else {
+                        oldValue = field.value;
+                        field.value = config[key];
+                    }
+                    
+                    // Evidenzia i campi che sono stati aggiornati
+                    if (oldValue !== config[key]) {
+                        field.style.backgroundColor = '#fff3cd';
+                        field.style.borderColor = '#ffc107';
+                        setTimeout(() => {
+                            field.style.backgroundColor = '';
+                            field.style.borderColor = '';
+                        }, 3000);
+                        updatedCount++;
+                    }
+                }
+            });
+            
+            // Mostra un messaggio se sono stati aggiornati dei campi
+            if (updatedCount > 0) {
+                console.log(`${updatedCount} campi aggiornati con la configurazione corrente`);
+            }
+        }
+        
+        function checkConfigChanges() {
+            const checkBtn = event.target;
+            checkBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Verificando...';
+            checkBtn.disabled = true;
+            
+            // Raccogli i valori attuali dal form
+            const formData = new FormData(document.getElementById('configForm'));
+            const currentFormData = Object.fromEntries(formData);
+            
+            fetch('/admin/config/check-changes', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: JSON.stringify(currentFormData)
+            })
+            .then(response => response.json())
+            .then(result => {
+                checkBtn.innerHTML = '<i class="fas fa-diff"></i> Verifica Cambiamenti';
+                checkBtn.disabled = false;
+                
+                if (result.status === 'success') {
+                    if (result.has_changes) {
+                        let message = `⚠️ <strong>Cambiamenti Rilevati</strong><br><br>`;
+                        message += `📊 <strong>Cambiamenti trovati:</strong> ${result.changes_count}<br>`;
+                        message += `🕒 <strong>Timestamp:</strong> ${result.timestamp}<br><br>`;
+                        
+                        message += `<strong>🔍 Dettaglio Cambiamenti:</strong><br>`;
+                        Object.keys(result.changes).forEach(key => {
+                            const change = result.changes[key];
+                            message += `• <strong>${key}:</strong><br>`;
+                            message += `  - Form: ${change.provided}<br>`;
+                            message += `  - Server: ${change.current}<br><br>`;
+                        });
+                        
+                        message += `<strong>💡 Suggerimento:</strong> Usa "Ricarica Config" per sincronizzare il form con la configurazione del server.`;
+                        
+                        showAlert('warning', message);
+                    } else {
+                        showAlert('success', '✅ Nessun cambiamento rilevato. Il form è sincronizzato con la configurazione del server.');
+                    }
+                } else {
+                    showAlert('error', result.message);
+                }
+            })
+            .catch(error => {
+                checkBtn.innerHTML = '<i class="fas fa-diff"></i> Verifica Cambiamenti';
+                checkBtn.disabled = false;
+                showAlert('error', 'Errore nella verifica cambiamenti: ' + error.message);
             });
         }
         
