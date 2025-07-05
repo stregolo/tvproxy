@@ -34,14 +34,14 @@ EXPOSE 7860
 # 8. Volume per persistenza dei dati (IP bloccati, configurazioni, etc.)
 VOLUME ["/app/data"]
 
-# 8. Comando ottimizzato per avviare Gunicorn:
-#    - 4 worker gevent
+# 8. Comando ottimizzato per avviare Gunicorn con eventlet per WebSocket:
+#    - 4 worker eventlet (compatibile con Flask-SocketIO)
 #    - connessioni keep-alive
 #    - timeout adeguati
 #    - logging su stdout/stderr
 CMD ["gunicorn", "app:app", \
      "-w", "4", \
-     "--worker-class", "gevent", \
+     "--worker-class", "eventlet", \
      "--worker-connections", "100", \
      "-b", "0.0.0.0:7860", \
      "--timeout", "120", \
