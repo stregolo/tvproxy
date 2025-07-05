@@ -1,10 +1,10 @@
 flask
 requests
-gunicorn[eventlet]
+gunicorn[gevent]
 python-dotenv
 cachetools
 PySocks
 psutil
 flask-socketio
-eventlet
+gevent-websocket
 urllib3
