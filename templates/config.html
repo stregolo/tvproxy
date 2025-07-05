@@ -465,9 +465,9 @@
                         </div>
                         <div class="form-group">
                             <label for="cache_maxsize_m3u8">Max Size Cache M3U8:</label>
-                            <input type="number" id="cache_maxsize_m3u8" name="CACHE_MAXSIZE_M3U8" value="{{ config.CACHE_MAXSIZE_M3U8 }}" min="10" max="1000">
+                            <input type="number" id="cache_maxsize_m3u8" name="CACHE_MAXSIZE_M3U8" value="{{ config.CACHE_MAXSIZE_M3U8 }}" min="10" max="10000">
                             <i class="fas fa-hdd"></i>
-                            <small>Dimensione massima cache per M3U8</small>
+                            <small>Dimensione massima cache per M3U8 (max 10.000 playlist)</small>
                         </div>
                     </div>
                     <div class="col">
@@ -479,9 +479,9 @@
                         </div>
                         <div class="form-group">
                             <label for="cache_maxsize_ts">Max Size Cache TS:</label>
-                            <input type="number" id="cache_maxsize_ts" name="CACHE_MAXSIZE_TS" value="{{ config.CACHE_MAXSIZE_TS }}" min="100" max="5000">
+                            <input type="number" id="cache_maxsize_ts" name="CACHE_MAXSIZE_TS" value="{{ config.CACHE_MAXSIZE_TS }}" min="100" max="50000">
                             <i class="fas fa-film"></i>
-                            <small>Dimensione massima cache per TS</small>
+                            <small>Dimensione massima cache per TS (max 50.000 segmenti)</small>
                         </div>
                         <div class="form-group">
                             <label for="cache_ttl_key">TTL Cache KEY (secondi):</label>
@@ -491,9 +491,9 @@
                         </div>
                         <div class="form-group">
                             <label for="cache_maxsize_key">Max Size Cache KEY:</label>
-                            <input type="number" id="cache_maxsize_key" name="CACHE_MAXSIZE_KEY" value="{{ config.CACHE_MAXSIZE_KEY }}" min="10" max="1000">
+                            <input type="number" id="cache_maxsize_key" name="CACHE_MAXSIZE_KEY" value="{{ config.CACHE_MAXSIZE_KEY }}" min="10" max="5000">
                             <i class="fas fa-key"></i>
-                            <small>Dimensione massima cache per chiavi</small>
+                            <small>Dimensione massima cache per chiavi (max 5.000 chiavi)</small>
                         </div>
                     </div>
                 </div>
@@ -525,9 +525,9 @@
                     <div class="col">
                         <div class="form-group">
                             <label for="prebuffer_max_size_mb">Max Dimensione Buffer per Stream (MB):</label>
-                            <input type="number" id="prebuffer_max_size_mb" name="PREBUFFER_MAX_SIZE_MB" value="{{ config.PREBUFFER_MAX_SIZE_MB or 50 }}" min="10" max="200">
+                            <input type="number" id="prebuffer_max_size_mb" name="PREBUFFER_MAX_SIZE_MB" value="{{ config.PREBUFFER_MAX_SIZE_MB or 50 }}" min="10" max="500">
                             <i class="fas fa-hdd"></i>
-                            <small>Dimensione massima del buffer in memoria per ogni stream (default: 50MB)</small>
+                            <small>Dimensione massima del buffer in memoria per ogni stream (max 500MB, default: 50MB)</small>
                         </div>
                         <div class="form-group">
                             <label for="prebuffer_cleanup_interval">Intervallo Pulizia Buffer (secondi):</label>
