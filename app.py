@@ -2900,12 +2900,29 @@ class ClientTracker:
         """Restituisce statistiche sui client"""
         with self.client_lock:
             current_time = time.time()
+            
+            # Calcola statistiche aggregate M3U
+            m3u_clients = [client for client in self.active_clients.values() if '/proxy/m3u' in client['endpoints']]
+            total_m3u_requests = sum(client.get('m3u_requests', 0) for client in m3u_clients)
+            
             stats = {
                 'total_clients': len(self.active_clients),
                 'total_sessions': len(self.session_clients),
                 'client_counter': self.client_counter,
+                'active_clients': len(self.active_clients),
+                'active_sessions': len(self.session_clients),
+                'total_requests': sum(client['requests'] for client in self.active_clients.values()),
+                'm3u_clients': len(m3u_clients),
+                'm3u_requests': total_m3u_requests,
                 'clients': []
             }
+            
+            # Calcola tempo medio di connessione
+            if self.active_clients:
+                total_connection_time = sum(current_time - client['first_seen'] for client in self.active_clients.values())
+                stats['avg_connection_time'] = (total_connection_time / len(self.active_clients)) / 60  # in minuti
+            else:
+                stats['avg_connection_time'] = 0
             
             for client_id, client_data in self.active_clients.items():
                 # Calcola tempo di connessione
@@ -2936,10 +2953,16 @@ class ClientTracker:
     def get_realtime_stats(self):
         """Statistiche in tempo reale per WebSocket"""
         with self.client_lock:
+            # Calcola statistiche M3U
+            m3u_clients = [client for client in self.active_clients.values() if '/proxy/m3u' in client['endpoints']]
+            total_m3u_requests = sum(client.get('m3u_requests', 0) for client in m3u_clients)
+            
             return {
                 'active_clients': len(self.active_clients),
                 'active_sessions': len(self.session_clients),
                 'total_requests': sum(client['requests'] for client in self.active_clients.values()),
+                'm3u_clients': len(m3u_clients),
+                'm3u_requests': total_m3u_requests,
                 'timestamp': time.time()
             }
 
