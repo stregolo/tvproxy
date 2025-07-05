@@ -1453,7 +1453,7 @@ connection_thread.start()
 PROXY_LIST = []
 
 def setup_proxies():
-    """Carica la lista di proxy unificati dalla variabile d'ambiente PROXY con riconoscimento automatico del tipo."""
+    """Carica la lista di proxy unificati dalla configurazione salvata e dalle variabili d'ambiente."""
     global PROXY_LIST, DADDY_PROXY_LIST
     proxies_found = []
     daddy_proxies_found = []
@@ -1464,8 +1464,11 @@ def setup_proxies():
     daddy_ipv6_count = 0
     daddy_hostname_count = 0
 
-    # Configurazione proxy unificati
-    proxy_list_str = os.environ.get('PROXY')
+    # Carica configurazione salvata
+    config = config_manager.load_config()
+    
+    # Configurazione proxy unificati - prima dalle env vars, poi dalla config salvata
+    proxy_list_str = os.environ.get('PROXY') or config.get('PROXY', '')
     
     if proxy_list_str:
         raw_proxy_list = [p.strip() for p in proxy_list_str.split(',') if p.strip()]
@@ -1507,8 +1510,8 @@ def setup_proxies():
             if any('socks5' in p for p in proxies_found):
                 app.logger.info("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
 
-    # Configurazione proxy DaddyLive
-    daddy_proxy_list_str = os.environ.get('DADDY_PROXY')
+    # Configurazione proxy DaddyLive - prima dalle env vars, poi dalla config salvata
+    daddy_proxy_list_str = os.environ.get('DADDY_PROXY') or config.get('DADDY_PROXY', '')
     if daddy_proxy_list_str:
         daddy_proxies = [p.strip() for p in daddy_proxy_list_str.split(',') if p.strip()]
         if daddy_proxies:
@@ -2457,11 +2460,20 @@ def save_config():
         # Salva la configurazione
         if config_manager.save_config(new_config):
             config_manager.apply_config_to_app(new_config)
-            setup_proxies()
+            setup_proxies()  # Ricarica i proxy dalla nuova configurazione
             setup_all_caches()
             # Aggiorna la configurazione del pre-buffer
             pre_buffer_manager.update_config()
-            return jsonify({"status": "success", "message": "Configurazione salvata con successo"})
+            
+            # Log delle statistiche proxy aggiornate
+            available_proxies = get_available_proxies()
+            available_daddy_proxies = get_available_daddy_proxies()
+            app.logger.info(f"Configurazione salvata - Proxy caricati: {len(PROXY_LIST)} normali ({len(available_proxies)} disponibili), {len(DADDY_PROXY_LIST)} DaddyLive ({len(available_daddy_proxies)} disponibili)")
+            
+            return jsonify({
+                "status": "success", 
+                "message": f"Configurazione salvata con successo. Proxy caricati: {len(PROXY_LIST)} normali, {len(DADDY_PROXY_LIST)} DaddyLive"
+            })
         else:
             return jsonify({"status": "error", "message": "Errore nel salvataggio"})
             
@@ -4345,6 +4357,111 @@ def force_save_config():
         return jsonify({
             'status': 'error',
             'message': f'Errore nel salvataggio forzato: {str(e)}'
+        }), 500
+
+@app.route('/admin/debug/reload-proxies', methods=['POST'])
+@login_required
+def reload_proxies():
+    """Ricarica i proxy dalla configurazione salvata"""
+    try:
+        # Ricarica i proxy
+        setup_proxies()
+        
+        # Ottieni statistiche aggiornate
+        available_proxies = get_available_proxies()
+        available_daddy_proxies = get_available_daddy_proxies()
+        
+        # Calcola statistiche IP
+        ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+        for proxy in PROXY_LIST:
+            ip_version = get_proxy_ip_version(proxy)
+            if ip_version in ip_stats:
+                ip_stats[ip_version] += 1
+        
+        daddy_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+        for proxy in DADDY_PROXY_LIST:
+            ip_version = get_proxy_ip_version(proxy)
+            if ip_version in daddy_ip_stats:
+                daddy_ip_stats[ip_version] += 1
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'Proxy ricaricati: {len(PROXY_LIST)} normali, {len(DADDY_PROXY_LIST)} DaddyLive',
+            'proxy_stats': {
+                'total_proxies': len(PROXY_LIST),
+                'available_proxies': len(available_proxies),
+                'total_daddy_proxies': len(DADDY_PROXY_LIST),
+                'available_daddy_proxies': len(available_daddy_proxies),
+                'ip_statistics': ip_stats,
+                'daddy_ip_statistics': daddy_ip_stats
+            },
+            'proxy_list': PROXY_LIST[:5],  # Primi 5 per debug
+            'daddy_proxy_list': DADDY_PROXY_LIST[:5]  # Primi 5 per debug
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel ricaricamento proxy: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore nel ricaricamento proxy: {str(e)}'
+        }), 500
+
+@app.route('/admin/debug/proxy-status')
+@login_required
+def debug_proxy_status():
+    """Mostra lo stato dettagliato dei proxy"""
+    try:
+        # Ottieni statistiche aggiornate
+        available_proxies = get_available_proxies()
+        available_daddy_proxies = get_available_daddy_proxies()
+        
+        # Calcola statistiche IP
+        ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+        for proxy in PROXY_LIST:
+            ip_version = get_proxy_ip_version(proxy)
+            if ip_version in ip_stats:
+                ip_stats[ip_version] += 1
+        
+        daddy_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+        for proxy in DADDY_PROXY_LIST:
+            ip_version = get_proxy_ip_version(proxy)
+            if ip_version in daddy_ip_stats:
+                daddy_ip_stats[ip_version] += 1
+        
+        # Carica configurazione per vedere i proxy configurati
+        config = config_manager.load_config()
+        
+        return jsonify({
+            'status': 'success',
+            'proxy_status': {
+                'total_proxies': len(PROXY_LIST),
+                'available_proxies': len(available_proxies),
+                'blacklisted_proxies': len(PROXY_BLACKLIST),
+                'total_daddy_proxies': len(DADDY_PROXY_LIST),
+                'available_daddy_proxies': len(available_daddy_proxies),
+                'blacklisted_daddy_proxies': len(DADDY_PROXY_BLACKLIST),
+                'ip_statistics': ip_stats,
+                'daddy_ip_statistics': daddy_ip_stats
+            },
+            'config_proxies': {
+                'PROXY': config.get('PROXY', ''),
+                'DADDY_PROXY': config.get('DADDY_PROXY', ''),
+                'env_PROXY': os.environ.get('PROXY', 'NON_IMPOSTATA'),
+                'env_DADDY_PROXY': os.environ.get('DADDY_PROXY', 'NON_IMPOSTATA')
+            },
+            'proxy_list': PROXY_LIST,
+            'daddy_proxy_list': DADDY_PROXY_LIST,
+            'blacklist_info': {
+                'normal_proxies': list(PROXY_BLACKLIST.keys()),
+                'daddy_proxies': list(DADDY_PROXY_BLACKLIST.keys())
+            }
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero stato proxy: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore nel recupero stato proxy: {str(e)}'
         }), 500
 
 @app.route('/admin/debug/websocket-status')
