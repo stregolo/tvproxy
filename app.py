@@ -198,7 +198,7 @@ class VavooResolver:
         }
         try:
             # Usa il sistema di proxy configurato
-            proxy_config = get_proxy_for_url("https://www.vavoo.tv/api/app/ping")
+            proxy_config = get_proxy_for_url("https://www.vavoo.tv/api/app/ping", original_url="https://vavoo.to")
             proxy_key = proxy_config['http'] if proxy_config else None
             
             # Usa make_persistent_request per sfruttare il sistema di proxy
@@ -248,7 +248,7 @@ class VavooResolver:
         
         try:
             # Usa il sistema di proxy configurato
-            proxy_config = get_proxy_for_url("https://vavoo.to/mediahubmx-resolve.json")
+            proxy_config = get_proxy_for_url("https://vavoo.to/mediahubmx-resolve.json", original_url=link)
             proxy_key = proxy_config['http'] if proxy_config else None
             
             # Usa make_persistent_request per sfruttare il sistema di proxy
@@ -962,7 +962,7 @@ class PreBufferManager:
                             # Scarica il segmento
                             # Note: These functions are defined later in the file
                             # They will be available when the class is actually used
-                            proxy_config = globals().get('get_proxy_for_url', lambda x: None)(segment_url)
+                            proxy_config = globals().get('get_proxy_for_url', lambda x, y=None: None)(segment_url)
                             proxy_key = proxy_config['http'] if proxy_config else None
                             
                             response = globals().get('make_persistent_request', lambda *args, **kwargs: None)(
@@ -1603,7 +1603,7 @@ def resolve_m3u8_link(url, headers=None):
         final_headers_for_resolving['Origin'] = baseurl
 
         app.logger.info(f"Passo 1: Richiesta a {stream_url}")
-        proxy_config = get_proxy_for_url(stream_url)
+        proxy_config = get_proxy_for_url(stream_url, original_url=clean_url)
         response = safe_http_request(stream_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         response.raise_for_status()
 
@@ -1622,7 +1622,7 @@ def resolve_m3u8_link(url, headers=None):
         final_headers_for_resolving['Origin'] = url2
 
         app.logger.info(f"Passo 3: Richiesta a Player 2: {url2}")
-        proxy_config = get_proxy_for_url(url2)
+        proxy_config = get_proxy_for_url(url2, original_url=clean_url)
         response = safe_http_request(url2, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         response.raise_for_status()
 
@@ -1635,7 +1635,7 @@ def resolve_m3u8_link(url, headers=None):
         app.logger.info(f"Passo 4: Trovato iframe: {iframe_url}")
 
         app.logger.info(f"Passo 5: Richiesta iframe: {iframe_url}")
-        proxy_config = get_proxy_for_url(iframe_url)
+        proxy_config = get_proxy_for_url(iframe_url, original_url=clean_url)
         response = safe_http_request(iframe_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         response.raise_for_status()
 
@@ -1662,7 +1662,7 @@ def resolve_m3u8_link(url, headers=None):
 
         auth_url = f'{auth_host}{auth_php}?channel_id={channel_key}&ts={auth_ts}&rnd={auth_rnd}&sig={auth_sig}'
         app.logger.info(f"Passo 6: Autenticazione: {auth_url}")
-        proxy_config = get_proxy_for_url(auth_url)
+        proxy_config = get_proxy_for_url(auth_url, original_url=clean_url)
         auth_response = safe_http_request(auth_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         auth_response.raise_for_status()
 
@@ -1671,7 +1671,7 @@ def resolve_m3u8_link(url, headers=None):
         server_lookup_url = f"https://{urlparse(iframe_url).netloc}{server_lookup}{channel_key}"
         app.logger.info(f"Passo 7: Server lookup: {server_lookup_url}")
 
-        proxy_config = get_proxy_for_url(server_lookup_url)
+        proxy_config = get_proxy_for_url(server_lookup_url, original_url=clean_url)
         lookup_response = safe_http_request(server_lookup_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
         lookup_response.raise_for_status()
         server_data = lookup_response.json()
@@ -2242,10 +2242,15 @@ def proxy_prebuffer():
             if key.lower().startswith("h_")
         }
         
+        # Usa il sistema di proxy configurato
+        proxy_config = get_proxy_for_url(m3u8_url)
+        proxy_key = proxy_config['http'] if proxy_config else None
+        
         response = make_persistent_request(
             m3u8_url,
             headers=headers,
             timeout=get_dynamic_timeout(m3u8_url),
+            proxy_url=proxy_key,
             allow_redirects=True
         )
         response.raise_for_status()
@@ -2818,7 +2823,7 @@ def proxy_m3u():
         app.logger.info(f"Fetching M3U8 content from clean URL: {resolved_url}")
 
         timeout = get_dynamic_timeout(resolved_url)
-        proxy_config = get_proxy_for_url(resolved_url)
+        proxy_config = get_proxy_for_url(resolved_url, original_url=m3u_url)
         proxy_key = proxy_config['http'] if proxy_config else None
         
         m3u_response = make_persistent_request(
@@ -3393,7 +3398,14 @@ def cleanup_clients_thread():
 cleanup_clients_thread_instance = Thread(target=cleanup_clients_thread, daemon=True)
 cleanup_clients_thread_instance.start()
 
-def get_proxy_for_url(url):
+def get_proxy_for_url(url, original_url=None):
+    """
+    Ottiene un proxy per un URL, controllando anche l'URL originale per link Vavoo risolti
+    
+    Args:
+        url: URL finale da controllare
+        original_url: URL originale (usato per link Vavoo risolti)
+    """
     config = config_manager.load_config()
     no_proxy_domains = [d.strip() for d in config.get('NO_PROXY_DOMAINS', '').split(',') if d.strip()]
     
@@ -3408,11 +3420,21 @@ def get_proxy_for_url(url):
         return None
     
     try:
+        # Controlla prima l'URL finale
         parsed_url = urlparse(url)
         if any(domain in parsed_url.netloc for domain in no_proxy_domains):
+            app.logger.info(f"URL finale {url} è in NO_PROXY_DOMAINS, connessione diretta")
             return None
-    except Exception:
-        pass
+        
+        # Se c'è un URL originale e contiene vavoo.to, controlla anche quello
+        if original_url and 'vavoo.to' in original_url.lower():
+            parsed_original = urlparse(original_url)
+            if any(domain in parsed_original.netloc for domain in no_proxy_domains):
+                app.logger.info(f"URL originale Vavoo {original_url} è in NO_PROXY_DOMAINS, connessione diretta per {url}")
+                return None
+                
+    except Exception as e:
+        app.logger.warning(f"Errore nel parsing URL per NO_PROXY_DOMAINS: {e}")
     
     chosen_proxy = random.choice(available_proxies)
     return {'http': chosen_proxy, 'https': chosen_proxy}
