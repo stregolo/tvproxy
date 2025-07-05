@@ -244,6 +244,136 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
     
+# --- Funzioni di Supporto IPv6 ---
+def is_ipv6_address(ip_str):
+    """Verifica se un indirizzo è IPv6"""
+    try:
+        ipaddress.IPv6Address(ip_str)
+        return True
+    except ipaddress.AddressValueError:
+        return False
+
+def is_ipv4_address(ip_str):
+    """Verifica se un indirizzo è IPv4"""
+    try:
+        ipaddress.IPv4Address(ip_str)
+        return True
+    except ipaddress.AddressValueError:
+        return False
+
+def extract_ip_from_proxy_url(proxy_url):
+    """Estrae l'IP da un URL proxy"""
+    try:
+        parsed = urlparse(proxy_url)
+        host = parsed.hostname
+        if host:
+            # Rimuovi le parentesi quadre se presenti (IPv6)
+            if host.startswith('[') and host.endswith(']'):
+                host = host[1:-1]
+            return host
+    except Exception:
+        pass
+    return None
+
+def get_proxy_ip_version(proxy_url):
+    """Determina la versione IP di un proxy (IPv4/IPv6)"""
+    ip = extract_ip_from_proxy_url(proxy_url)
+    if not ip:
+        return "unknown"
+    
+    if is_ipv6_address(ip):
+        return "IPv6"
+    elif is_ipv4_address(ip):
+        return "IPv4"
+    else:
+        return "hostname"  # Dominio invece di IP
+
+# --- Sistema di Blacklist Proxy per Errori 429 ---
+PROXY_BLACKLIST = {}  # {proxy_url: {'last_error': timestamp, 'error_count': count, 'blacklisted_until': timestamp}}
+PROXY_BLACKLIST_LOCK = Lock()
+BLACKLIST_DURATION = 300  # 5 minuti di blacklist per errore 429
+MAX_ERRORS_BEFORE_PERMANENT = 5  # Dopo 5 errori, blacklist permanente per 1 ora
+
+def add_proxy_to_blacklist(proxy_url, error_type="429"):
+    """Aggiunge un proxy alla blacklist temporanea"""
+    global PROXY_BLACKLIST
+    
+    with PROXY_BLACKLIST_LOCK:
+        current_time = time.time()
+        
+        if proxy_url not in PROXY_BLACKLIST:
+            PROXY_BLACKLIST[proxy_url] = {
+                'last_error': current_time,
+                'error_count': 1,
+                'blacklisted_until': current_time + BLACKLIST_DURATION,
+                'error_type': error_type
+            }
+        else:
+            # Incrementa il contatore errori
+            PROXY_BLACKLIST[proxy_url]['error_count'] += 1
+            PROXY_BLACKLIST[proxy_url]['last_error'] = current_time
+            
+            # Se troppi errori, blacklist più lunga
+            if PROXY_BLACKLIST[proxy_url]['error_count'] >= MAX_ERRORS_BEFORE_PERMANENT:
+                PROXY_BLACKLIST[proxy_url]['blacklisted_until'] = current_time + 3600  # 1 ora
+                app.logger.warning(f"Proxy {proxy_url} blacklistato permanentemente per {MAX_ERRORS_BEFORE_PERMANENT} errori {error_type}")
+            else:
+                PROXY_BLACKLIST[proxy_url]['blacklisted_until'] = current_time + BLACKLIST_DURATION
+            
+            PROXY_BLACKLIST[proxy_url]['error_type'] = error_type
+        
+        app.logger.info(f"Proxy {proxy_url} blacklistato fino a {datetime.fromtimestamp(PROXY_BLACKLIST[proxy_url]['blacklisted_until']).strftime('%H:%M:%S')} per {error_type} errori")
+        
+        # Log dettagliato per debug
+        app.logger.info(f"Blacklist proxy aggiornata: {len(PROXY_BLACKLIST)} proxy totali, {len(get_available_proxies())} disponibili")
+
+def is_proxy_blacklisted(proxy_url):
+    """Verifica se un proxy è in blacklist"""
+    global PROXY_BLACKLIST
+    
+    with PROXY_BLACKLIST_LOCK:
+        if proxy_url not in PROXY_BLACKLIST:
+            return False
+        
+        current_time = time.time()
+        blacklist_info = PROXY_BLACKLIST[proxy_url]
+        
+        # Se il periodo di blacklist è scaduto, rimuovi dalla blacklist
+        if current_time > blacklist_info['blacklisted_until']:
+            del PROXY_BLACKLIST[proxy_url]
+            app.logger.info(f"Proxy {proxy_url} rimosso dalla blacklist (scaduto)")
+            return False
+        
+        return True
+
+def get_available_proxies():
+    """Restituisce solo i proxy non blacklistati"""
+    available_proxies = []
+    
+    for proxy in PROXY_LIST:
+        if not is_proxy_blacklisted(proxy):
+            available_proxies.append(proxy)
+    
+    return available_proxies
+
+def cleanup_expired_blacklist():
+    """Pulisce la blacklist dai proxy scaduti"""
+    global PROXY_BLACKLIST
+    
+    with PROXY_BLACKLIST_LOCK:
+        current_time = time.time()
+        expired_proxies = []
+        
+        for proxy_url, blacklist_info in PROXY_BLACKLIST.items():
+            if current_time > blacklist_info['blacklisted_until']:
+                expired_proxies.append(proxy_url)
+        
+        for proxy_url in expired_proxies:
+            del PROXY_BLACKLIST[proxy_url]
+            app.logger.info(f"Proxy {proxy_url} rimosso dalla blacklist (scaduto)")
+    
+    return len(expired_proxies)
+
 # Sistema di broadcasting per statistiche real-time
 def broadcast_stats():
     """Invia statistiche in tempo reale a tutti i client connessi"""
@@ -855,7 +985,7 @@ class LogManager:
         
         def generate():
             if not os.path.exists(filepath):
-                yield f"data: {json.dumps({'error': 'File non trovato'})}\n\n"
+                yield f"data: {json.dumps({'error': 'File non trovato')}\n\n"
                 return
             
             # Leggi le ultime 50 righe per iniziare
@@ -3521,49 +3651,6 @@ def test_github_connection():
             'status': 'error',
             'message': f'Errore generico nel test GitHub: {str(e)}'
         }), 500
-
-def is_ipv6_address(ip_str):
-    """Verifica se un indirizzo è IPv6"""
-    try:
-        ipaddress.IPv6Address(ip_str)
-        return True
-    except ipaddress.AddressValueError:
-        return False
-
-def is_ipv4_address(ip_str):
-    """Verifica se un indirizzo è IPv4"""
-    try:
-        ipaddress.IPv4Address(ip_str)
-        return True
-    except ipaddress.AddressValueError:
-        return False
-
-def extract_ip_from_proxy_url(proxy_url):
-    """Estrae l'IP da un URL proxy"""
-    try:
-        parsed = urlparse(proxy_url)
-        host = parsed.hostname
-        if host:
-            # Rimuovi le parentesi quadre se presenti (IPv6)
-            if host.startswith('[') and host.endswith(']'):
-                host = host[1:-1]
-            return host
-    except Exception:
-        pass
-    return None
-
-def get_proxy_ip_version(proxy_url):
-    """Determina la versione IP di un proxy (IPv4/IPv6)"""
-    ip = extract_ip_from_proxy_url(proxy_url)
-    if not ip:
-        return "unknown"
-    
-    if is_ipv6_address(ip):
-        return "IPv6"
-    elif is_ipv4_address(ip):
-        return "IPv4"
-    else:
-        return "hostname"  # Dominio invece di IP
 
 @app.route('/admin/test/ipv6-proxies', methods=['POST'])
 @login_required
