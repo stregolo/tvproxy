@@ -352,7 +352,8 @@
                     <label for="socks5_proxy">Proxy SOCKS5:</label>
                     <textarea id="socks5_proxy" name="SOCKS5_PROXY" rows="3" placeholder="socks5://user:pass@proxy1:1080,socks5://user:pass@proxy2:1080">{{ config.SOCKS5_PROXY }}</textarea>
                     <i class="fas fa-shield-alt"></i>
-                    <small>Lista di proxy SOCKS5 separati da virgola</small>
+                    <small>Lista di proxy SOCKS5 separati da virgola<br>
+                    <strong>Supporto IPv6:</strong> socks5://user:pass@[2001:db8::1]:1080</small>
                 </div>
                 <div class="row">
                     <div class="col">
@@ -360,7 +361,8 @@
                             <label for="http_proxy">Proxy HTTP:</label>
                             <textarea id="http_proxy" name="HTTP_PROXY" rows="2" placeholder="http://proxy1:8080,http://proxy2:8080">{{ config.HTTP_PROXY }}</textarea>
                             <i class="fas fa-globe"></i>
-                            <small>Lista di proxy HTTP separati da virgola</small>
+                            <small>Lista di proxy HTTP separati da virgola<br>
+                            <strong>IPv6:</strong> http://[2001:db8::1]:8080</small>
                         </div>
                     </div>
                     <div class="col">
@@ -368,7 +370,8 @@
                             <label for="https_proxy">Proxy HTTPS:</label>
                             <textarea id="https_proxy" name="HTTPS_PROXY" rows="2" placeholder="https://proxy1:8080,https://proxy2:8080">{{ config.HTTPS_PROXY }}</textarea>
                             <i class="fas fa-lock"></i>
-                            <small>Lista di proxy HTTPS separati da virgola</small>
+                            <small>Lista di proxy HTTPS separati da virgola<br>
+                            <strong>IPv6:</strong> https://[2001:db8::1]:8080</small>
                         </div>
                     </div>
                 </div>
