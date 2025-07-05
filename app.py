@@ -30,7 +30,7 @@ import ipaddress
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", ping_timeout=60, ping_interval=25, max_http_buffer_size=100000000)
 app.permanent_session_lifetime = timedelta(minutes=5)
 
 load_dotenv()
@@ -4181,6 +4181,31 @@ def test_github_connection():
         return jsonify({
             'status': 'error',
             'message': f'Errore generico nel test GitHub: {str(e)}'
+        }), 500
+
+@app.route('/admin/debug/websocket-status')
+@login_required
+def debug_websocket_status():
+    """Debug dello stato del WebSocket"""
+    try:
+        return jsonify({
+            'status': 'success',
+            'websocket_info': {
+                'ping_timeout': 60,
+                'ping_interval': 25,
+                'max_http_buffer_size': 100000000,
+                'cors_enabled': True
+            },
+            'server_info': {
+                'uptime_seconds': time.time() - psutil.Process().create_time(),
+                'memory_usage_percent': psutil.virtual_memory().percent
+            }
+        })
+    except Exception as e:
+        app.logger.error(f"Errore nel debug WebSocket: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore nel debug: {str(e)}'
         }), 500
 
 @app.route('/admin/test/ipv6-proxies', methods=['POST'])
