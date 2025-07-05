@@ -2826,14 +2826,37 @@ def proxy_m3u():
         proxy_config = get_proxy_for_url(resolved_url, original_url=m3u_url)
         proxy_key = proxy_config['http'] if proxy_config else None
         
-        m3u_response = make_persistent_request(
-            resolved_url,
-            headers=current_headers_for_proxy,
-            timeout=timeout,
-            proxy_url=proxy_key,
-            allow_redirects=True
-        )
-        m3u_response.raise_for_status()
+        # Retry speciale per link Vavoo risolti
+        max_retries = 3 if 'vavoo.to' in m3u_url.lower() else 1
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                m3u_response = make_persistent_request(
+                    resolved_url,
+                    headers=current_headers_for_proxy,
+                    timeout=timeout,
+                    proxy_url=proxy_key,
+                    allow_redirects=True
+                )
+                m3u_response.raise_for_status()
+                break  # Successo, esci dal loop
+            except requests.exceptions.HTTPError as e:
+                last_error = e
+                if e.response.status_code in [502, 503, 504] and attempt < max_retries - 1:
+                    app.logger.warning(f"Errore {e.response.status_code} per link Vavoo (tentativo {attempt + 1}/{max_retries}), riprovo...")
+                    time.sleep(2 ** attempt)  # Exponential backoff
+                    continue
+                else:
+                    raise  # Rilancia l'errore se non è recuperabile
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    app.logger.warning(f"Errore per link Vavoo (tentativo {attempt + 1}/{max_retries}): {e}")
+                    time.sleep(2 ** attempt)
+                    continue
+                else:
+                    raise
 
         m3u_content = m3u_response.text
         final_url = m3u_response.url
@@ -2971,7 +2994,10 @@ def proxy_ts():
     proxy_key = proxy_config['http'] if proxy_config else None
     
     ts_timeout = get_dynamic_timeout(ts_url)
+    
+    # Retry speciale per segmenti TS di link Vavoo
     max_retries = 3
+    is_vavoo_segment = any('vavoo.to' in arg.lower() for arg in request.args.values())
     
     for attempt in range(max_retries):
         try:
@@ -3015,6 +3041,14 @@ def proxy_ts():
             else:
                 app.logger.error(f"Errore di connessione per il segmento TS: {str(e)}")
                 return f"Errore di connessione per il segmento TS: {str(e)}", 500
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [502, 503, 504] and is_vavoo_segment and attempt < max_retries - 1:
+                app.logger.warning(f"Errore {e.response.status_code} per segmento TS Vavoo (tentativo {attempt + 1}/{max_retries}): {ts_url}")
+                time.sleep(2 ** attempt)
+                continue
+            else:
+                app.logger.error(f"Errore HTTP per il segmento TS: {str(e)}")
+                return f"Errore HTTP per il segmento TS: {str(e)}", e.response.status_code
         except requests.exceptions.ReadTimeout as e:
             app.logger.warning(f"Read timeout esplicito per il segmento TS (tentativo {attempt + 1}/{max_retries}): {ts_url}")
             if attempt == max_retries - 1:
