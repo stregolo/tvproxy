@@ -405,6 +405,10 @@
                         <i class="fab fa-github"></i>
                         Test GitHub
                     </button>
+                    <button class="btn btn-small" onclick="testIPv6Proxies()">
+                        <i class="fas fa-network-wired"></i>
+                        Test IPv6
+                    </button>
                 </div>
             </div>
         </div>
@@ -715,15 +719,24 @@ Configurazione:
                     if(status.blacklisted_proxies > 0) {
                         blacklistDetails = '\n\nProxy in Blacklist:\n';
                         Object.entries(status.blacklist_info).forEach(([proxy, info]) => {
-                            blacklistDetails += `- ${proxy}: ${info.error_count} errori ${info.error_type} (fino alle ${info.blacklisted_until})\n`;
+                            blacklistDetails += `- ${proxy} (${info.ip_version}): ${info.error_count} errori ${info.error_type} (fino alle ${info.blacklisted_until})\n`;
                         });
+                    }
+                    
+                    let ipStats = '';
+                    if(status.ip_statistics) {
+                        const total = status.ip_statistics.total;
+                        const available = status.ip_statistics.available;
+                        ipStats = `\n\nStatistiche IP:
+Totali: IPv4=${total.IPv4}, IPv6=${total.IPv6}, Hostname=${total.hostname}
+Disponibili: IPv4=${available.IPv4}, IPv6=${available.IPv6}, Hostname=${available.hostname}`;
                     }
                     
                     const message = `Stato Proxy:
                     
 Proxy totali: ${status.total_proxies}
 Proxy disponibili: ${status.available_proxies}
-Proxy in blacklist: ${status.blacklisted_proxies}${blacklistDetails}`;
+Proxy in blacklist: ${status.blacklisted_proxies}${ipStats}${blacklistDetails}`;
                     
                     alert(message);
                 } else {
@@ -838,6 +851,54 @@ Proxy in blacklist: ${status.blacklisted_proxies}${blacklistDetails}`;
                 btn.classList.remove('loading');
                 btn.innerHTML = '<i class="fab fa-github"></i> Test GitHub';
                 alert('Errore nel test GitHub: ' + error.message);
+            });
+        }
+
+        function testIPv6Proxies() {
+            const btn = event.target;
+            btn.classList.add('loading');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando...';
+            
+            fetch('/admin/test/ipv6-proxies', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.classList.remove('loading');
+                if(data.status === 'success') {
+                    btn.innerHTML = '<i class="fas fa-check"></i> OK!';
+                    setTimeout(() => {
+                        btn.innerHTML = '<i class="fas fa-network-wired"></i> Test IPv6';
+                    }, 2000);
+                    
+                    let message = `Test IPv6: ${data.message}\n\n`;
+                    if(data.results && data.results.length > 0) {
+                        data.results.forEach(result => {
+                            const statusIcon = result.status === 'success' ? '✅' : '❌';
+                            message += `${statusIcon} ${result.proxy}: ${result.message}\n`;
+                        });
+                    }
+                    alert(message);
+                } else if(data.status === 'info') {
+                    btn.innerHTML = '<i class="fas fa-info"></i> Info';
+                    setTimeout(() => {
+                        btn.innerHTML = '<i class="fas fa-network-wired"></i> Test IPv6';
+                    }, 2000);
+                    alert(data.message);
+                } else {
+                    btn.innerHTML = '<i class="fas fa-network-wired"></i> Test IPv6';
+                    alert('Errore nel test IPv6: ' + data.message);
+                }
+            })
+            .catch(error => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-network-wired"></i> Test IPv6';
+                alert('Errore nel test IPv6: ' + error.message);
             });
         }
     </script>
