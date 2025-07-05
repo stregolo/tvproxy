@@ -2338,6 +2338,73 @@ def admin_config():
     """Pagina di gestione configurazioni"""
     config = config_manager.load_config()
     return render_template('config.html', config=config)
+
+@app.route('/admin/config/current')
+@login_required
+def get_current_config():
+    """Ottiene la configurazione corrente in tempo reale"""
+    try:
+        config = config_manager.load_config()
+        config_status = config_manager.get_config_status()
+        
+        return jsonify({
+            'status': 'success',
+            'config': config,
+            'config_status': config_status,
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero configurazione corrente: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore nel recupero configurazione: {str(e)}'
+        }), 500
+
+@app.route('/admin/config/check-changes', methods=['POST'])
+@login_required
+def check_config_changes():
+    """Verifica se la configurazione è cambiata rispetto a quella fornita"""
+    try:
+        current_config = config_manager.load_config()
+        provided_config = request.get_json()
+        
+        changes = {}
+        for key in current_config:
+            if key in provided_config:
+                if current_config[key] != provided_config[key]:
+                    changes[key] = {
+                        'current': current_config[key],
+                        'provided': provided_config[key]
+                    }
+            else:
+                # Chiave presente nella configurazione corrente ma non in quella fornita
+                changes[key] = {
+                    'current': current_config[key],
+                    'provided': 'NON_PRESENTE'
+                }
+        
+        # Controlla anche le chiavi presenti nella configurazione fornita ma non in quella corrente
+        for key in provided_config:
+            if key not in current_config:
+                changes[key] = {
+                    'current': 'NON_PRESENTE',
+                    'provided': provided_config[key]
+                }
+        
+        return jsonify({
+            'status': 'success',
+            'has_changes': len(changes) > 0,
+            'changes': changes,
+            'changes_count': len(changes),
+            'timestamp': datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel controllo cambiamenti configurazione: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore nel controllo cambiamenti: {str(e)}'
+        }), 500
     
 @app.route('/admin/logs')
 @login_required
