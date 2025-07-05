@@ -727,16 +727,31 @@ Configurazione:
                     if(status.ip_statistics) {
                         const total = status.ip_statistics.total;
                         const available = status.ip_statistics.available;
-                        ipStats = `\n\nStatistiche IP:
+                        ipStats = `\n\nStatistiche IP Proxy Normali:
 Totali: IPv4=${total.IPv4}, IPv6=${total.IPv6}, Hostname=${total.hostname}
 Disponibili: IPv4=${available.IPv4}, IPv6=${available.IPv6}, Hostname=${available.hostname}`;
                     }
                     
+                    let daddyIpStats = '';
+                    if(status.daddy_ip_statistics) {
+                        const daddyTotal = status.daddy_ip_statistics.total;
+                        const daddyAvailable = status.daddy_ip_statistics.available;
+                        daddyIpStats = `\n\nStatistiche IP Proxy DaddyLive:
+Totali: IPv4=${daddyTotal.IPv4}, IPv6=${daddyTotal.IPv6}, Hostname=${daddyTotal.hostname}
+Disponibili: IPv4=${daddyAvailable.IPv4}, IPv6=${daddyAvailable.IPv6}, Hostname=${daddyAvailable.hostname}`;
+                    }
+                    
                     const message = `Stato Proxy:
                     
-Proxy totali: ${status.total_proxies}
-Proxy disponibili: ${status.available_proxies}
-Proxy in blacklist: ${status.blacklisted_proxies}${ipStats}${blacklistDetails}`;
+Proxy Normali:
+- Totali: ${status.total_proxies}
+- Disponibili: ${status.available_proxies}
+- In blacklist: ${status.blacklisted_proxies}
+
+Proxy DaddyLive:
+- Totali: ${status.total_daddy_proxies || 0}
+- Disponibili: ${status.available_daddy_proxies || 0}
+- In blacklist: ${status.blacklisted_daddy_proxies || 0}${ipStats}${daddyIpStats}${blacklistDetails}`;
                     
                     alert(message);
                 } else {
