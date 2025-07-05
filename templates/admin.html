@@ -670,3 +670,13 @@ Configurazione:
                         alert('Errore: ' + data.message);
                     }
                 })
+                .catch(error => {
+                    btn.classList.remove('loading');
+                    btn.innerHTML = '<i class="fas fa-broom"></i> Pulisci';
+                    alert('Errore nella pulizia memoria: ' + error.message);
+                });
+            }
+        }
+    </script>
+</body>
+</html>
