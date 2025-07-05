@@ -41,10 +41,9 @@ Un server proxy avanzato e dockerizzato basato su **Flask** e **Requests**, prog
 |------------------|---------------------------------------------------------------------|--------------|---------------|
 | `ADMIN_PASSWORD` | Password per accedere alla dashboard di amministrazione            | **SÌ**       | `password123` |
 | `SECRET_KEY`     | Chiave segreta per le sessioni Flask (deve essere univoca e sicura) | **SÌ**       | Nessuna       |
-| `ADMIN_USERNAME` | Username per l'accesso (configurabile dalla web UI)                | No           | `admin`       |
-| `ALLOWED_IPS`    | Lista di IP autorizzati separati da virgola                        | No           | Tutti gli IP  |
 
-> ⚠️  **Obbligatorio**: impostare `ADMIN_PASSWORD` **e** `SECRET_KEY`.  
+> ⚠️  **IMPORTANTE**: Solo `ADMIN_PASSWORD` e `SECRET_KEY` devono essere impostati come variabili d'ambiente.  
+> 🔧 **Tutte le altre configurazioni** (proxy, cache, pre-buffering, timeout, ecc.) devono essere gestite dal **pannello web** di amministrazione.  
 > 🔑 Usa un valore univoco per `SECRET_KEY`, ad esempio generato con:  
 > `openssl rand -hex 32`  
 > oppure:  
@@ -66,6 +65,7 @@ docker run -d -p 7860:7860 \
 ### 📦 Esempio `.env` (Termux / Python)
 
 ```dotenv
+# SOLO queste due variabili sono necessarie
 ADMIN_PASSWORD=tua_password_sicura
 SECRET_KEY=1f4d8e9a6c57bd2eec914d93cfb7a3efb9ae67f2643125c89cc3c50e75c4d4c3
 ```
@@ -74,44 +74,43 @@ SECRET_KEY=1f4d8e9a6c57bd2eec914d93cfb7a3efb9ae67f2643125c89cc3c50e75c4d4c3
 
 ## 💾 Configurazione per Server con RAM Limitata (1 GB)
 
-### 📃 `.env` ottimizzato
+### 📃 Configurazione Ottimizzata
 
-```dotenv
-# OBBLIGATORIO
-ADMIN_PASSWORD=tua_password_sicura
-SECRET_KEY=chiave_segreta_generata
+Per server con RAM limitata, configura le seguenti impostazioni dal pannello web di amministrazione:
 
-# Ottimizzazioni memoria
-REQUEST_TIMEOUT=30
-KEEP_ALIVE_TIMEOUT=120
-MAX_KEEP_ALIVE_REQUESTS=100
-POOL_CONNECTIONS=5
-POOL_MAXSIZE=10
+#### Ottimizzazioni Memoria
+- **REQUEST_TIMEOUT**: 30
+- **KEEP_ALIVE_TIMEOUT**: 120
+- **MAX_KEEP_ALIVE_REQUESTS**: 100
+- **POOL_CONNECTIONS**: 5
+- **POOL_MAXSIZE**: 10
 
-# Cache ridotta
-CACHE_TTL_M3U8=2
-CACHE_TTL_TS=60
-CACHE_TTL_KEY=60
-CACHE_MAXSIZE_M3U8=50
-CACHE_MAXSIZE_TS=200
-CACHE_MAXSIZE_KEY=50
+#### Cache Ridotta
+- **CACHE_TTL_M3U8**: 2
+- **CACHE_TTL_TS**: 60
+- **CACHE_TTL_KEY**: 60
+- **CACHE_MAXSIZE_M3U8**: 50
+- **CACHE_MAXSIZE_TS**: 200
+- **CACHE_MAXSIZE_KEY**: 50
 
-# Pre-buffering ridotto
-PREBUFFER_ENABLED=true
-PREBUFFER_MAX_SEGMENTS=2
-PREBUFFER_MAX_SIZE_MB=20
-PREBUFFER_MAX_MEMORY_PERCENT=15
-```
+#### Pre-buffering Ridotto
+- **PREBUFFER_ENABLED**: true
+- **PREBUFFER_MAX_SEGMENTS**: 2
+- **PREBUFFER_MAX_SIZE_MB**: 20
+- **PREBUFFER_MAX_MEMORY_PERCENT**: 15
 
 ---
 
 ## 🚫 Disattivare la Cache per Streaming Diretto
 
-Se vuoi **disabilitare completamente la cache** (ad esempio per streaming diretto e contenuti sempre aggiornati), puoi farlo aggiungendo questa riga al tuo file `.env` oppure dall'interfaccia web:
+Se vuoi **disabilitare completamente la cache** (ad esempio per streaming diretto e contenuti sempre aggiornati), puoi farlo dal pannello web di amministrazione:
 
-```
-CACHE_ENABLED=False
-```
+1. Accedi alla dashboard: `http://<server-ip>:7860/login`
+2. Vai su **Config** → **Configurazione**
+3. Imposta **CACHE_ENABLED** su `false`
+4. Salva la configurazione
+
+La cache verrà disabilitata immediatamente senza bisogno di riavviare il server.
 
 ---
 
@@ -143,34 +142,38 @@ Per **HuggingFace Spaces**, è **OBBLIGATORIO** utilizzare questa configurazione
 # OBBLIGATORIO
 ADMIN_PASSWORD=tua_password_sicura
 SECRET_KEY=chiave_segreta_generata
-
-# OBBLIGATORIO per HuggingFace - Proxy DaddyLive
-DADDY_PROXY=http://user:pass@proxy1:8080,https://user:pass@proxy2:8080
-
-# Cache Ottimizzata
-CACHE_TTL_M3U8=5
-CACHE_MAXSIZE_M3U8=500
-CACHE_TTL_TS=600
-CACHE_MAXSIZE_TS=8000
-CACHE_TTL_KEY=600
-CACHE_MAXSIZE_KEY=1000
-
-# Pool di Connessioni Potenziato
-POOL_CONNECTIONS=50
-POOL_MAXSIZE=300
-MAX_KEEP_ALIVE_REQUESTS=5000
-KEEP_ALIVE_TIMEOUT=900
-REQUEST_TIMEOUT=45
-
-# Pre-buffering ottimizzato
-PREBUFFER_EMERGENCY_THRESHOLD=99.9
-PREBUFFER_MAX_SEGMENTS=4
-PREBUFFER_MAX_SIZE_MB=200
-PREBUFFER_MAX_MEMORY_PERCENT=30
-
-# Domini senza proxy
-NO_PROXY_DOMAINS=github.com,raw.githubusercontent.com
 ```
+
+**Configurazione dal Pannello Web**
+Dopo il deploy, accedi alla dashboard e configura le seguenti impostazioni ottimizzate per HuggingFace:
+
+**Proxy DaddyLive (OBBLIGATORIO per HuggingFace)**
+- Usa solo proxy HTTP/HTTPS (SOCKS5 non supportato su HF)
+- Configura dal pannello web: **Config** → **Configurazione** → **Proxy DaddyLive**
+
+**Cache Ottimizzata**
+- **CACHE_TTL_M3U8**: 5
+- **CACHE_MAXSIZE_M3U8**: 500
+- **CACHE_TTL_TS**: 600
+- **CACHE_MAXSIZE_TS**: 8000
+- **CACHE_TTL_KEY**: 600
+- **CACHE_MAXSIZE_KEY**: 1000
+
+**Pool di Connessioni Potenziato**
+- **POOL_CONNECTIONS**: 50
+- **POOL_MAXSIZE**: 300
+- **MAX_KEEP_ALIVE_REQUESTS**: 5000
+- **KEEP_ALIVE_TIMEOUT**: 900
+- **REQUEST_TIMEOUT**: 45
+
+**Pre-buffering ottimizzato**
+- **PREBUFFER_EMERGENCY_THRESHOLD**: 99.9
+- **PREBUFFER_MAX_SEGMENTS**: 4
+- **PREBUFFER_MAX_SIZE_MB**: 200
+- **PREBUFFER_MAX_MEMORY_PERCENT**: 30
+
+**Domini senza proxy**
+- **NO_PROXY_DOMAINS**: github.com,raw.githubusercontent.com
 
 **Perché questa configurazione?**
 - **DADDY_PROXY Obbligatorio**: HuggingFace richiede proxy HTTP/HTTPS per servizi DaddyLive
@@ -208,6 +211,7 @@ git clone https://github.com/nzo66/tvproxy.git
 cd tvproxy
 pip install -r requirements.txt
 
+# SOLO queste due variabili sono necessarie
 echo "ADMIN_PASSWORD=tua_password_sicura" > .env
 echo "SECRET_KEY=chiave_segreta_generata" >> .env
 
@@ -221,6 +225,7 @@ git clone https://github.com/nzo66/tvproxy.git
 cd tvproxy
 pip install -r requirements.txt
 
+# SOLO queste due variabili sono necessarie
 echo "ADMIN_PASSWORD=tua_password_sicura" > .env
 echo "SECRET_KEY=chiave_segreta_generata" >> .env
 
@@ -306,36 +311,45 @@ http://<server-ip>:7860/proxy/key?url=<URL_CHIAVE>&h_<HEADER>=<VALORE>
 
 ## 🔁 Configurazione Proxy (Opzionale)
 
-### Proxy Generali
+> ⚠️ **IMPORTANTE**: La configurazione dei proxy deve essere fatta dal **pannello web** di amministrazione (`/admin/config`), NON tramite variabili d'ambiente.
 
-| Variabile          | Descrizione                                                  | Esempio                                   |
-|--------------------|--------------------------------------------------------------|-------------------------------------------|
-| `SOCKS5_PROXY`     | Uno o più proxy SOCKS5, separati da virgola                  | `socks5://user:pass@host:port,...`        |
-| `PROXY`            | Proxy HTTP, HTTPS e SOCKS5                                   | `http://user:pass@host:port,...`          |
-| `NO_PROXY_DOMAINS` | Domini da escludere dal proxy, separati da virgola           | `github.com,vavoo.to`                     |
+### Proxy Supportati
+
+| Tipo        | Descrizione                                                  | Esempio                                   |
+|-------------|--------------------------------------------------------------|-------------------------------------------|
+| **SOCKS5**  | Proxy SOCKS5 con riconoscimento automatico                   | `socks5://user:pass@host:port`            |
+| **HTTP**    | Proxy HTTP con riconoscimento automatico                     | `http://user:pass@host:port`              |
+| **HTTPS**   | Proxy HTTPS con riconoscimento automatico                    | `https://user:pass@host:port`             |
 
 ### 🌟 Proxy DaddyLive Dedicati
 
-| Variabile      | Descrizione                                                  | Esempio                                   |
-|----------------|--------------------------------------------------------------|-------------------------------------------|
-| `DADDY_PROXY`  | Proxy dedicati solo per DaddyLive, separati da virgola       | `socks5://user:pass@host:port,...`        |
+Il sistema supporta proxy dedicati per servizi DaddyLive, configurati separatamente dai proxy generali.
 
 **Riconoscimento Automatico**: Il sistema rileva automaticamente il tipo di proxy (SOCKS5, HTTP, HTTPS) e normalizza gli URL.
 
-Esempio `.env` completo:
+### Configurazione dal Pannello Web
 
-```dotenv
-ADMIN_PASSWORD=tua_password_sicura
-SECRET_KEY=chiave_segreta_generata
+1. Accedi alla dashboard: `http://<server-ip>:7860/login`
+2. Vai su **Config** → **Configurazione**
+3. Inserisci i proxy nei campi:
+   - **Proxy Generali**: Per tutte le richieste
+   - **Proxy DaddyLive**: Solo per servizi DaddyLive
+   - **Domini senza proxy**: Domini da escludere dal proxy
 
-# Proxy Generali
-PROXY=http://user:pass@host:8080,socks5://user:pass@host1:1080
+### Formati Supportati
 
-# Proxy DaddyLive Dedicati
-DADDY_PROXY=socks5://user:pass@daddy1:1080,http://user:pass@daddy2:8080
+```
+# Proxy singoli
+socks5://user:pass@host:port
+http://user:pass@host:port
+https://user:pass@host:port
 
-# Domini senza proxy
-NO_PROXY_DOMAINS=github.com,raw.githubusercontent.com,vavoo.to
+# Proxy multipli (separati da virgola)
+socks5://proxy1:1080,http://proxy2:8080,https://proxy3:8443
+
+# Senza autenticazione
+socks5://host:port
+http://host:port
 ```
 
 ---
@@ -359,10 +373,7 @@ Il sistema utilizza proxy dedicati per i servizi DaddyLive, identificati automat
 
 ### Configurazione
 
-```dotenv
-# Proxy dedicati per DaddyLive
-DADDY_PROXY=socks5://user:pass@daddy1:1080,http://user:pass@daddy2:8080,https://user:pass@daddy3:8080
-```
+I proxy DaddyLive dedicati vengono configurati dal pannello web di amministrazione nella sezione **Config** → **Configurazione**.
 
 ---
 
@@ -377,15 +388,7 @@ DADDY_PROXY=socks5://user:pass@daddy1:1080,http://user:pass@daddy2:8080,https://
 
 ### Configurazione
 
-```dotenv
-# Pre-buffering
-PREBUFFER_ENABLED=true
-PREBUFFER_MAX_SEGMENTS=3
-PREBUFFER_MAX_SIZE_MB=50
-PREBUFFER_CLEANUP_INTERVAL=300
-PREBUFFER_MAX_MEMORY_PERCENT=30
-PREBUFFER_EMERGENCY_THRESHOLD=90
-```
+Il sistema di pre-buffering viene configurato dal pannello web di amministrazione nella sezione **Config** → **Configurazione**.
 
 ### Endpoint di Gestione
 
@@ -433,10 +436,7 @@ http://<server-ip>:7860/proxy/vavoo?url=https://vavoo.to/vavoo-iptv/play/2775802
 
 ### Configurazione
 
-```dotenv
-# Domini senza proxy (evitano blacklist)
-NO_PROXY_DOMAINS=github.com,raw.githubusercontent.com,vavoo.to
-```
+I domini da escludere dal proxy vengono configurati dal pannello web di amministrazione nella sezione **Config** → **Configurazione**.
 
 ---
 
