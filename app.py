@@ -198,6 +198,17 @@ def check_auth(username, password):
     """Verifica le credenziali di accesso"""
     return username == ADMIN_USERNAME and password == ADMIN_PASSWORD
 
+def check_ip_blocked(f):
+    """Decorator per verificare se l'IP è bloccato"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR'))
+        if client_tracker.is_ip_blocked(ip):
+            app.logger.warning(f"Richiesta bloccata da IP: {ip}")
+            return jsonify({'error': 'Accesso negato - IP bloccato'}), 403
+        return f(*args, **kwargs)
+    return decorated_function
+
 def check_ip_allowed():
     """Verifica se l'IP è nella lista degli IP consentiti - Lettura dinamica"""
     try:
@@ -1921,6 +1932,7 @@ def clear_cache():
 
 # NUOVA ROTTA: Pre-buffering Avanzato
 @app.route('/proxy/prebuffer')
+@check_ip_blocked
 def proxy_prebuffer():
     """Endpoint per pre-buffering manuale di segmenti specifici"""
     m3u8_url = request.args.get('m3u8_url', '').strip()
@@ -2319,9 +2331,78 @@ def clear_client_stats():
             "message": f"Errore nella pulizia: {str(e)}"
         }), 500
 
+# --- Endpoints per gestione IP bloccati ---
+@app.route('/admin/blocked-ips')
+@login_required
+def admin_blocked_ips():
+    return render_template('blocked_ips.html')
+
+@app.route('/admin/blocked-ips/list')
+@login_required
+def get_blocked_ips():
+    try:
+        blocked_ips = client_tracker.get_blocked_ips()
+        return jsonify({'success': True, 'blocked_ips': blocked_ips})
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero IP bloccati: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/admin/blocked-ips/block', methods=['POST'])
+@login_required
+def block_ip():
+    try:
+        data = request.get_json()
+        ip = data.get('ip')
+        reason = data.get('reason', 'Admin block')
+        
+        if not ip:
+            return jsonify({'success': False, 'error': 'IP richiesto'}), 400
+        
+        # Valida formato IP
+        import re
+        ip_pattern = r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+        if not re.match(ip_pattern, ip):
+            return jsonify({'success': False, 'error': 'Formato IP non valido'}), 400
+        
+        success = client_tracker.block_ip(ip, reason)
+        return jsonify({'success': True, 'message': f'IP {ip} bloccato'})
+    except Exception as e:
+        app.logger.error(f"Errore nel blocco IP: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/admin/blocked-ips/unblock', methods=['POST'])
+@login_required
+def unblock_ip():
+    try:
+        data = request.get_json()
+        ip = data.get('ip')
+        
+        if not ip:
+            return jsonify({'success': False, 'error': 'IP richiesto'}), 400
+        
+        success = client_tracker.unblock_ip(ip)
+        if success:
+            return jsonify({'success': True, 'message': f'IP {ip} sbloccato'})
+        else:
+            return jsonify({'success': False, 'error': 'IP non trovato nella lista bloccati'}), 404
+    except Exception as e:
+        app.logger.error(f"Errore nello sblocco IP: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/admin/blocked-ips/clear', methods=['POST'])
+@login_required
+def clear_blocked_ips():
+    try:
+        count = client_tracker.clear_blocked_ips()
+        return jsonify({'success': True, 'message': f'Rimossi {count} IP bloccati'})
+    except Exception as e:
+        app.logger.error(f"Errore nella pulizia IP bloccati: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 # --- Route Proxy (mantieni tutte le route proxy esistenti) ---
 
 @app.route('/proxy/vavoo')
+@check_ip_blocked
 def proxy_vavoo():
     """Route specifica per testare la risoluzione Vavoo"""
     # Traccia la richiesta
@@ -2371,6 +2452,7 @@ def proxy_vavoo():
         }), 500
 
 @app.route('/proxy/m3u')
+@check_ip_blocked
 def proxy_m3u():
     """Proxy per file M3U e M3U8 con supporto DaddyLive 2025, caching intelligente e pre-buffering"""
     # Traccia la richiesta
@@ -2492,6 +2574,7 @@ def proxy_m3u():
         return f"Errore generico durante l'elaborazione: {str(e)}", 500
 
 @app.route('/proxy/resolve')
+@check_ip_blocked
 def proxy_resolve():
     """Proxy per risolvere e restituire un URL M3U8 con metodo DaddyLive 2025"""
     url = request.args.get('url', '').strip()
@@ -2525,6 +2608,7 @@ def proxy_resolve():
         return f"Errore durante la risoluzione dell'URL: {str(e)}", 500
 
 @app.route('/proxy/ts')
+@check_ip_blocked
 def proxy_ts():
     """Proxy per segmenti .TS con connessioni persistenti, headers personalizzati, caching e pre-buffering"""
     # Traccia la richiesta
@@ -2621,6 +2705,7 @@ def proxy_ts():
     # If we get here, all retries failed
     return "Errore: Impossibile scaricare il segmento TS dopo tutti i tentativi", 500
 @app.route('/proxy')
+@check_ip_blocked
 def proxy():
     """Proxy per liste M3U che aggiunge automaticamente /proxy/m3u?url= con IP prima dei link"""
     # Traccia la richiesta
@@ -2725,6 +2810,7 @@ def proxy():
         return f"Errore generico: {str(e)}", 500
 
 @app.route('/proxy/key')
+@check_ip_blocked
 def proxy_key():
     """Proxy per la chiave AES-128 con headers personalizzati e caching"""
     # Traccia la richiesta
@@ -2793,6 +2879,8 @@ class ClientTracker:
         self.client_lock = Lock()
         self.client_counter = 0
         self.session_clients = {}  # {session_id: client_id} per tracking sessioni Flask
+        self.blocked_ips = set()  # Set di IP bloccati
+        self.blocked_ips_lock = Lock()
     
     def get_client_id(self, request):
         """Genera un ID univoco per il client"""
@@ -2926,7 +3014,8 @@ class ClientTracker:
                     'has_session': client_data['session_id'] is not None,
                     'last_m3u_url': client_data.get('last_m3u_url'),
                     'url_types': list(client_data.get('url_types', set())),
-                    'is_m3u_user': '/proxy/m3u' in client_data['endpoints']
+                    'is_m3u_user': '/proxy/m3u' in client_data['endpoints'],
+                    'is_blocked': client_tracker.is_ip_blocked(client_data['ip'])
                 })
             
             # Ordina per ultima attività
@@ -2942,6 +3031,40 @@ class ClientTracker:
                 'total_requests': sum(client['requests'] for client in self.active_clients.values()),
                 'timestamp': time.time()
             }
+    
+    def is_ip_blocked(self, ip):
+        """Verifica se un IP è bloccato"""
+        with self.blocked_ips_lock:
+            return ip in self.blocked_ips
+    
+    def block_ip(self, ip, reason="Admin block"):
+        """Blocca un IP"""
+        with self.blocked_ips_lock:
+            self.blocked_ips.add(ip)
+            app.logger.warning(f"IP bloccato: {ip} - Motivo: {reason}")
+            return True
+    
+    def unblock_ip(self, ip):
+        """Sblocca un IP"""
+        with self.blocked_ips_lock:
+            if ip in self.blocked_ips:
+                self.blocked_ips.remove(ip)
+                app.logger.info(f"IP sbloccato: {ip}")
+                return True
+            return False
+    
+    def get_blocked_ips(self):
+        """Restituisce la lista degli IP bloccati"""
+        with self.blocked_ips_lock:
+            return list(self.blocked_ips)
+    
+    def clear_blocked_ips(self):
+        """Svuota la lista degli IP bloccati"""
+        with self.blocked_ips_lock:
+            count = len(self.blocked_ips)
+            self.blocked_ips.clear()
+            app.logger.info(f"Rimossi {count} IP bloccati")
+            return count
 
 # Istanza globale del tracker
 client_tracker = ClientTracker()
