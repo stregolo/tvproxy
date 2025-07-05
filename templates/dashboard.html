@@ -521,6 +521,7 @@
             <h2><i class="fas fa-check-circle"></i> Sistema Operativo</h2>
             <p><strong><i class="fas fa-link"></i> Base URL DaddyLive:</strong> <span id="daddyBaseUrl">{{ daddy_base_url }}</span></p>
             <p><strong><i class="fas fa-network-wired"></i> Proxy:</strong> <span id="proxyCount">{{ proxy_count }}</span> | <strong><i class="fas fa-users"></i> Sessioni:</strong> <span id="sessionCount">{{ session_count }}</span></p>
+            <p><strong><i class="fas fa-shield-alt"></i> Proxy Status:</strong> <span id="availableProxies">{{ proxy_count }}</span> disponibili | <span id="blacklistedProxies">0</span> in blacklist</p>
         </div>
 
         <div class="stats-grid">
@@ -707,6 +708,12 @@
             // Aggiorna contatori
             updateStatValue('proxyCount', stats.proxy_count);
             updateStatValue('sessionCount', stats.session_count);
+            
+            // Aggiorna statistiche proxy se disponibili
+            if (stats.proxy_status) {
+                updateStatValue('availableProxies', stats.proxy_status.available_proxies);
+                updateStatValue('blacklistedProxies', stats.proxy_status.blacklisted_proxies);
+            }
             
             // Aggiorna URL base se cambiato
             if (stats.daddy_base_url) {
