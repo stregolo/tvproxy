@@ -350,24 +350,6 @@
     </nav>
     
     <div class="container">
-        <div class="alert alert-success" id="successAlert">
-            <i class="fas fa-check-circle"></i> Configurazione salvata con successo!
-        </div>
-        
-        <div class="alert alert-error" id="errorAlert">
-            <i class="fas fa-exclamation-triangle"></i> Errore durante il salvataggio.
-        </div>
-        
-        <div class="alert alert-info" id="infoAlert" style="display: none;">
-            <i class="fas fa-info-circle"></i> Informazioni.
-        </div>
-        
-        <div class="alert alert-info" id="huggingfaceAlert" style="display: none;">
-            <i class="fas fa-cloud"></i> <strong>Ambiente HuggingFace Rilevato</strong><br>
-            La configurazione viene salvata in memoria e non persisterà dopo il riavvio del server.<br>
-            Per una configurazione permanente, usa le variabili d'ambiente nei Secrets di HuggingFace.
-        </div>
-        
         <form id="configForm">
             <!-- Sezione Proxy -->
             <div class="config-section">
@@ -613,6 +595,25 @@
                         </div>
                     </div>
                 </div>
+            </div>
+            
+            <!-- Alert System -->
+            <div class="alert alert-success" id="successAlert">
+                <i class="fas fa-check-circle"></i> Configurazione salvata con successo!
+            </div>
+            
+            <div class="alert alert-error" id="errorAlert">
+                <i class="fas fa-exclamation-triangle"></i> Errore durante il salvataggio.
+            </div>
+            
+            <div class="alert alert-info" id="infoAlert" style="display: none;">
+                <i class="fas fa-info-circle"></i> Informazioni.
+            </div>
+            
+            <div class="alert alert-info" id="huggingfaceAlert" style="display: none;">
+                <i class="fas fa-cloud"></i> <strong>Ambiente HuggingFace Rilevato</strong><br>
+                La configurazione viene salvata in memoria e non persisterà dopo il riavvio del server.<br>
+                Per una configurazione permanente, usa le variabili d'ambiente nei Secrets di HuggingFace.
             </div>
             
             <div class="action-box">
