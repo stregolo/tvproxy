@@ -29,7 +29,7 @@ import math
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'your-secret-key-change-this-in-production')
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 app.permanent_session_lifetime = timedelta(minutes=5)
 
 load_dotenv()
