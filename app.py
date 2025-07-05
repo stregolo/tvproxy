@@ -2059,6 +2059,51 @@ def debug_config_status():
         }
     })
 
+@app.route('/admin/debug/test-import', methods=['POST'])
+@login_required
+def test_config_import():
+    """Testa l'importazione di una configurazione di esempio"""
+    try:
+        # Crea una configurazione di test
+        test_config = {
+            'TEST_IMPORT': 'test_import_value',
+            'TIMESTAMP': datetime.now().isoformat(),
+            'PROXY': 'socks5://test:1080',
+            'CACHE_ENABLED': True,
+            'REQUEST_TIMEOUT': 30
+        }
+        
+        # Prova a salvare
+        save_result = config_manager.save_config(test_config)
+        
+        # Ricarica per verificare
+        loaded_config = config_manager.load_config()
+        test_imported = 'TEST_IMPORT' in loaded_config
+        
+        # Pulisci la configurazione di test
+        current_config = config_manager.load_config()
+        if 'TEST_IMPORT' in current_config:
+            del current_config['TEST_IMPORT']
+        if 'TIMESTAMP' in current_config:
+            del current_config['TIMESTAMP']
+        config_manager.save_config(current_config)
+        
+        return jsonify({
+            'status': 'success',
+            'save_result': save_result,
+            'test_imported': test_imported,
+            'config_status': config_manager.get_config_status(),
+            'loaded_keys': list(loaded_config.keys()),
+            'message': f'Test importazione: {"OK" if save_result and test_imported else "FALLITO"}'
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel test importazione: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore nel test: {str(e)}'
+        }), 500
+
 @app.route('/admin/debug/test-save', methods=['POST'])
 @login_required
 def test_config_save():
@@ -2531,10 +2576,23 @@ def import_config():
             config_manager.apply_config_to_app(imported_config)
             setup_proxies()
             setup_all_caches()
+            # Aggiorna la configurazione del pre-buffer
+            pre_buffer_manager.update_config()
+            
+            # Verifica che la configurazione sia stata applicata
+            current_config = config_manager.load_config()
+            config_status = config_manager.get_config_status()
+            
             app.logger.info(f"Configurazione importata con successo da {file.filename}")
+            app.logger.info(f"Configurazione attuale: {len(current_config)} impostazioni caricate")
+            
             return jsonify({
                 "status": "success", 
-                "message": f"Configurazione importata con successo da {file.filename}"
+                "message": f"Configurazione importata con successo da {file.filename}",
+                "config_status": config_status,
+                "imported_keys": list(imported_config.keys()),
+                "current_keys": list(current_config.keys()),
+                "is_huggingface": config_status.get('is_huggingface', False)
             })
         else:
             return jsonify({"status": "error", "message": "Errore nel salvataggio della configurazione importata"}), 500
