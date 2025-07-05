@@ -145,12 +145,6 @@
             box-shadow: 0 10px 20px rgba(72, 187, 120, 0.3);
         }
 
-        .btn-sm {
-            padding: 0.25rem 0.5rem;
-            font-size: 0.8rem;
-            border-radius: 5px;
-        }
-
         .clients-table {
             background: rgba(255, 255, 255, 0.95);
             backdrop-filter: blur(20px);
@@ -551,13 +545,11 @@
                             <th>Ultimo URL M3U</th>
                             <th>Tipi URL</th>
                             <th>Sessione</th>
-                            <th>Stato</th>
-                            <th>Azioni</th>
                         </tr>
                     </thead>
                     <tbody id="clientsTableBody">
                         <tr>
-                            <td colspan="13" class="loading">
+                            <td colspan="9" class="loading">
                                 <div class="spinner"></div>
                                 Caricamento client...
                             </td>
@@ -666,27 +658,12 @@
                                 ${client.has_session ? 'Sì' : 'No'}
                             </span>
                         </td>
-                        <td>
-                            <span class="status-badge ${client.is_blocked ? 'status-inactive' : 'status-active'}">
-                                ${client.is_blocked ? 'Bloccato' : 'Attivo'}
-                            </span>
-                        </td>
-                        <td>
-                            ${client.is_blocked ? 
-                                `<button class="btn btn-success btn-sm" onclick="unblockIP('${client.ip}')" title="Sblocca IP">
-                                    <i class="fas fa-unlock"></i>
-                                </button>` :
-                                `<button class="btn btn-danger btn-sm" onclick="blockIP('${client.ip}')" title="Blocca IP">
-                                    <i class="fas fa-ban"></i>
-                                </button>`
-                            }
-                        </td>
                     </tr>
                 `).join('');
             } else {
                 tbody.innerHTML = `
                     <tr>
-                        <td colspan="13" class="loading">
+                        <td colspan="11" class="loading">
                             <i class="fas fa-info-circle"></i>
                             Nessun client connesso al momento
                         </td>
@@ -811,59 +788,6 @@
                     document.body.removeChild(toast);
                 }
             }, 3000);
-        }
-
-        function blockIP(ip) {
-            if (confirm(`Sei sicuro di voler bloccare l'IP ${ip}?`)) {
-                fetch('/admin/blocked-ips/block', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        ip: ip,
-                        reason: 'Blocked from client list'
-                    })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        showToast(data.message);
-                        refreshData();
-                    } else {
-                        showToast('Errore nel blocco IP: ' + data.error);
-                    }
-                })
-                .catch(error => {
-                    console.error('Errore nel blocco IP:', error);
-                    showToast('Errore di connessione');
-                });
-            }
-        }
-
-        function unblockIP(ip) {
-            if (confirm(`Sei sicuro di voler sbloccare l'IP ${ip}?`)) {
-                fetch('/admin/blocked-ips/unblock', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ ip: ip })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        showToast(data.message);
-                        refreshData();
-                    } else {
-                        showToast('Errore nello sblocco IP: ' + data.error);
-                    }
-                })
-                .catch(error => {
-                    console.error('Errore nello sblocco IP:', error);
-                    showToast('Errore di connessione');
-                });
-            }
         }
 
         // Controllo connessione periodico
