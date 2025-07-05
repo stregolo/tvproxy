@@ -765,7 +765,8 @@ setup_logging()
 # --- Configurazione Manager ---
 class ConfigManager:
     def __init__(self):
-        self.config_file = 'proxy_config.json'
+        # Prova diverse directory per il file di configurazione
+        self.config_file = self._get_writable_config_path()
         self.default_config = {
             'PROXY': '',  # Proxy unificati con riconoscimento automatico
             'DADDY_PROXY': '',  # Proxy dedicati per DaddyLive
@@ -793,18 +794,65 @@ class ConfigManager:
             'PREBUFFER_MAX_MEMORY_PERCENT': 30.0,
             'PREBUFFER_EMERGENCY_THRESHOLD': 90.0,
         }
+        self._config_cache = None  # Cache in memoria per HuggingFace
+        self._is_huggingface = self._detect_huggingface_environment()
+        
+    def _detect_huggingface_environment(self):
+        """Rileva se siamo in un ambiente HuggingFace"""
+        return (
+            os.environ.get('SPACE_ID') is not None or
+            os.environ.get('HF_HUB_URL') is not None or
+            os.environ.get('HUGGING_FACE_HUB_TOKEN') is not None or
+            '/tmp' in os.getcwd() or
+            'huggingface' in os.getcwd().lower()
+        )
+    
+    def _get_writable_config_path(self):
+        """Trova una directory scrivibile per il file di configurazione"""
+        possible_paths = [
+            'proxy_config.json',  # Directory corrente
+            '/tmp/proxy_config.json',  # Directory temporanea
+            '/tmp/tvproxy_config.json',  # Directory temporanea con nome specifico
+            os.path.join(os.getcwd(), 'proxy_config.json'),  # Directory corrente assoluta
+        ]
+        
+        # Prova a scrivere un file di test in ogni directory
+        for path in possible_paths:
+            try:
+                # Prova a scrivere un file di test
+                test_content = '{"test": true}'
+                with open(path, 'w') as f:
+                    f.write(test_content)
+                
+                # Se la scrittura ha successo, rimuovi il file di test e usa questo path
+                os.remove(path)
+                app.logger.info(f"Directory scrivibile trovata per configurazione: {path}")
+                return path
+                
+            except (IOError, OSError, PermissionError):
+                continue
+        
+        # Se nessuna directory è scrivibile, usa la directory corrente
+        app.logger.warning("Nessuna directory scrivibile trovata, userò configurazione in memoria")
+        return 'proxy_config.json'  # Fallback
         
     def load_config(self):
-        """Carica la configurazione combinando proxy da file e variabili d'ambiente"""
+        """Carica la configurazione combinando proxy da file, memoria e variabili d'ambiente"""
         # Inizia con i valori di default
         config = self.default_config.copy()
         
-        # Carica dal file se esiste (seconda priorità)
-        if os.path.exists(self.config_file):
+        # Se abbiamo una cache in memoria (HuggingFace), usala
+        if self._config_cache is not None:
+            app.logger.info("Caricamento configurazione dalla cache in memoria")
+            config.update(self._config_cache)
+        
+        # Carica dal file se esiste e non abbiamo cache in memoria
+        elif os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r') as f:
                     file_config = json.load(f)
                     config.update(file_config)
+                app.logger.info(f"Configurazione caricata dal file: {self.config_file}")
             except Exception as e:
                 app.logger.error(f"Errore nel caricamento della configurazione: {e}")
         
@@ -867,11 +915,27 @@ class ConfigManager:
         return config
     
     def save_config(self, config):
-        """Salva la configurazione nel file JSON"""
+        """Salva la configurazione nel file JSON o in memoria per HuggingFace"""
         try:
+            # Se siamo su HuggingFace o non riusciamo a scrivere, usa la cache in memoria
+            if self._is_huggingface:
+                self._config_cache = config.copy()
+                app.logger.info("Configurazione salvata in memoria (ambiente HuggingFace)")
+                return True
+            
+            # Prova a salvare nel file
             with open(self.config_file, 'w') as f:
                 json.dump(config, f, indent=4)
+            app.logger.info(f"Configurazione salvata nel file: {self.config_file}")
             return True
+            
+        except (IOError, OSError, PermissionError) as e:
+            # Se non riusciamo a scrivere il file, usa la cache in memoria
+            app.logger.warning(f"Impossibile scrivere il file di configurazione: {e}")
+            app.logger.info("Configurazione salvata in memoria come fallback")
+            self._config_cache = config.copy()
+            return True
+            
         except Exception as e:
             app.logger.error(f"Errore nel salvataggio della configurazione: {e}")
             return False
@@ -887,6 +951,26 @@ class ConfigManager:
             if key not in proxy_keys:
                 os.environ[key] = str(value)
         return True
+    
+    def get_config_status(self):
+        """Restituisce informazioni sullo stato della configurazione"""
+        return {
+            'is_huggingface': self._is_huggingface,
+            'config_file': self.config_file,
+            'has_memory_cache': self._config_cache is not None,
+            'file_exists': os.path.exists(self.config_file),
+            'file_writable': self._test_file_writable(),
+            'current_config_source': 'memory' if self._config_cache is not None else 'file' if os.path.exists(self.config_file) else 'default'
+        }
+    
+    def _test_file_writable(self):
+        """Testa se il file di configurazione è scrivibile"""
+        try:
+            with open(self.config_file, 'a') as f:
+                pass
+            return True
+        except (IOError, OSError, PermissionError):
+            return False
 
 config_manager = ConfigManager()
 
@@ -1956,6 +2040,66 @@ def debug_env():
     
     return jsonify(env_vars)
 
+@app.route('/admin/debug/config-status')
+@login_required
+def debug_config_status():
+    """Debug dello stato della configurazione"""
+    config_status = config_manager.get_config_status()
+    current_config = config_manager.load_config()
+    
+    return jsonify({
+        'config_status': config_status,
+        'current_config_keys': list(current_config.keys()),
+        'config_summary': {
+            'total_settings': len(current_config),
+            'proxy_configured': bool(current_config.get('PROXY')),
+            'daddy_proxy_configured': bool(current_config.get('DADDY_PROXY')),
+            'cache_enabled': current_config.get('CACHE_ENABLED', True),
+            'prebuffer_enabled': current_config.get('PREBUFFER_ENABLED', True)
+        }
+    })
+
+@app.route('/admin/debug/test-save', methods=['POST'])
+@login_required
+def test_config_save():
+    """Testa il salvataggio della configurazione"""
+    try:
+        # Crea una configurazione di test
+        test_config = {
+            'TEST_SAVE': 'test_value',
+            'TIMESTAMP': datetime.now().isoformat()
+        }
+        
+        # Prova a salvare
+        save_result = config_manager.save_config(test_config)
+        
+        # Ricarica per verificare
+        loaded_config = config_manager.load_config()
+        test_saved = 'TEST_SAVE' in loaded_config
+        
+        # Pulisci la configurazione di test
+        current_config = config_manager.load_config()
+        if 'TEST_SAVE' in current_config:
+            del current_config['TEST_SAVE']
+        if 'TIMESTAMP' in current_config:
+            del current_config['TIMESTAMP']
+        config_manager.save_config(current_config)
+        
+        return jsonify({
+            'status': 'success',
+            'save_result': save_result,
+            'test_saved': test_saved,
+            'config_status': config_manager.get_config_status(),
+            'message': f'Test salvataggio: {"OK" if save_result and test_saved else "FALLITO"}'
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel test salvataggio: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore nel test: {str(e)}'
+        }), 500
+
 @app.route('/admin/proxy/formats')
 @login_required
 def proxy_formats():
@@ -2275,7 +2419,7 @@ def test_config():
             'origin': 'https://vavoo.to'
         }
 
-        # Test DaddyLive con proxy unificati
+                # Test DaddyLive con proxy unificati
         if config.get('PROXY'):
             proxies = [p.strip() for p in config['PROXY'].split(',') if p.strip()]
             for proxy in proxies:
@@ -3488,6 +3632,25 @@ def proxy_key():
 # Carica e applica la configurazione salvata al startup
 saved_config = config_manager.load_config()
 config_manager.apply_config_to_app(saved_config)
+
+# Log dello stato della configurazione
+config_status = config_manager.get_config_status()
+app.logger.info("="*50)
+app.logger.info("🔧 STATO CONFIGURAZIONE")
+app.logger.info("="*50)
+app.logger.info(f"Ambiente: {'HuggingFace' if config_status['is_huggingface'] else 'Standard'}")
+app.logger.info(f"File config: {config_status['config_file']}")
+app.logger.info(f"Cache memoria: {'Sì' if config_status['has_memory_cache'] else 'No'}")
+app.logger.info(f"File scrivibile: {'Sì' if config_status['file_writable'] else 'No'}")
+app.logger.info(f"Fonte config: {config_status['current_config_source']}")
+
+if config_status['is_huggingface']:
+    app.logger.info("⚠️  AMBIENTE HUGGINGFACE: Configurazione salvata in memoria")
+    app.logger.info("💡 Per configurazione permanente, usa i Secrets di HuggingFace")
+else:
+    app.logger.info("✅ Configurazione salvata su file")
+
+app.logger.info("="*50)
 
 # Valida e aggiorna la configurazione del pre-buffer
 pre_buffer_manager.update_config()
