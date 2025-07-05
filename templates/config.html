@@ -459,9 +459,9 @@
                         </div>
                         <div class="form-group">
                             <label for="cache_ttl_m3u8">TTL Cache M3U8 (secondi):</label>
-                            <input type="number" id="cache_ttl_m3u8" name="CACHE_TTL_M3U8" value="{{ config.CACHE_TTL_M3U8 }}" min="1" max="300">
+                            <input type="number" id="cache_ttl_m3u8" name="CACHE_TTL_M3U8" value="{{ config.CACHE_TTL_M3U8 }}" min="1" max="1800">
                             <i class="fas fa-clock"></i>
-                            <small>Tempo di vita cache per file M3U8</small>
+                            <small>Tempo di vita cache per file M3U8 (max 30 minuti)</small>
                         </div>
                         <div class="form-group">
                             <label for="cache_maxsize_m3u8">Max Size Cache M3U8:</label>
@@ -475,7 +475,7 @@
                             <label for="cache_ttl_ts">TTL Cache TS (secondi):</label>
                             <input type="number" id="cache_ttl_ts" name="CACHE_TTL_TS" value="{{ config.CACHE_TTL_TS }}" min="60" max="3600">
                             <i class="fas fa-video"></i>
-                            <small>Tempo di vita cache per segmenti TS</small>
+                            <small>Tempo di vita cache per segmenti TS (max 1 ora)</small>
                         </div>
                         <div class="form-group">
                             <label for="cache_maxsize_ts">Max Size Cache TS:</label>
@@ -485,9 +485,9 @@
                         </div>
                         <div class="form-group">
                             <label for="cache_ttl_key">TTL Cache KEY (secondi):</label>
-                            <input type="number" id="cache_ttl_key" name="CACHE_TTL_KEY" value="{{ config.CACHE_TTL_KEY }}" min="1" max="300">
+                            <input type="number" id="cache_ttl_key" name="CACHE_TTL_KEY" value="{{ config.CACHE_TTL_KEY }}" min="1" max="3600">
                             <i class="fas fa-key"></i>
-                            <small>Tempo di vita cache per chiavi di decrittazione</small>
+                            <small>Tempo di vita cache per chiavi di decrittazione (max 1 ora)</small>
                         </div>
                         <div class="form-group">
                             <label for="cache_maxsize_key">Max Size Cache KEY:</label>
