@@ -197,7 +197,7 @@
             font-weight: 500;
             animation: slideIn 0.3s ease;
         }
-        
+
         .alert-info {
             background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
             color: white;
@@ -356,6 +356,12 @@
         
         <div class="alert alert-error" id="errorAlert">
             <i class="fas fa-exclamation-triangle"></i> Errore durante il salvataggio.
+        </div>
+        
+        <div class="alert alert-info" id="huggingfaceAlert" style="display: none;">
+            <i class="fas fa-cloud"></i> <strong>Ambiente HuggingFace Rilevato</strong><br>
+            La configurazione viene salvata in memoria e non persisterà dopo il riavvio del server.<br>
+            Per una configurazione permanente, usa le variabili d'ambiente nei Secrets di HuggingFace.
         </div>
         
         <form id="configForm">
@@ -622,6 +628,12 @@
                     <button type="button" class="btn btn-secondary" onclick="testPreBuffer()">
                         <i class="fas fa-forward"></i> Test Pre-Buffer
                     </button>
+                    <button type="button" class="btn btn-secondary" onclick="showConfigStatus()">
+                        <i class="fas fa-info-circle"></i> Stato Config
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="testConfigSave()">
+                        <i class="fas fa-vial"></i> Test Salvataggio
+                    </button>
                     <button type="button" class="btn btn-secondary" onclick="exportConfig()">
                         <i class="fas fa-download"></i> Esporta Config
                     </button>
@@ -637,6 +649,25 @@
     </div>
 
     <script>
+        // Controlla se siamo in ambiente HuggingFace
+        function checkHuggingFaceEnvironment() {
+            fetch('/admin/debug/config-status')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.config_status && data.config_status.is_huggingface) {
+                        document.getElementById('huggingfaceAlert').style.display = 'block';
+                    }
+                })
+                .catch(error => {
+                    console.log('Errore nel controllo ambiente:', error);
+                });
+        }
+        
+        // Controlla l'ambiente al caricamento della pagina
+        document.addEventListener('DOMContentLoaded', function() {
+            checkHuggingFaceEnvironment();
+        });
+        
         document.getElementById('configForm').addEventListener('submit', function(e) {
             e.preventDefault();
             
@@ -781,6 +812,72 @@
         
         function importConfig() {
             document.getElementById('importFile').click();
+        }
+        
+        function showConfigStatus() {
+            fetch('/admin/debug/config-status')
+                .then(response => response.json())
+                .then(data => {
+                    const status = data.config_status;
+                    const summary = data.config_summary;
+                    
+                    let message = `📊 <strong>Stato Configurazione</strong><br><br>`;
+                    message += `🌐 <strong>Ambiente:</strong> ${status.is_huggingface ? 'HuggingFace' : 'Standard'}<br>`;
+                    message += `📁 <strong>File Config:</strong> ${status.config_file}<br>`;
+                    message += `💾 <strong>Cache Memoria:</strong> ${status.has_memory_cache ? 'Sì' : 'No'}<br>`;
+                    message += `📄 <strong>File Esiste:</strong> ${status.file_exists ? 'Sì' : 'No'}<br>`;
+                    message += `✏️ <strong>File Scrivibile:</strong> ${status.file_writable ? 'Sì' : 'No'}<br>`;
+                    message += `🔧 <strong>Fonte Config:</strong> ${status.current_config_source}<br><br>`;
+                    message += `📈 <strong>Riepilogo Configurazione:</strong><br>`;
+                    message += `• Impostazioni totali: ${summary.total_settings}<br>`;
+                    message += `• Proxy configurati: ${summary.proxy_configured ? 'Sì' : 'No'}<br>`;
+                    message += `• Proxy DaddyLive: ${summary.daddy_proxy_configured ? 'Sì' : 'No'}<br>`;
+                    message += `• Cache abilitata: ${summary.cache_enabled ? 'Sì' : 'No'}<br>`;
+                    message += `• Pre-buffer abilitato: ${summary.prebuffer_enabled ? 'Sì' : 'No'}`;
+                    
+                    showAlert('info', message);
+                })
+                .catch(error => {
+                    showAlert('error', 'Errore nel recupero stato configurazione: ' + error.message);
+                });
+        }
+        
+        function testConfigSave() {
+            const testBtn = event.target;
+            testBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando...';
+            testBtn.disabled = true;
+            
+            fetch('/admin/debug/test-save', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                testBtn.innerHTML = '<i class="fas fa-vial"></i> Test Salvataggio';
+                testBtn.disabled = false;
+                
+                if (result.status === 'success') {
+                    const status = result.config_status;
+                    let message = `🧪 <strong>Test Salvataggio Configurazione</strong><br><br>`;
+                    message += `✅ <strong>Risultato:</strong> ${result.message}<br>`;
+                    message += `🌐 <strong>Ambiente:</strong> ${status.is_huggingface ? 'HuggingFace' : 'Standard'}<br>`;
+                    message += `💾 <strong>Cache Memoria:</strong> ${status.has_memory_cache ? 'Sì' : 'No'}<br>`;
+                    message += `✏️ <strong>File Scrivibile:</strong> ${status.file_writable ? 'Sì' : 'No'}<br>`;
+                    message += `🔧 <strong>Fonte Config:</strong> ${status.current_config_source}`;
+                    
+                    showAlert('info', message);
+                } else {
+                    showAlert('error', 'Test salvataggio fallito: ' + result.message);
+                }
+            })
+            .catch(error => {
+                testBtn.innerHTML = '<i class="fas fa-vial"></i> Test Salvataggio';
+                testBtn.disabled = false;
+                showAlert('error', 'Errore durante il test: ' + error.message);
+            });
         }
         
         function handleFileImport(event) {
