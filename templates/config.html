@@ -376,6 +376,12 @@
                     </div>
                 </div>
                 <div class="form-group">
+                    <label for="daddy_proxy"><b>Proxy DaddyLive (dedicati):</b></label>
+                    <textarea id="daddy_proxy" name="DADDY_PROXY" rows="2" placeholder="socks5://user:pass@proxy1:1080,http://proxy2:8080,https://proxy3:8080">{{ config.DADDY_PROXY }}</textarea>
+                    <i class="fas fa-star"></i>
+                    <small>Proxy dedicati solo per DaddyLive (SOCKS5, HTTP, HTTPS). Riconoscimento automatico del tipo.</small>
+                </div>
+                <div class="form-group">
                     <label for="no_proxy_domains"><b>Domini senza proxy:</b></label>
                     <input type="text" id="no_proxy_domains" name="NO_PROXY_DOMAINS" value="{{ config.NO_PROXY_DOMAINS }}" placeholder="vavoo.to,newkso.ru,daddylive.sx">
                     <i class="fas fa-ban"></i>
