@@ -134,6 +134,12 @@ La cache verrà disabilitata immediatamente senza bisogno di riavviare il server
 5. (Opzionale) Aggiungi `PROXY` per proxy generali.
 6. Dopo ogni modifica alle variabili fai **Factory Rebuild**.
 
+**⚠️ IMPORTANTE: Configurazione HuggingFace**
+- La configurazione viene salvata **in memoria** e non persiste dopo il riavvio
+- Per configurazione permanente, usa i **Secrets di HuggingFace**
+- Il pannello web mostra un avviso quando rileva l'ambiente HuggingFace
+- Usa il pulsante **"Stato Config"** per verificare lo stato della configurazione
+
 #### **Configurazione Ottimizzata per HuggingFace**
 
 Per **HuggingFace Spaces**, è **OBBLIGATORIO** utilizzare questa configurazione ottimizzata. Aggiungi le seguenti variabili nei **Secrets** del tuo Space:
@@ -183,6 +189,23 @@ Dopo il deploy, accedi alla dashboard e configura le seguenti impostazioni ottim
 - **Pre-buffering Intelligente**: Riduce il buffering durante lo streaming
 
 > ⚠️ **IMPORTANTE**: Su HuggingFace Spaces, i proxy SOCKS5 non sono supportati. Usa solo proxy HTTP/HTTPS per `DADDY_PROXY`.
+
+### 🔧 Risoluzione Problemi HuggingFace
+
+**Problema: "La configurazione non si salva"**
+- **Causa**: Su HuggingFace il filesystem è read-only
+- **Soluzione**: La configurazione viene salvata automaticamente in memoria
+- **Verifica**: Usa il pulsante **"Stato Config"** nel pannello web
+
+**Problema: "Configurazione persa dopo riavvio"**
+- **Causa**: La cache in memoria viene cancellata al riavvio
+- **Soluzione**: Usa i **Secrets di HuggingFace** per configurazione permanente
+- **Configurazione**: Imposta `PROXY` e `DADDY_PROXY` nei Secrets
+
+**Problema: "Errore di permessi"**
+- **Causa**: Filesystem HuggingFace non scrivibile
+- **Soluzione**: Il sistema rileva automaticamente l'ambiente e usa la cache in memoria
+- **Verifica**: Controlla i log per il messaggio "Ambiente HuggingFace rilevato"
 
 ---
 
