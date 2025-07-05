@@ -254,6 +254,10 @@ def broadcast_stats():
             stats['proxy_count'] = len(PROXY_LIST)
             stats['timestamp'] = time.time()
             
+            # Aggiungi statistiche client
+            client_stats = client_tracker.get_realtime_stats()
+            stats.update(client_stats)
+            
             socketio.emit('stats_update', stats)
             time.sleep(2)  # Aggiorna ogni 2 secondi
         except Exception as e:
@@ -1489,6 +1493,9 @@ def debug_env():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     """Pagina di login"""
+    # Traccia la richiesta
+    client_tracker.track_request(request, '/login')
+    
     if not check_ip_allowed():
         app.logger.warning(f"Tentativo di accesso da IP non autorizzato: {request.remote_addr}")
         return "Accesso negato: IP non autorizzato", 403
@@ -1499,6 +1506,8 @@ def login():
         if check_auth(username, password):
             session['logged_in'] = True
             session['username'] = username
+            # Traccia la sessione
+            client_tracker.track_session(session.get('_id', str(id(session))), request)
             app.logger.info(f"Login riuscito per utente: {username}")
             return redirect(url_for('dashboard'))
         else:
@@ -1512,6 +1521,9 @@ def login():
 @login_required
 def dashboard():
     """Dashboard avanzata con statistiche di sistema"""
+    # Traccia la richiesta
+    client_tracker.track_request(request, '/dashboard')
+    
     stats = get_system_stats()
     daddy_base_url = get_daddylive_base_url()
     
@@ -1552,6 +1564,9 @@ def admin_logs():
 @app.route('/')
 def index():
     """Pagina principale migliorata con informazioni Vavoo"""
+    # Traccia la richiesta
+    client_tracker.track_request(request, '/')
+    
     stats = get_system_stats()
     base_url = get_daddylive_base_url()
     
@@ -1586,7 +1601,15 @@ def index():
 @app.route('/logout')
 def logout():
     """Logout"""
+    # Traccia la richiesta
+    client_tracker.track_request(request, '/logout')
+    
     username = session.get('username', 'unknown')
+    session_id = session.get('_id', str(id(session)))
+    
+    # Rimuovi la sessione dal tracker
+    client_tracker.remove_session(session_id)
+    
     session.pop('logged_in', None)
     session.pop('username', None)
     app.logger.info(f"Logout per utente: {username}")
@@ -2180,16 +2203,130 @@ def get_stats():
         'active_threads': stats.get('prebuffer_threads', 0)
     }
     
+    # Aggiungi statistiche client
+    client_stats = client_tracker.get_realtime_stats()
+    stats.update(client_stats)
+    
     # Debug log per verificare i dati
-    app.logger.info(f"Stats endpoint chiamato - RAM: {stats.get('ram_usage', 0)}%, Cache: {stats.get('cache_size', '0')}, Sessions: {stats.get('session_count', 0)}, Pre-buffer: {stats.get('prebuffer_streams', 0)} streams")
+    app.logger.info(f"Stats endpoint chiamato - RAM: {stats.get('ram_usage', 0)}%, Cache: {stats.get('cache_size', '0')}, Sessions: {stats.get('session_count', 0)}, Clients: {stats.get('active_clients', 0)}, Pre-buffer: {stats.get('prebuffer_streams', 0)} streams")
     
     return jsonify(stats)
+
+@app.route('/admin/clients')
+@login_required
+def admin_clients():
+    """Pagina di amministrazione per visualizzare i client connessi"""
+    return render_template('clients.html')
+
+@app.route('/admin/clients/stats')
+@login_required
+def get_client_stats():
+    """Endpoint per ottenere statistiche dettagliate sui client"""
+    return jsonify(client_tracker.get_client_stats())
+
+@app.route('/admin/clients/m3u-stats')
+@login_required
+def get_m3u_client_stats():
+    """Endpoint per ottenere statistiche specifiche sui client che usano /proxy/m3u"""
+    try:
+        stats = client_tracker.get_client_stats()
+        
+        # Filtra solo client che usano /proxy/m3u
+        m3u_clients = [client for client in stats['clients'] if client['is_m3u_user']]
+        
+        # Calcola statistiche aggregate
+        total_m3u_requests = sum(client['m3u_requests'] for client in m3u_clients)
+        url_type_counts = {}
+        for client in m3u_clients:
+            for url_type in client['url_types']:
+                url_type_counts[url_type] = url_type_counts.get(url_type, 0) + 1
+        
+        # Top 10 URL più utilizzati
+        url_usage = {}
+        for client in m3u_clients:
+            if client['last_m3u_url']:
+                url = client['last_m3u_url']
+                url_usage[url] = url_usage.get(url, 0) + 1
+        
+        top_urls = sorted(url_usage.items(), key=lambda x: x[1], reverse=True)[:10]
+        
+        m3u_stats = {
+            'total_m3u_clients': len(m3u_clients),
+            'total_m3u_requests': total_m3u_requests,
+            'url_type_distribution': url_type_counts,
+            'top_urls': [{'url': url, 'count': count} for url, count in top_urls],
+            'clients': m3u_clients,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        return jsonify(m3u_stats)
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero statistiche M3U: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nel recupero statistiche: {str(e)}"
+        }), 500
+
+@app.route('/admin/clients/export')
+@login_required
+def export_client_stats():
+    """Esporta le statistiche dei client in formato CSV"""
+    try:
+        stats = client_tracker.get_client_stats()
+        
+        # Crea CSV
+        csv_data = "ID,IP,User Agent,Prima Connessione,Ultima Attività,Tempo Connessione (min),Richieste,Endpoint,Sessione\n"
+        
+        for client in stats['clients']:
+            csv_data += f"{client['id']},{client['ip']},\"{client['user_agent']}\",{client['first_seen']},{client['last_seen']},{client['connection_time_minutes']},{client['requests']},\"{','.join(client['endpoints'])}\",{'Sì' if client['has_session'] else 'No'}\n"
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"client_stats_{timestamp}.csv"
+        
+        return Response(
+            csv_data,
+            mimetype='text/csv',
+            headers={
+                'Content-Disposition': f'attachment; filename={filename}',
+                'Cache-Control': 'no-cache'
+            }
+        )
+    except Exception as e:
+        app.logger.error(f"Errore nell'esportazione statistiche client: {e}")
+        return jsonify({"status": "error", "message": f"Errore nell'esportazione: {str(e)}"}), 500
+
+@app.route('/admin/clients/clear', methods=['POST'])
+@login_required
+def clear_client_stats():
+    """Pulisce le statistiche dei client"""
+    try:
+        with client_tracker.client_lock:
+            cleared_count = len(client_tracker.active_clients)
+            client_tracker.active_clients.clear()
+            client_tracker.session_clients.clear()
+            client_tracker.client_counter = 0
+        
+        app.logger.info(f"Statistiche client pulite: {cleared_count} client rimossi")
+        return jsonify({
+            "status": "success",
+            "message": f"Statistiche client pulite: {cleared_count} client rimossi"
+        })
+    except Exception as e:
+        app.logger.error(f"Errore nella pulizia statistiche client: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore nella pulizia: {str(e)}"
+        }), 500
 
 # --- Route Proxy (mantieni tutte le route proxy esistenti) ---
 
 @app.route('/proxy/vavoo')
 def proxy_vavoo():
     """Route specifica per testare la risoluzione Vavoo"""
+    # Traccia la richiesta
+    client_tracker.track_request(request, '/proxy/vavoo')
+    
     url = request.args.get('url', '').strip()
     if not url:
         return jsonify({
@@ -2236,6 +2373,9 @@ def proxy_vavoo():
 @app.route('/proxy/m3u')
 def proxy_m3u():
     """Proxy per file M3U e M3U8 con supporto DaddyLive 2025, caching intelligente e pre-buffering"""
+    # Traccia la richiesta
+    client_tracker.track_request(request, '/proxy/m3u')
+    
     m3u_url = request.args.get('url', '').strip()
     if not m3u_url:
         return "Errore: Parametro 'url' mancante", 400
@@ -2387,6 +2527,9 @@ def proxy_resolve():
 @app.route('/proxy/ts')
 def proxy_ts():
     """Proxy per segmenti .TS con connessioni persistenti, headers personalizzati, caching e pre-buffering"""
+    # Traccia la richiesta
+    client_tracker.track_request(request, '/proxy/ts')
+    
     ts_url = request.args.get('url', '').strip()
     stream_id = request.args.get('stream_id', '').strip()
     
@@ -2480,6 +2623,9 @@ def proxy_ts():
 @app.route('/proxy')
 def proxy():
     """Proxy per liste M3U che aggiunge automaticamente /proxy/m3u?url= con IP prima dei link"""
+    # Traccia la richiesta
+    client_tracker.track_request(request, '/proxy')
+    
     m3u_url = request.args.get('url', '').strip()
     if not m3u_url:
         return "Errore: Parametro 'url' mancante", 400
@@ -2581,6 +2727,9 @@ def proxy():
 @app.route('/proxy/key')
 def proxy_key():
     """Proxy per la chiave AES-128 con headers personalizzati e caching"""
+    # Traccia la richiesta
+    client_tracker.track_request(request, '/proxy/key')
+    
     key_url = request.args.get('url', '').strip()
     if not key_url:
         return "Errore: Parametro 'url' mancante per la chiave", 400
@@ -2636,6 +2785,179 @@ app.logger.info("Configurazione pre-buffer inizializzata con successo")
 # Inizializza le cache
 setup_all_caches()
 setup_proxies()
+
+# --- Sistema di Tracking Client Connessi ---
+class ClientTracker:
+    def __init__(self):
+        self.active_clients = {}  # {client_id: {'ip': ip, 'user_agent': ua, 'first_seen': timestamp, 'last_seen': timestamp, 'requests': 0, 'endpoints': set()}}
+        self.client_lock = Lock()
+        self.client_counter = 0
+        self.session_clients = {}  # {session_id: client_id} per tracking sessioni Flask
+    
+    def get_client_id(self, request):
+        """Genera un ID univoco per il client"""
+        # Usa IP + User-Agent per identificare client unici
+        ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR'))
+        user_agent = request.headers.get('User-Agent', 'Unknown')
+        
+        # Crea un hash per identificare client unici
+        client_hash = hashlib.md5(f"{ip}:{user_agent}".encode()).hexdigest()[:12]
+        return client_hash
+    
+    def track_request(self, request, endpoint):
+        """Traccia una richiesta da un client"""
+        client_id = self.get_client_id(request)
+        current_time = time.time()
+        ip = request.environ.get('HTTP_X_FORWARDED_FOR', request.environ.get('REMOTE_ADDR'))
+        user_agent = request.headers.get('User-Agent', 'Unknown')
+        
+        # Estrai informazioni aggiuntive per /proxy/m3u
+        additional_info = {}
+        if endpoint == '/proxy/m3u':
+            url_param = request.args.get('url', '')
+            if url_param:
+                additional_info['last_m3u_url'] = url_param
+                # Categorizza il tipo di URL
+                if 'vavoo.to' in url_param.lower():
+                    additional_info['url_type'] = 'vavoo'
+                elif 'newkso.ru' in url_param.lower() or '/stream-' in url_param.lower():
+                    additional_info['url_type'] = 'daddylive'
+                elif '.m3u8' in url_param.lower():
+                    additional_info['url_type'] = 'm3u8'
+                elif '.m3u' in url_param.lower():
+                    additional_info['url_type'] = 'm3u'
+                else:
+                    additional_info['url_type'] = 'other'
+        
+        with self.client_lock:
+            if client_id not in self.active_clients:
+                self.active_clients[client_id] = {
+                    'ip': ip,
+                    'user_agent': user_agent,
+                    'first_seen': current_time,
+                    'last_seen': current_time,
+                    'requests': 0,
+                    'endpoints': set(),
+                    'session_id': None,
+                    'm3u_requests': 0,
+                    'last_m3u_url': None,
+                    'url_types': set(),
+                    'additional_info': {}
+                }
+                self.client_counter += 1
+                app.logger.info(f"Nuovo client connesso: {ip} (ID: {client_id})")
+            
+            # Aggiorna statistiche
+            client = self.active_clients[client_id]
+            client['last_seen'] = current_time
+            client['requests'] += 1
+            client['endpoints'].add(endpoint)
+            
+            # Aggiorna statistiche specifiche per M3U
+            if endpoint == '/proxy/m3u':
+                client['m3u_requests'] += 1
+                if 'last_m3u_url' in additional_info:
+                    client['last_m3u_url'] = additional_info['last_m3u_url']
+                if 'url_type' in additional_info:
+                    client['url_types'].add(additional_info['url_type'])
+            
+            # Aggiorna informazioni aggiuntive
+            client['additional_info'].update(additional_info)
+    
+    def track_session(self, session_id, request):
+        """Traccia una sessione Flask"""
+        client_id = self.get_client_id(request)
+        with self.client_lock:
+            self.session_clients[session_id] = client_id
+            if client_id in self.active_clients:
+                self.active_clients[client_id]['session_id'] = session_id
+    
+    def remove_session(self, session_id):
+        """Rimuove una sessione"""
+        with self.client_lock:
+            if session_id in self.session_clients:
+                client_id = self.session_clients[session_id]
+                if client_id in self.active_clients:
+                    self.active_clients[client_id]['session_id'] = None
+                del self.session_clients[session_id]
+    
+    def cleanup_inactive_clients(self, timeout=300):  # 5 minuti di inattività
+        """Rimuove client inattivi"""
+        current_time = time.time()
+        with self.client_lock:
+            inactive_clients = []
+            for client_id, client_data in self.active_clients.items():
+                if current_time - client_data['last_seen'] > timeout:
+                    inactive_clients.append(client_id)
+            
+            for client_id in inactive_clients:
+                client_data = self.active_clients[client_id]
+                app.logger.info(f"Client disconnesso: {client_data['ip']} (ID: {client_id}) - Inattivo per {timeout}s")
+                del self.active_clients[client_id]
+                self.client_counter -= 1
+    
+    def get_client_stats(self):
+        """Restituisce statistiche sui client"""
+        with self.client_lock:
+            current_time = time.time()
+            stats = {
+                'total_clients': len(self.active_clients),
+                'total_sessions': len(self.session_clients),
+                'client_counter': self.client_counter,
+                'clients': []
+            }
+            
+            for client_id, client_data in self.active_clients.items():
+                # Calcola tempo di connessione
+                connection_time = current_time - client_data['first_seen']
+                last_activity = current_time - client_data['last_seen']
+                
+                stats['clients'].append({
+                    'id': client_id,
+                    'ip': client_data['ip'],
+                    'user_agent': client_data['user_agent'][:50] + '...' if len(client_data['user_agent']) > 50 else client_data['user_agent'],
+                    'first_seen': datetime.fromtimestamp(client_data['first_seen']).strftime('%H:%M:%S'),
+                    'last_seen': datetime.fromtimestamp(client_data['last_seen']).strftime('%H:%M:%S'),
+                    'connection_time_minutes': round(connection_time / 60, 1),
+                    'last_activity_seconds': round(last_activity, 1),
+                    'requests': client_data['requests'],
+                    'm3u_requests': client_data.get('m3u_requests', 0),
+                    'endpoints': list(client_data['endpoints']),
+                    'has_session': client_data['session_id'] is not None,
+                    'last_m3u_url': client_data.get('last_m3u_url'),
+                    'url_types': list(client_data.get('url_types', set())),
+                    'is_m3u_user': '/proxy/m3u' in client_data['endpoints']
+                })
+            
+            # Ordina per ultima attività
+            stats['clients'].sort(key=lambda x: x['last_activity_seconds'])
+            return stats
+    
+    def get_realtime_stats(self):
+        """Statistiche in tempo reale per WebSocket"""
+        with self.client_lock:
+            return {
+                'active_clients': len(self.active_clients),
+                'active_sessions': len(self.session_clients),
+                'total_requests': sum(client['requests'] for client in self.active_clients.values()),
+                'timestamp': time.time()
+            }
+
+# Istanza globale del tracker
+client_tracker = ClientTracker()
+
+# Thread per pulizia client inattivi
+def cleanup_clients_thread():
+    while True:
+        try:
+            client_tracker.cleanup_inactive_clients()
+            time.sleep(60)  # Controlla ogni minuto
+        except Exception as e:
+            app.logger.error(f"Errore nella pulizia client: {e}")
+            time.sleep(300)
+
+cleanup_clients_thread_instance = Thread(target=cleanup_clients_thread, daemon=True)
+cleanup_clients_thread_instance.start()
 
 
 
