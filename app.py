@@ -850,11 +850,33 @@ class ConfigManager:
         elif os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r') as f:
-                    file_config = json.load(f)
-                    config.update(file_config)
-                app.logger.info(f"Configurazione caricata dal file: {self.config_file}")
+                    content = f.read().strip()
+                    if not content:
+                        app.logger.warning(f"File di configurazione vuoto: {self.config_file}")
+                        # Ricrea il file con configurazione di default
+                        self.save_config(self.default_config)
+                        app.logger.info(f"File di configurazione ricreato con valori di default")
+                    else:
+                        file_config = json.loads(content)
+                        config.update(file_config)
+                        app.logger.info(f"Configurazione caricata dal file: {self.config_file}")
+            except json.JSONDecodeError as e:
+                app.logger.error(f"Errore JSON nel file di configurazione: {e}")
+                app.logger.info("Ricreo il file di configurazione con valori di default")
+                # Backup del file corrotto
+                backup_file = f"{self.config_file}.backup.{int(time.time())}"
+                try:
+                    import shutil
+                    shutil.copy2(self.config_file, backup_file)
+                    app.logger.info(f"Backup del file corrotto salvato come: {backup_file}")
+                except Exception as backup_error:
+                    app.logger.error(f"Errore nel backup del file corrotto: {backup_error}")
+                
+                # Ricrea il file con configurazione di default
+                self.save_config(self.default_config)
             except Exception as e:
-                app.logger.error(f"Errore nel caricamento della configurazione: {e}")
+                app.logger.error(f"Errore generico nel caricamento della configurazione: {e}")
+                app.logger.info("Uso configurazione di default")
         
         # Gestione proxy unificati
         proxy_keys = ['PROXY', 'DADDY_PROXY']
@@ -4181,6 +4203,65 @@ def test_github_connection():
         return jsonify({
             'status': 'error',
             'message': f'Errore generico nel test GitHub: {str(e)}'
+        }), 500
+
+@app.route('/admin/debug/repair-config', methods=['POST'])
+@login_required
+def repair_config():
+    """Ripara il file di configurazione corrotto"""
+    try:
+        config_status = config_manager.get_config_status()
+        
+        if config_status['file_exists']:
+            # Prova a leggere il file
+            try:
+                with open(config_manager.config_file, 'r') as f:
+                    content = f.read().strip()
+                    if not content:
+                        raise ValueError("File vuoto")
+                    json.loads(content)  # Testa se è JSON valido
+                
+                return jsonify({
+                    'status': 'success',
+                    'message': 'File di configurazione è valido',
+                    'config_status': config_status
+                })
+                
+            except (json.JSONDecodeError, ValueError) as e:
+                # File corrotto, ricrealo
+                app.logger.warning(f"File di configurazione corrotto, ricreo: {e}")
+                
+                # Backup del file corrotto
+                backup_file = f"{config_manager.config_file}.backup.{int(time.time())}"
+                try:
+                    import shutil
+                    shutil.copy2(config_manager.config_file, backup_file)
+                    app.logger.info(f"Backup salvato: {backup_file}")
+                except Exception as backup_error:
+                    app.logger.error(f"Errore backup: {backup_error}")
+                
+                # Ricrea il file
+                config_manager.save_config(config_manager.default_config)
+                
+                return jsonify({
+                    'status': 'success',
+                    'message': f'File di configurazione riparato. Backup: {backup_file}',
+                    'config_status': config_manager.get_config_status()
+                })
+        else:
+            # File non esiste, crealo
+            config_manager.save_config(config_manager.default_config)
+            return jsonify({
+                'status': 'success',
+                'message': 'File di configurazione creato con valori di default',
+                'config_status': config_manager.get_config_status()
+            })
+            
+    except Exception as e:
+        app.logger.error(f"Errore nella riparazione configurazione: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore nella riparazione: {str(e)}'
         }), 500
 
 @app.route('/admin/debug/websocket-status')
