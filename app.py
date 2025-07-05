@@ -736,10 +736,14 @@ class ConfigManager:
     
     def apply_config_to_app(self, config):
         """Applica la configurazione all'app Flask"""
+        proxy_keys = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']
+        
         for key, value in config.items():
             if hasattr(app, 'config'):
                 app.config[key] = value
-            os.environ[key] = str(value)
+            # Non impostare le variabili d'ambiente per i proxy per evitare conflitti
+            if key not in proxy_keys:
+                os.environ[key] = str(value)
         return True
 
 config_manager = ConfigManager()
@@ -1283,6 +1287,9 @@ def get_proxy_with_fallback(url, max_retries=3):
 def create_robust_session():
     """Crea una sessione con configurazione robusta e keep-alive per connessioni persistenti."""
     session = requests.Session()
+    
+    # Ignora le variabili d'ambiente proxy per evitare conflitti
+    session.trust_env = False
     
     # Configurazione Keep-Alive
     session.headers.update({
