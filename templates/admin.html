@@ -384,6 +384,25 @@
                     </button>
                 </div>
             </div>
+            
+            <div class="admin-card">
+                <h3><i class="fas fa-network-wired"></i> Gestione Proxy</h3>
+                <p>Monitora e gestisci i proxy con blacklist automatica per errori 429</p>
+                <div class="btn-group">
+                    <button class="btn btn-small" onclick="showProxyStatus()">
+                        <i class="fas fa-chart-line"></i>
+                        Stato
+                    </button>
+                    <button class="btn btn-small" onclick="clearProxyBlacklist()">
+                        <i class="fas fa-unlock"></i>
+                        Pulisci Blacklist
+                    </button>
+                    <button class="btn btn-small" onclick="testProxies()">
+                        <i class="fas fa-play"></i>
+                        Test
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
     
@@ -666,6 +685,122 @@ Configurazione:
                     alert('Errore nella pulizia memoria: ' + error.message);
                 });
             }
+        }
+
+        // Funzioni per il monitoraggio proxy
+        function showProxyStatus() {
+            const btn = event.target;
+            btn.classList.add('loading');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Caricando...';
+            
+            fetch('/admin/proxy/status', {
+                credentials: 'include',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-chart-line"></i> Stato';
+                
+                if(data.status === 'success') {
+                    const status = data;
+                    let blacklistDetails = '';
+                    
+                    if(status.blacklisted_proxies > 0) {
+                        blacklistDetails = '\n\nProxy in Blacklist:\n';
+                        Object.entries(status.blacklist_info).forEach(([proxy, info]) => {
+                            blacklistDetails += `- ${proxy}: ${info.error_count} errori ${info.error_type} (fino alle ${info.blacklisted_until})\n`;
+                        });
+                    }
+                    
+                    const message = `Stato Proxy:
+                    
+Proxy totali: ${status.total_proxies}
+Proxy disponibili: ${status.available_proxies}
+Proxy in blacklist: ${status.blacklisted_proxies}${blacklistDetails}`;
+                    
+                    alert(message);
+                } else {
+                    alert('Errore nel recupero stato proxy: ' + data.message);
+                }
+            })
+            .catch(error => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-chart-line"></i> Stato';
+                alert('Errore nel recupero stato proxy: ' + error.message);
+            });
+        }
+
+        function clearProxyBlacklist() {
+            if(confirm('Sei sicuro di voler pulire la blacklist dei proxy?')) {
+                const btn = event.target;
+                btn.classList.add('loading');
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Pulendo...';
+                
+                fetch('/admin/proxy/clear-blacklist', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    btn.classList.remove('loading');
+                    if(data.status === 'success') {
+                        btn.innerHTML = '<i class="fas fa-check"></i> Pulito!';
+                        setTimeout(() => {
+                            btn.innerHTML = '<i class="fas fa-unlock"></i> Pulisci Blacklist';
+                        }, 2000);
+                        alert('Blacklist proxy pulita: ' + data.message);
+                    } else {
+                        btn.innerHTML = '<i class="fas fa-unlock"></i> Pulisci Blacklist';
+                        alert('Errore: ' + data.message);
+                    }
+                })
+                .catch(error => {
+                    btn.classList.remove('loading');
+                    btn.innerHTML = '<i class="fas fa-unlock"></i> Pulisci Blacklist';
+                    alert('Errore nella pulizia blacklist: ' + error.message);
+                });
+            }
+        }
+
+        function testProxies() {
+            const btn = event.target;
+            btn.classList.add('loading');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando...';
+            
+            fetch('/admin/config/test', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.classList.remove('loading');
+                if(data.status === 'success') {
+                    btn.innerHTML = '<i class="fas fa-check"></i> Test OK!';
+                    setTimeout(() => {
+                        btn.innerHTML = '<i class="fas fa-play"></i> Test Proxy';
+                    }, 2000);
+                    alert('Test proxy completato. Controlla i log per i dettagli.');
+                } else {
+                    btn.innerHTML = '<i class="fas fa-play"></i> Test Proxy';
+                    alert('Errore nel test: ' + data.message);
+                }
+            })
+            .catch(error => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-play"></i> Test Proxy';
+                alert('Errore nel test proxy: ' + error.message);
+            });
         }
     </script>
 </body>
