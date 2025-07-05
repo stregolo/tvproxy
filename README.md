@@ -174,7 +174,7 @@ Dopo il deploy, accedi alla dashboard e configura le seguenti impostazioni ottim
 
 **Pre-buffering ottimizzato**
 - **PREBUFFER_EMERGENCY_THRESHOLD**: 99.9
-- **PREBUFFER_MAX_SEGMENTS**: 4
+- **PREBUFFER_MAX_SEGMENTS**: 5
 - **PREBUFFER_MAX_SIZE_MB**: 200
 - **PREBUFFER_MAX_MEMORY_PERCENT**: 30
 
