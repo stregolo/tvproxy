@@ -1,0 +1,30 @@
+# Escludi file di dati per evitare sovrascritture
+data/blocked_ips.json
+data/blocked_ips.json.backup
+
+# Escludi log
+logs/
+
+# Escludi file temporanei
+*.tmp
+*.temp
+
+# Escludi cache Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# Escludi file di sistema
+.DS_Store
+Thumbs.db
+
+# Escludi file di IDE
+.vscode/
+.idea/
+*.swp
+*.swo 
