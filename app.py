@@ -2472,6 +2472,40 @@ def export_blocked_ips():
         app.logger.error(f"Errore nell'esportazione IP bloccati: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/admin/blocked-ips/status')
+@login_required
+def get_blocked_ips_status():
+    """Restituisce lo stato della persistenza degli IP bloccati"""
+    try:
+        blocked_ips_file = client_tracker.blocked_ips_file
+        data_dir = os.path.dirname(blocked_ips_file)
+        
+        status = {
+            'data_directory_exists': os.path.exists(data_dir),
+            'data_directory_path': data_dir,
+            'blocked_ips_file_exists': os.path.exists(blocked_ips_file),
+            'blocked_ips_file_path': blocked_ips_file,
+            'backup_file_exists': os.path.exists(f"{blocked_ips_file}.backup"),
+            'total_blocked_ips': len(client_tracker.get_blocked_ips()),
+            'directory_writable': os.access(data_dir, os.W_OK) if os.path.exists(data_dir) else False,
+            'file_writable': os.access(blocked_ips_file, os.W_OK) if os.path.exists(blocked_ips_file) else False
+        }
+        
+        if os.path.exists(blocked_ips_file):
+            try:
+                file_stat = os.stat(blocked_ips_file)
+                status.update({
+                    'file_size': file_stat.st_size,
+                    'last_modified': datetime.fromtimestamp(file_stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                })
+            except Exception as e:
+                status['file_info_error'] = str(e)
+        
+        return jsonify({'success': True, 'status': status})
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero stato persistenza: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 # --- Route Proxy (mantieni tutte le route proxy esistenti) ---
 
 @app.route('/proxy/vavoo')
@@ -2933,6 +2967,18 @@ def proxy_key():
 
 # --- Inizializzazione dell'app ---
 
+# Crea le directory necessarie per la persistenza
+def ensure_data_directories():
+    """Crea le directory necessarie per la persistenza dei dati"""
+    directories = ['data', 'logs']
+    for directory in directories:
+        if not os.path.exists(directory):
+            os.makedirs(directory, exist_ok=True)
+            app.logger.info(f"Creata directory: {directory}")
+
+# Crea le directory all'avvio
+ensure_data_directories()
+
 # Carica e applica la configurazione salvata al startup
 saved_config = config_manager.load_config()
 config_manager.apply_config_to_app(saved_config)
@@ -3125,6 +3171,12 @@ class ClientTracker:
     def save_blocked_ip_with_reason(self, ip, reason):
         """Salva un IP bloccato con motivo specifico"""
         try:
+            # Crea la directory data se non esiste
+            data_dir = os.path.dirname(self.blocked_ips_file)
+            if not os.path.exists(data_dir):
+                os.makedirs(data_dir, exist_ok=True)
+                app.logger.info(f"Creata directory: {data_dir}")
+            
             # Carica dati esistenti
             existing_data = {}
             if os.path.exists(self.blocked_ips_file):
@@ -3213,6 +3265,12 @@ class ClientTracker:
     def save_blocked_ips(self):
         """Salva gli IP bloccati su file JSON"""
         try:
+            # Crea la directory data se non esiste
+            data_dir = os.path.dirname(self.blocked_ips_file)
+            if not os.path.exists(data_dir):
+                os.makedirs(data_dir, exist_ok=True)
+                app.logger.info(f"Creata directory: {data_dir}")
+            
             with self.blocked_ips_lock:
                 # Carica dati esistenti per mantenere informazioni originali
                 existing_data = {}
