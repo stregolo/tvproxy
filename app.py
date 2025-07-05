@@ -43,7 +43,6 @@ system_stats = {}
 DADDYLIVE_BASE_URL = None
 LAST_FETCH_TIME = 0
 FETCH_INTERVAL = 3600
-client_tracker = None  # Sarà inizializzato dopo la definizione della classe
 
 # --- Funzioni di utilità ---
 def get_system_stats():
@@ -499,7 +498,7 @@ def broadcast_stats():
             
             # Aggiungi statistiche client se disponibile
             try:
-                if client_tracker is not None:
+                if 'client_tracker' in globals():
                     client_stats = client_tracker.get_realtime_stats()
                     stats.update(client_stats)
                 else:
@@ -533,7 +532,7 @@ def handle_connect():
     
     # Aggiungi statistiche client se disponibile
     try:
-        if client_tracker is not None:
+        if 'client_tracker' in globals():
             client_stats = client_tracker.get_realtime_stats()
             stats.update(client_stats)
         else:
@@ -931,13 +930,15 @@ class PreBufferManager:
                         
                         try:
                             # Scarica il segmento
-                            proxy_config = get_proxy_for_url(segment_url)
+                            # Note: These functions are defined later in the file
+                            # They will be available when the class is actually used
+                            proxy_config = globals().get('get_proxy_for_url', lambda x: None)(segment_url)
                             proxy_key = proxy_config['http'] if proxy_config else None
                             
-                            response = make_persistent_request(
+                            response = globals().get('make_persistent_request', lambda *args, **kwargs: None)(
                                 segment_url,
                                 headers=headers,
-                                timeout=get_dynamic_timeout(segment_url),
+                                timeout=globals().get('get_dynamic_timeout', lambda x, y=30: y)(segment_url),
                                 proxy_url=proxy_key,
                                 allow_redirects=True
                             )
@@ -1070,7 +1071,7 @@ class LogManager:
         
         def generate():
             if not os.path.exists(filepath):
-                yield f"data: {json.dumps({'error': 'File non trovato')}\n\n"
+                yield f"data: {json.dumps({'error': 'File non trovato'})}\n\n"
                 return
             
             # Leggi le ultime 50 righe per iniziare
@@ -1105,42 +1106,6 @@ KEY_CACHE = {}
 # Pool globale di sessioni per connessioni persistenti
 SESSION_POOL = {}
 SESSION_LOCK = Lock()
-
-def get_system_stats():
-    """Ottiene le statistiche di sistema in tempo reale"""
-    global system_stats
-    
-    # Memoria RAM
-    memory = psutil.virtual_memory()
-    system_stats['ram_usage'] = memory.percent
-    system_stats['ram_used_gb'] = memory.used / (1024**3)  # GB
-    system_stats['ram_total_gb'] = memory.total / (1024**3)  # GB
-    
-    # Utilizzo di rete
-    net_io = psutil.net_io_counters()
-    system_stats['network_sent'] = net_io.bytes_sent / (1024**2)  # MB
-    system_stats['network_recv'] = net_io.bytes_recv / (1024**2)  # MB
-    
-    # Statistiche pre-buffer
-    try:
-        with pre_buffer_manager.pre_buffer_lock:
-            total_segments = sum(len(segments) for segments in pre_buffer_manager.pre_buffer.values())
-            total_size = sum(
-                sum(len(content) for content in segments.values())
-                for segments in pre_buffer_manager.pre_buffer.values()
-            )
-            system_stats['prebuffer_streams'] = len(pre_buffer_manager.pre_buffer)
-            system_stats['prebuffer_segments'] = total_segments
-            system_stats['prebuffer_size_mb'] = round(total_size / (1024 * 1024), 2)
-            system_stats['prebuffer_threads'] = len(pre_buffer_manager.pre_buffer_threads)
-    except Exception as e:
-        app.logger.error(f"Errore nel calcolo statistiche pre-buffer: {e}")
-        system_stats['prebuffer_streams'] = 0
-        system_stats['prebuffer_segments'] = 0
-        system_stats['prebuffer_size_mb'] = 0
-        system_stats['prebuffer_threads'] = 0
-    
-    return system_stats
 
 def monitor_bandwidth():
     """Monitora la banda di rete in background"""
@@ -1412,44 +1377,6 @@ setup_all_caches()
 DADDYLIVE_BASE_URL = None
 LAST_FETCH_TIME = 0
 FETCH_INTERVAL = 3600
-
-def get_daddylive_base_url():
-    """Fetches and caches the dynamic base URL for DaddyLive."""
-    global DADDYLIVE_BASE_URL, LAST_FETCH_TIME
-    current_time = time.time()
-    
-    if DADDYLIVE_BASE_URL and (current_time - LAST_FETCH_TIME < FETCH_INTERVAL):
-        return DADDYLIVE_BASE_URL
-
-    try:
-        app.logger.info("Fetching dynamic DaddyLive base URL from GitHub...")
-        github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
-        
-        # Always use direct connection for GitHub to avoid proxy rate limiting (429 errors)
-        session = requests.Session()
-        session.trust_env = False  # Ignore environment proxy variables
-        main_url_req = session.get(
-            github_url,
-            timeout=REQUEST_TIMEOUT,
-            verify=VERIFY_SSL
-        )
-        main_url_req.raise_for_status()
-        content = main_url_req.text
-        match = re.search(r'src\s*=\s*"([^"]*)"', content)
-        if match:
-            base_url = match.group(1)
-            if not base_url.endswith('/'):
-                base_url += '/'
-            DADDYLIVE_BASE_URL = base_url
-            LAST_FETCH_TIME = current_time
-            app.logger.info(f"Dynamic DaddyLive base URL updated to: {DADDYLIVE_BASE_URL}")
-            return DADDYLIVE_BASE_URL
-    except requests.RequestException as e:
-        app.logger.error(f"Error fetching dynamic DaddyLive URL: {e}. Using fallback.")
-    
-    DADDYLIVE_BASE_URL = "https://daddylive.sx/"
-    app.logger.info(f"Using fallback DaddyLive URL: {DADDYLIVE_BASE_URL}")
-    return DADDYLIVE_BASE_URL
 
 get_daddylive_base_url()
 
@@ -1804,8 +1731,8 @@ def login():
     """Pagina di login"""
     # Traccia la richiesta se client_tracker è disponibile
     try:
-        if 'client_tracker' in globals():
-            client_tracker.track_request(request, '/login')
+        if 'client_tracker' in globals() and client_tracker is not None:
+            getattr(client_tracker, 'track_request', lambda *args, **kwargs: None)(request, '/login')
     except Exception as e:
         app.logger.warning(f"Errore nel tracking richiesta login: {e}")
     
@@ -3408,7 +3335,7 @@ class ClientTracker:
                 'timestamp': time.time()
             }
 
-# Istanza globale del tracker
+# Istanza globale del tracker - inizializzata subito dopo la definizione della classe
 client_tracker = ClientTracker()
 
 # Thread per pulizia client inattivi
@@ -3423,92 +3350,6 @@ def cleanup_clients_thread():
 
 cleanup_clients_thread_instance = Thread(target=cleanup_clients_thread, daemon=True)
 cleanup_clients_thread_instance.start()
-
-# --- Sistema di Blacklist Proxy per Errori 429 ---
-PROXY_BLACKLIST = {}  # {proxy_url: {'last_error': timestamp, 'error_count': count, 'blacklisted_until': timestamp}}
-PROXY_BLACKLIST_LOCK = Lock()
-BLACKLIST_DURATION = 300  # 5 minuti di blacklist per errore 429
-MAX_ERRORS_BEFORE_PERMANENT = 5  # Dopo 5 errori, blacklist permanente per 1 ora
-
-def add_proxy_to_blacklist(proxy_url, error_type="429"):
-    """Aggiunge un proxy alla blacklist temporanea"""
-    global PROXY_BLACKLIST
-    
-    with PROXY_BLACKLIST_LOCK:
-        current_time = time.time()
-        
-        if proxy_url not in PROXY_BLACKLIST:
-            PROXY_BLACKLIST[proxy_url] = {
-                'last_error': current_time,
-                'error_count': 1,
-                'blacklisted_until': current_time + BLACKLIST_DURATION,
-                'error_type': error_type
-            }
-        else:
-            # Incrementa il contatore errori
-            PROXY_BLACKLIST[proxy_url]['error_count'] += 1
-            PROXY_BLACKLIST[proxy_url]['last_error'] = current_time
-            
-            # Se troppi errori, blacklist più lunga
-            if PROXY_BLACKLIST[proxy_url]['error_count'] >= MAX_ERRORS_BEFORE_PERMANENT:
-                PROXY_BLACKLIST[proxy_url]['blacklisted_until'] = current_time + 3600  # 1 ora
-                app.logger.warning(f"Proxy {proxy_url} blacklistato permanentemente per {MAX_ERRORS_BEFORE_PERMANENT} errori {error_type}")
-            else:
-                PROXY_BLACKLIST[proxy_url]['blacklisted_until'] = current_time + BLACKLIST_DURATION
-            
-            PROXY_BLACKLIST[proxy_url]['error_type'] = error_type
-        
-        app.logger.info(f"Proxy {proxy_url} blacklistato fino a {datetime.fromtimestamp(PROXY_BLACKLIST[proxy_url]['blacklisted_until']).strftime('%H:%M:%S')} per {error_type} errori")
-        
-        # Log dettagliato per debug
-        app.logger.info(f"Blacklist proxy aggiornata: {len(PROXY_BLACKLIST)} proxy totali, {len(get_available_proxies())} disponibili")
-
-def is_proxy_blacklisted(proxy_url):
-    """Verifica se un proxy è in blacklist"""
-    global PROXY_BLACKLIST
-    
-    with PROXY_BLACKLIST_LOCK:
-        if proxy_url not in PROXY_BLACKLIST:
-            return False
-        
-        current_time = time.time()
-        blacklist_info = PROXY_BLACKLIST[proxy_url]
-        
-        # Se il periodo di blacklist è scaduto, rimuovi dalla blacklist
-        if current_time > blacklist_info['blacklisted_until']:
-            del PROXY_BLACKLIST[proxy_url]
-            app.logger.info(f"Proxy {proxy_url} rimosso dalla blacklist (scaduto)")
-            return False
-        
-        return True
-
-def get_available_proxies():
-    """Restituisce solo i proxy non blacklistati"""
-    available_proxies = []
-    
-    for proxy in PROXY_LIST:
-        if not is_proxy_blacklisted(proxy):
-            available_proxies.append(proxy)
-    
-    return available_proxies
-
-def cleanup_expired_blacklist():
-    """Pulisce la blacklist dai proxy scaduti"""
-    global PROXY_BLACKLIST
-    
-    with PROXY_BLACKLIST_LOCK:
-        current_time = time.time()
-        expired_proxies = []
-        
-        for proxy_url, blacklist_info in PROXY_BLACKLIST.items():
-            if current_time > blacklist_info['blacklisted_until']:
-                expired_proxies.append(proxy_url)
-        
-        for proxy_url in expired_proxies:
-            del PROXY_BLACKLIST[proxy_url]
-            app.logger.info(f"Proxy {proxy_url} rimosso dalla blacklist (scaduto)")
-    
-    return len(expired_proxies)
 
 def get_proxy_for_url(url):
     config = config_manager.load_config()
