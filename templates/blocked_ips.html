@@ -105,6 +105,9 @@
                     <button class="btn btn-sm btn-outline-info ms-2" onclick="checkPersistenceStatus()">
                         <i class="fas fa-check-circle"></i> Verifica Stato
                     </button>
+                    <button class="btn btn-sm btn-outline-success ms-2" onclick="initializeFile()">
+                        <i class="fas fa-file-plus"></i> Inizializza File
+                    </button>
                 </div>
             </div>
 
@@ -504,6 +507,25 @@
                     showAlert(message, alertType);
                 } else {
                     showAlert('Errore nel controllo stato persistenza: ' + data.error, 'danger');
+                }
+            } catch (error) {
+                showAlert('Errore di connessione: ' + error.message, 'danger');
+            }
+        }
+
+        async function initializeFile() {
+            try {
+                const response = await fetch('/admin/blocked-ips/init', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    showAlert(data.message, 'success');
+                    // Ricarica la lista dopo l'inizializzazione
+                    await loadBlockedIPs();
+                } else {
+                    showAlert('Errore nell\'inizializzazione: ' + data.error, 'danger');
                 }
             } catch (error) {
                 showAlert('Errore di connessione: ' + error.message, 'danger');
