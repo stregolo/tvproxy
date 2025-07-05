@@ -37,8 +37,10 @@ load_dotenv()
 
 # --- Variabili globali ---
 PROXY_LIST = []
+DADDY_PROXY_LIST = []  # Proxy dedicati per DaddyLive
 SESSION_POOL = {}
 PROXY_BLACKLIST = {}
+DADDY_PROXY_BLACKLIST = {}  # Blacklist separata per proxy DaddyLive
 system_stats = {}
 DADDYLIVE_BASE_URL = None
 LAST_FETCH_TIME = 0
@@ -398,6 +400,20 @@ def get_proxy_ip_version(proxy_url):
     else:
         return "hostname"  # Dominio invece di IP
 
+def detect_proxy_type(proxy_url):
+    """Riconosce automaticamente il tipo di proxy dall'URL"""
+    proxy_url_lower = proxy_url.lower()
+    
+    if proxy_url_lower.startswith('socks5://') or proxy_url_lower.startswith('socks5h://'):
+        return 'socks5'
+    elif proxy_url_lower.startswith('http://'):
+        return 'http'
+    elif proxy_url_lower.startswith('https://'):
+        return 'https'
+    else:
+        # Se non ha protocollo, assume HTTP
+        return 'http'
+
 # --- Sistema di Blacklist Proxy per Errori 429 ---
 PROXY_BLACKLIST = {}  # {proxy_url: {'last_error': timestamp, 'error_count': count, 'blacklisted_until': timestamp}}
 PROXY_BLACKLIST_LOCK = Lock()
@@ -437,6 +453,39 @@ def add_proxy_to_blacklist(proxy_url, error_type="429"):
         # Log dettagliato per debug
         app.logger.info(f"Blacklist proxy aggiornata: {len(PROXY_BLACKLIST)} proxy totali, {len(get_available_proxies())} disponibili")
 
+def add_daddy_proxy_to_blacklist(proxy_url, error_type="429"):
+    """Aggiunge un proxy DaddyLive alla blacklist temporanea"""
+    global DADDY_PROXY_BLACKLIST
+    
+    with PROXY_BLACKLIST_LOCK:
+        current_time = time.time()
+        
+        if proxy_url not in DADDY_PROXY_BLACKLIST:
+            DADDY_PROXY_BLACKLIST[proxy_url] = {
+                'last_error': current_time,
+                'error_count': 1,
+                'blacklisted_until': current_time + BLACKLIST_DURATION,
+                'error_type': error_type
+            }
+        else:
+            # Incrementa il contatore errori
+            DADDY_PROXY_BLACKLIST[proxy_url]['error_count'] += 1
+            DADDY_PROXY_BLACKLIST[proxy_url]['last_error'] = current_time
+            
+            # Se troppi errori, blacklist più lunga
+            if DADDY_PROXY_BLACKLIST[proxy_url]['error_count'] >= MAX_ERRORS_BEFORE_PERMANENT:
+                DADDY_PROXY_BLACKLIST[proxy_url]['blacklisted_until'] = current_time + 3600  # 1 ora
+                app.logger.warning(f"Proxy DaddyLive {proxy_url} blacklistato permanentemente per {MAX_ERRORS_BEFORE_PERMANENT} errori {error_type}")
+            else:
+                DADDY_PROXY_BLACKLIST[proxy_url]['blacklisted_until'] = current_time + BLACKLIST_DURATION
+            
+            DADDY_PROXY_BLACKLIST[proxy_url]['error_type'] = error_type
+        
+        app.logger.info(f"Proxy DaddyLive {proxy_url} blacklistato fino a {datetime.fromtimestamp(DADDY_PROXY_BLACKLIST[proxy_url]['blacklisted_until']).strftime('%H:%M:%S')} per {error_type} errori")
+        
+        # Log dettagliato per debug
+        app.logger.info(f"Blacklist proxy DaddyLive aggiornata: {len(DADDY_PROXY_BLACKLIST)} proxy totali, {len(get_available_daddy_proxies())} disponibili")
+
 def is_proxy_blacklisted(proxy_url):
     """Verifica se un proxy è in blacklist"""
     global PROXY_BLACKLIST
@@ -456,6 +505,25 @@ def is_proxy_blacklisted(proxy_url):
         
         return True
 
+def is_daddy_proxy_blacklisted(proxy_url):
+    """Verifica se un proxy DaddyLive è in blacklist"""
+    global DADDY_PROXY_BLACKLIST
+    
+    with PROXY_BLACKLIST_LOCK:
+        if proxy_url not in DADDY_PROXY_BLACKLIST:
+            return False
+        
+        current_time = time.time()
+        blacklist_info = DADDY_PROXY_BLACKLIST[proxy_url]
+        
+        # Se il periodo di blacklist è scaduto, rimuovi dalla blacklist
+        if current_time > blacklist_info['blacklisted_until']:
+            del DADDY_PROXY_BLACKLIST[proxy_url]
+            app.logger.info(f"Proxy DaddyLive {proxy_url} rimosso dalla blacklist (scaduto)")
+            return False
+        
+        return True
+
 def get_available_proxies():
     """Restituisce solo i proxy non blacklistati"""
     available_proxies = []
@@ -466,14 +534,26 @@ def get_available_proxies():
     
     return available_proxies
 
+def get_available_daddy_proxies():
+    """Restituisce solo i proxy DaddyLive non blacklistati"""
+    available_proxies = []
+    
+    for proxy in DADDY_PROXY_LIST:
+        if not is_daddy_proxy_blacklisted(proxy):
+            available_proxies.append(proxy)
+    
+    return available_proxies
+
 def cleanup_expired_blacklist():
     """Pulisce la blacklist dai proxy scaduti"""
-    global PROXY_BLACKLIST
+    global PROXY_BLACKLIST, DADDY_PROXY_BLACKLIST
     
     with PROXY_BLACKLIST_LOCK:
         current_time = time.time()
         expired_proxies = []
+        expired_daddy_proxies = []
         
+        # Pulisci blacklist proxy normali
         for proxy_url, blacklist_info in PROXY_BLACKLIST.items():
             if current_time > blacklist_info['blacklisted_until']:
                 expired_proxies.append(proxy_url)
@@ -481,8 +561,17 @@ def cleanup_expired_blacklist():
         for proxy_url in expired_proxies:
             del PROXY_BLACKLIST[proxy_url]
             app.logger.info(f"Proxy {proxy_url} rimosso dalla blacklist (scaduto)")
+        
+        # Pulisci blacklist proxy DaddyLive
+        for proxy_url, blacklist_info in DADDY_PROXY_BLACKLIST.items():
+            if current_time > blacklist_info['blacklisted_until']:
+                expired_daddy_proxies.append(proxy_url)
+        
+        for proxy_url in expired_daddy_proxies:
+            del DADDY_PROXY_BLACKLIST[proxy_url]
+            app.logger.info(f"Proxy DaddyLive {proxy_url} rimosso dalla blacklist (scaduto)")
     
-    return len(expired_proxies)
+    return len(expired_proxies) + len(expired_daddy_proxies)
 
 # Sistema di broadcasting per statistiche real-time
 def broadcast_stats():
@@ -510,13 +599,34 @@ def broadcast_stats():
                 if ip_version in available_ip_stats:
                     available_ip_stats[ip_version] += 1
             
+            # Calcola statistiche proxy DaddyLive
+            available_daddy_proxies = get_available_daddy_proxies()
+            daddy_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+            for proxy in DADDY_PROXY_LIST:
+                ip_version = get_proxy_ip_version(proxy)
+                if ip_version in daddy_ip_stats:
+                    daddy_ip_stats[ip_version] += 1
+            
+            available_daddy_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+            for proxy in available_daddy_proxies:
+                ip_version = get_proxy_ip_version(proxy)
+                if ip_version in available_daddy_ip_stats:
+                    available_daddy_ip_stats[ip_version] += 1
+            
             stats['proxy_status'] = {
                 'available_proxies': len(available_proxies),
                 'blacklisted_proxies': len(PROXY_BLACKLIST),
                 'total_proxies': len(PROXY_LIST),
+                'available_daddy_proxies': len(available_daddy_proxies),
+                'blacklisted_daddy_proxies': len(DADDY_PROXY_BLACKLIST),
+                'total_daddy_proxies': len(DADDY_PROXY_LIST),
                 'ip_statistics': {
                     'total': ip_stats,
                     'available': available_ip_stats
+                },
+                'daddy_ip_statistics': {
+                    'total': daddy_ip_stats,
+                    'available': available_daddy_ip_stats
                 }
             }
             
@@ -641,6 +751,7 @@ class ConfigManager:
             'SOCKS5_PROXY': '',
             'HTTP_PROXY': '',
             'HTTPS_PROXY': '',
+            'DADDY_PROXY': '',  # Proxy dedicati per DaddyLive
             'REQUEST_TIMEOUT': 30,
             'VERIFY_SSL': False,
             'KEEP_ALIVE_TIMEOUT': 300,
@@ -681,7 +792,7 @@ class ConfigManager:
                 app.logger.error(f"Errore nel caricamento della configurazione: {e}")
         
         # Combina proxy da variabili d'ambiente con quelli del file
-        proxy_keys = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']
+        proxy_keys = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY', 'DADDY_PROXY']
         
         for key in config.keys():
             if key not in proxy_keys:
@@ -750,7 +861,7 @@ class ConfigManager:
     
     def apply_config_to_app(self, config):
         """Applica la configurazione all'app Flask"""
-        proxy_keys = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY']
+        proxy_keys = ['SOCKS5_PROXY', 'HTTP_PROXY', 'HTTPS_PROXY', 'DADDY_PROXY']
         
         for key, value in config.items():
             if hasattr(app, 'config'):
@@ -1205,12 +1316,17 @@ PROXY_LIST = []
 
 def setup_proxies():
     """Carica la lista di proxy SOCKS5, HTTP e HTTPS dalle variabili d'ambiente."""
-    global PROXY_LIST
+    global PROXY_LIST, DADDY_PROXY_LIST
     proxies_found = []
+    daddy_proxies_found = []
     ipv4_count = 0
     ipv6_count = 0
     hostname_count = 0
+    daddy_ipv4_count = 0
+    daddy_ipv6_count = 0
+    daddy_hostname_count = 0
 
+    # Configurazione proxy normali
     socks_proxy_list_str = os.environ.get('SOCKS5_PROXY')
     if socks_proxy_list_str:
         raw_socks_list = [p.strip() for p in socks_proxy_list_str.split(',') if p.strip()]
@@ -1269,16 +1385,61 @@ def setup_proxies():
                     hostname_count += 1
             proxies_found.extend(https_proxies)
 
+    # Configurazione proxy DaddyLive
+    daddy_proxy_list_str = os.environ.get('DADDY_PROXY')
+    if daddy_proxy_list_str:
+        daddy_proxies = [p.strip() for p in daddy_proxy_list_str.split(',') if p.strip()]
+        if daddy_proxies:
+            app.logger.info(f"Trovati {len(daddy_proxies)} proxy DaddyLive. Verranno usati solo per DaddyLive.")
+            for proxy in daddy_proxies:
+                # Riconosci automaticamente il tipo di proxy
+                proxy_type = detect_proxy_type(proxy)
+                
+                # Normalizza l'URL del proxy
+                final_proxy_url = proxy
+                if proxy_type == 'socks5' and proxy.startswith('socks5://'):
+                    final_proxy_url = 'socks5h' + proxy[len('socks5'):]
+                    app.logger.info(f"Proxy DaddyLive SOCKS5 convertito per garantire la risoluzione DNS remota")
+                elif proxy_type == 'socks5' and not proxy.startswith('socks5h://'):
+                    app.logger.warning(f"ATTENZIONE: Il proxy DaddyLive SOCKS5 non è in formato valido: {proxy}")
+                elif proxy_type == 'http' and not proxy.startswith('http://'):
+                    final_proxy_url = 'http://' + proxy
+                elif proxy_type == 'https' and not proxy.startswith('https://'):
+                    final_proxy_url = 'https://' + proxy
+                
+                # Analizza il tipo di IP
+                ip_version = get_proxy_ip_version(final_proxy_url)
+                if ip_version == "IPv6":
+                    daddy_ipv6_count += 1
+                    app.logger.info(f"Proxy DaddyLive IPv6 rilevato: {final_proxy_url} ({proxy_type})")
+                elif ip_version == "IPv4":
+                    daddy_ipv4_count += 1
+                else:
+                    daddy_hostname_count += 1
+                
+                daddy_proxies_found.append(final_proxy_url)
+                app.logger.info(f"Proxy DaddyLive configurato: {final_proxy_url} (tipo: {proxy_type})")
+
     PROXY_LIST = proxies_found
+    DADDY_PROXY_LIST = daddy_proxies_found
 
     if PROXY_LIST:
-        app.logger.info(f"Totale di {len(PROXY_LIST)} proxy configurati:")
+        app.logger.info(f"Totale di {len(PROXY_LIST)} proxy normali configurati:")
         app.logger.info(f"  - IPv4: {ipv4_count}")
         app.logger.info(f"  - IPv6: {ipv6_count}")
         app.logger.info(f"  - Hostname: {hostname_count}")
         app.logger.info("Verranno usati a rotazione per ogni richiesta.")
     else:
-        app.logger.info("Nessun proxy (SOCKS5, HTTP, HTTPS) configurato.")
+        app.logger.info("Nessun proxy normale (SOCKS5, HTTP, HTTPS) configurato.")
+    
+    if DADDY_PROXY_LIST:
+        app.logger.info(f"Totale di {len(DADDY_PROXY_LIST)} proxy DaddyLive configurati:")
+        app.logger.info(f"  - IPv4: {daddy_ipv4_count}")
+        app.logger.info(f"  - IPv6: {daddy_ipv6_count}")
+        app.logger.info(f"  - Hostname: {daddy_hostname_count}")
+        app.logger.info("Verranno usati solo per richieste DaddyLive.")
+    else:
+        app.logger.info("Nessun proxy DaddyLive configurato.")
 
 
 
@@ -2485,9 +2646,11 @@ def get_stats():
     stats['daddy_base_url'] = get_daddylive_base_url()
     stats['session_count'] = len(SESSION_POOL)
     stats['proxy_count'] = len(PROXY_LIST)
+    stats['daddy_proxy_count'] = len(DADDY_PROXY_LIST)
     
     # Aggiungi statistiche proxy
     available_proxies = get_available_proxies()
+    available_daddy_proxies = get_available_daddy_proxies()
     
     # Calcola statistiche IP
     ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
@@ -2502,13 +2665,33 @@ def get_stats():
         if ip_version in available_ip_stats:
             available_ip_stats[ip_version] += 1
     
+    # Calcola statistiche proxy DaddyLive
+    daddy_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+    for proxy in DADDY_PROXY_LIST:
+        ip_version = get_proxy_ip_version(proxy)
+        if ip_version in daddy_ip_stats:
+            daddy_ip_stats[ip_version] += 1
+    
+    available_daddy_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+    for proxy in available_daddy_proxies:
+        ip_version = get_proxy_ip_version(proxy)
+        if ip_version in available_daddy_ip_stats:
+            available_daddy_ip_stats[ip_version] += 1
+    
     stats['proxy_status'] = {
         'available_proxies': len(available_proxies),
         'blacklisted_proxies': len(PROXY_BLACKLIST),
         'total_proxies': len(PROXY_LIST),
+        'available_daddy_proxies': len(available_daddy_proxies),
+        'blacklisted_daddy_proxies': len(DADDY_PROXY_BLACKLIST),
+        'total_daddy_proxies': len(DADDY_PROXY_LIST),
         'ip_statistics': {
             'total': ip_stats,
             'available': available_ip_stats
+        },
+        'daddy_ip_statistics': {
+            'total': daddy_ip_stats,
+            'available': available_daddy_ip_stats
         }
     }
     
@@ -3446,12 +3629,30 @@ def get_proxy_for_url(url, original_url=None):
     # Pulisci blacklist scaduta
     cleanup_expired_blacklist()
     
-    # Ottieni solo proxy disponibili (non blacklistati)
-    available_proxies = get_available_proxies()
+    # Determina se è una richiesta DaddyLive
+    is_daddylive_request = (
+        'newkso.ru' in url.lower() or 
+        '/stream-' in url.lower() or
+        (original_url and ('newkso.ru' in original_url.lower() or '/stream-' in original_url.lower()))
+    )
+    
+    # Ottieni proxy appropriati
+    if is_daddylive_request and DADDY_PROXY_LIST:
+        available_proxies = get_available_daddy_proxies()
+        proxy_type = "DaddyLive"
+    else:
+        available_proxies = get_available_proxies()
+        proxy_type = "normale"
     
     if not available_proxies:
-        app.logger.warning("Nessun proxy disponibile (tutti in blacklist)")
-        return None
+        if is_daddylive_request:
+            app.logger.warning("Nessun proxy DaddyLive disponibile, uso proxy normali")
+            available_proxies = get_available_proxies()
+            proxy_type = "normale (fallback)"
+        
+        if not available_proxies:
+            app.logger.warning("Nessun proxy disponibile (tutti in blacklist)")
+            return None
     
     try:
         # Controlla prima l'URL finale
@@ -3471,6 +3672,7 @@ def get_proxy_for_url(url, original_url=None):
         app.logger.warning(f"Errore nel parsing URL per NO_PROXY_DOMAINS: {e}")
     
     chosen_proxy = random.choice(available_proxies)
+    app.logger.debug(f"Proxy {proxy_type} selezionato per {url}: {chosen_proxy}")
     return {'http': chosen_proxy, 'https': chosen_proxy}
 
 def safe_http_request(url, headers=None, timeout=None, proxies=None, **kwargs):
@@ -3510,7 +3712,13 @@ def safe_http_request(url, headers=None, timeout=None, proxies=None, **kwargs):
                 
                 if proxy_url:
                     app.logger.warning(f"Proxy {proxy_url} ha restituito errore 429 (tentativo {attempt + 1}/{max_retries})")
-                    add_proxy_to_blacklist(proxy_url, "429")
+                    
+                    # Determina se è un proxy DaddyLive
+                    is_daddy_proxy = proxy_url in DADDY_PROXY_LIST
+                    if is_daddy_proxy:
+                        add_daddy_proxy_to_blacklist(proxy_url, "429")
+                    else:
+                        add_proxy_to_blacklist(proxy_url, "429")
                     
                     # Prova con un nuovo proxy se disponibile
                     if attempt < max_retries - 1:
