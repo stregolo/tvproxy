@@ -197,6 +197,20 @@
             font-weight: 500;
             animation: slideIn 0.3s ease;
         }
+        
+        .alert-info {
+            background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
+            color: white;
+            border: 1px solid rgba(23, 162, 184, 0.3);
+        }
+        
+        .alert-info code {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
 
         @keyframes slideIn {
             from {
@@ -349,31 +363,13 @@
             <div class="config-section">
                 <h3><i class="fas fa-network-wired"></i> Configurazioni Proxy</h3>
                 <div class="form-group">
-                    <label for="socks5_proxy">Proxy SOCKS5:</label>
-                    <textarea id="socks5_proxy" name="SOCKS5_PROXY" rows="3" placeholder="socks5://user:pass@proxy1:1080,socks5://user:pass@proxy2:1080">{{ config.SOCKS5_PROXY }}</textarea>
-                    <i class="fas fa-shield-alt"></i>
-                    <small>Lista di proxy SOCKS5 separati da virgola<br>
-                    <strong>Supporto IPv6:</strong> socks5://user:pass@[2001:db8::1]:1080</small>
-                </div>
-                <div class="row">
-                    <div class="col">
-                        <div class="form-group">
-                            <label for="http_proxy">Proxy HTTP:</label>
-                            <textarea id="http_proxy" name="HTTP_PROXY" rows="2" placeholder="http://proxy1:8080,http://proxy2:8080">{{ config.HTTP_PROXY }}</textarea>
-                            <i class="fas fa-globe"></i>
-                            <small>Lista di proxy HTTP separati da virgola<br>
-                            <strong>IPv6:</strong> http://[2001:db8::1]:8080</small>
-                        </div>
-                    </div>
-                    <div class="col">
-                        <div class="form-group">
-                            <label for="https_proxy">Proxy HTTPS:</label>
-                            <textarea id="https_proxy" name="HTTPS_PROXY" rows="2" placeholder="https://proxy1:8080,https://proxy2:8080">{{ config.HTTPS_PROXY }}</textarea>
-                            <i class="fas fa-lock"></i>
-                            <small>Lista di proxy HTTPS separati da virgola<br>
-                            <strong>IPv6:</strong> https://[2001:db8::1]:8080</small>
-                        </div>
-                    </div>
+                    <label for="proxy"><b>Proxy Unificati (PROXY):</b></label>
+                    <textarea id="proxy" name="PROXY" rows="4" placeholder="socks5://user:pass@proxy1:1080,http://user:pass@proxy2:8080,https://user:pass@proxy3:8443">{{ config.PROXY }}</textarea>
+                    <i class="fas fa-network-wired"></i>
+                    <small><strong>Riconoscimento automatico del tipo:</strong> SOCKS5, HTTP, HTTPS<br>
+                    <strong>Formati supportati:</strong> socks5://, http://, https://, host:port (auto-riconosciuto)<br>
+                    <strong>IPv6:</strong> socks5://user:pass@[2001:db8::1]:1080<br>
+                    <strong>Esempio:</strong> socks5://proxy1:1080,proxy2:8080,https://proxy3:8443</small>
                 </div>
                 <div class="form-group">
                     <label for="daddy_proxy"><b>Proxy DaddyLive (dedicati):</b></label>
@@ -386,6 +382,22 @@
                     <input type="text" id="no_proxy_domains" name="NO_PROXY_DOMAINS" value="{{ config.NO_PROXY_DOMAINS }}" placeholder="vavoo.to,newkso.ru,daddylive.sx">
                     <i class="fas fa-ban"></i>
                     <small>Lista di domini separati da virgola per cui NON usare il proxy</small>
+                </div>
+                
+                <!-- Informazioni sulla migrazione -->
+                <div class="alert alert-info" style="display: block; margin-top: 1rem;">
+                    <i class="fas fa-info-circle"></i>
+                    <strong>🔄 Migrazione Proxy Unificati</strong><br>
+                    Il sistema ora utilizza una configurazione proxy unificata con riconoscimento automatico del tipo.
+                    Le vecchie variabili (SOCKS5_PROXY, HTTP_PROXY, HTTPS_PROXY) vengono migrate automaticamente.
+                    <br><br>
+                    <strong>Formati supportati:</strong>
+                    <ul style="margin: 0.5rem 0 0 1.5rem;">
+                        <li><code>socks5://user:pass@host:port</code> - Proxy SOCKS5</li>
+                        <li><code>http://user:pass@host:port</code> - Proxy HTTP</li>
+                        <li><code>https://user:pass@host:port</code> - Proxy HTTPS</li>
+                        <li><code>host:port</code> - Auto-riconosciuto (1080=SOCKS5, 8080=HTTP, 8443=HTTPS)</li>
+                    </ul>
                 </div>
             </div>
             
