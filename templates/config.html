@@ -639,6 +639,9 @@
                     <button type="button" class="btn btn-secondary" onclick="testConfigSave()">
                         <i class="fas fa-vial"></i> Test Salvataggio
                     </button>
+                    <button type="button" class="btn btn-secondary" onclick="testConfigImport()">
+                        <i class="fas fa-vial"></i> Test Importazione
+                    </button>
                     <button type="button" class="btn btn-secondary" onclick="exportConfig()">
                         <i class="fas fa-download"></i> Esporta Config
                     </button>
@@ -898,6 +901,44 @@
             });
         }
         
+        function testConfigImport() {
+            const testBtn = event.target;
+            testBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando...';
+            testBtn.disabled = true;
+            
+            fetch('/admin/debug/test-import', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                testBtn.innerHTML = '<i class="fas fa-vial"></i> Test Importazione';
+                testBtn.disabled = false;
+                
+                if (result.status === 'success') {
+                    const status = result.config_status;
+                    let message = `🧪 <strong>Test Importazione Configurazione</strong><br><br>`;
+                    message += `✅ <strong>Risultato:</strong> ${result.message}<br>`;
+                    message += `🌐 <strong>Ambiente:</strong> ${status.is_huggingface ? 'HuggingFace' : 'Standard'}<br>`;
+                    message += `💾 <strong>Cache Memoria:</strong> ${status.has_memory_cache ? 'Sì' : 'No'}<br>`;
+                    message += `📊 <strong>Chiavi Caricate:</strong> ${result.loaded_keys ? result.loaded_keys.length : 0}<br>`;
+                    message += `🔧 <strong>Fonte Config:</strong> ${status.current_config_source}`;
+                    
+                    showAlert('info', message);
+                } else {
+                    showAlert('error', 'Test importazione fallito: ' + result.message);
+                }
+            })
+            .catch(error => {
+                testBtn.innerHTML = '<i class="fas fa-vial"></i> Test Importazione';
+                testBtn.disabled = false;
+                showAlert('error', 'Errore durante il test: ' + error.message);
+            });
+        }
+        
         function handleFileImport(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -928,11 +969,30 @@
                 importBtn.disabled = false;
                 
                 if (result.status === 'success') {
-                    showAlert('success', result.message);
+                    let message = result.message;
+                    
+                    // Aggiungi informazioni dettagliate per HuggingFace
+                    if (result.is_huggingface) {
+                        message += '<br><br><strong>⚠️ Ambiente HuggingFace:</strong><br>';
+                        message += '• Configurazione salvata in memoria<br>';
+                        message += '• Non persisterà dopo il riavvio<br>';
+                        message += '• Per configurazione permanente, usa i Secrets';
+                    }
+                    
+                    // Aggiungi statistiche dell'importazione
+                    if (result.imported_keys && result.current_keys) {
+                        message += `<br><br><strong>📊 Statistiche Importazione:</strong><br>`;
+                        message += `• Chiavi importate: ${result.imported_keys.length}<br>`;
+                        message += `• Chiavi attuali: ${result.current_keys.length}<br>`;
+                        message += `• Fonte: ${result.config_status?.current_config_source || 'sconosciuta'}`;
+                    }
+                    
+                    showAlert('info', message);
+                    
                     // Ricarica la pagina per mostrare i nuovi valori
                     setTimeout(() => {
                         location.reload();
-                    }, 1500);
+                    }, 3000); // Aumentato il tempo per leggere le informazioni
                 } else {
                     showAlert('error', result.message);
                 }
