@@ -1,6 +1,6 @@
 flask
 requests
-gunicorn
+gunicorn[eventlet]
 python-dotenv
 cachetools
 PySocks
