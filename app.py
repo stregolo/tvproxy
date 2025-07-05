@@ -2523,6 +2523,37 @@ def get_blocked_ips_status():
         app.logger.error(f"Errore nel recupero stato persistenza: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/admin/blocked-ips/init', methods=['POST'])
+@login_required
+def initialize_blocked_ips_file():
+    """Inizializza il file blocked_ips.json se non esiste"""
+    try:
+        blocked_ips_file = client_tracker.blocked_ips_file
+        data_dir = os.path.dirname(blocked_ips_file)
+        
+        # Crea directory se non esiste
+        if not os.path.exists(data_dir):
+            os.makedirs(data_dir, exist_ok=True)
+            app.logger.info(f"Creata directory: {data_dir}")
+        
+        # Crea file se non esiste
+        if not os.path.exists(blocked_ips_file):
+            initial_data = {
+                "blocked_ips": {},
+                "last_updated": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "total_blocked": 0
+            }
+            with open(blocked_ips_file, 'w', encoding='utf-8') as f:
+                json.dump(initial_data, f, indent=2, ensure_ascii=False)
+            app.logger.info(f"Creato file iniziale: {blocked_ips_file}")
+            return jsonify({'success': True, 'message': 'File inizializzato con successo'})
+        else:
+            return jsonify({'success': True, 'message': 'File già esistente'})
+            
+    except Exception as e:
+        app.logger.error(f"Errore nell'inizializzazione file: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 # --- Route Proxy (mantieni tutte le route proxy esistenti) ---
 
 @app.route('/proxy/vavoo')
