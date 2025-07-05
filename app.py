@@ -1108,7 +1108,8 @@ def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, **k
         return response
     except requests.exceptions.ProxyError as e:
         # Gestione specifica per errori proxy (incluso 429)
-        if "429" in str(e) and proxy_url:
+        error_str = str(e).lower()
+        if ("429" in error_str or "too many requests" in error_str) and proxy_url:
             app.logger.warning(f"Proxy {proxy_url} ha restituito errore 429, aggiungendo alla blacklist")
             add_proxy_to_blacklist(proxy_url, "429")
         app.logger.error(f"Errore proxy nella richiesta persistente: {e}")
@@ -1334,10 +1335,14 @@ def resolve_m3u8_link(url, headers=None):
     try:
         app.logger.info("Ottengo URL base dinamico...")
         github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
-        main_url_req = requests.get(
+        
+        # Crea una sessione che ignora le variabili d'ambiente per forzare connessione diretta
+        session = requests.Session()
+        session.trust_env = False  # Ignora HTTP_PROXY, HTTPS_PROXY environment variables
+        
+        main_url_req = session.get(
             github_url,
             timeout=REQUEST_TIMEOUT,
-            proxies=None,  # Force direct connection for GitHub to avoid rate limiting
             verify=VERIFY_SSL
         )
         main_url_req.raise_for_status()
@@ -3165,7 +3170,10 @@ def add_proxy_to_blacklist(proxy_url, error_type="429"):
             
             PROXY_BLACKLIST[proxy_url]['error_type'] = error_type
         
-        app.logger.info(f"Proxy {proxy_url} blacklistato fino a {datetime.fromtimestamp(PROXY_BLACKLIST[proxy_url]['blacklisted_until']).strftime('%H:%M:%S')}")
+        app.logger.info(f"Proxy {proxy_url} blacklistato fino a {datetime.fromtimestamp(PROXY_BLACKLIST[proxy_url]['blacklisted_until']).strftime('%H:%M:%S')} per {error_type} errori")
+        
+        # Log dettagliato per debug
+        app.logger.info(f"Blacklist proxy aggiornata: {len(PROXY_BLACKLIST)} proxy totali, {len(get_available_proxies())} disponibili")
 
 def is_proxy_blacklisted(proxy_url):
     """Verifica se un proxy è in blacklist"""
@@ -3264,7 +3272,8 @@ def safe_http_request(url, headers=None, timeout=None, proxies=None, **kwargs):
             
         except requests.exceptions.ProxyError as e:
             # Gestione specifica per errori proxy (incluso 429)
-            if "429" in str(e) and proxies:
+            error_str = str(e).lower()
+            if ("429" in error_str or "too many requests" in error_str) and proxies:
                 # Estrai l'URL del proxy dall'errore
                 proxy_url = None
                 if isinstance(proxies, dict):
@@ -3374,6 +3383,52 @@ def cleanup_blacklist_thread():
 
 cleanup_blacklist_thread_instance = Thread(target=cleanup_blacklist_thread, daemon=True)
 cleanup_blacklist_thread_instance.start()
+
+@app.route('/admin/test/github', methods=['POST'])
+@login_required
+def test_github_connection():
+    """Testa la connessione diretta a GitHub senza proxy"""
+    try:
+        github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
+        
+        # Test con connessione diretta (senza proxy)
+        session = requests.Session()
+        session.trust_env = False  # Ignora variabili d'ambiente proxy
+        
+        start_time = time.time()
+        response = session.get(github_url, timeout=10, verify=VERIFY_SSL)
+        end_time = time.time()
+        
+        if response.status_code == 200:
+            return jsonify({
+                'status': 'success',
+                'message': f'Connessione diretta a GitHub OK in {end_time - start_time:.2f}s',
+                'response_time': round(end_time - start_time, 2),
+                'status_code': response.status_code,
+                'content_length': len(response.text)
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': f'GitHub risponde con status {response.status_code}',
+                'status_code': response.status_code
+            })
+            
+    except requests.exceptions.Timeout:
+        return jsonify({
+            'status': 'error',
+            'message': 'Timeout nella connessione diretta a GitHub'
+        }), 500
+    except requests.exceptions.ConnectionError as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore di connessione diretta a GitHub: {str(e)}'
+        }), 500
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore generico nel test GitHub: {str(e)}'
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
