@@ -1,6 +1,8 @@
 # Escludi file di dati per evitare sovrascritture
 data/blocked_ips.json
 data/blocked_ips.json.backup
+data/proxy_config.json
+data/proxy_config.json.backup
 
 # Escludi log
 logs/
