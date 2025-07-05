@@ -207,6 +207,7 @@ class VavooResolver:
                 headers=headers,
                 timeout=10,
                 proxy_url=proxy_key,
+                method='POST',
                 json=data
             )
             resp.raise_for_status()
@@ -256,6 +257,7 @@ class VavooResolver:
                 headers=headers,
                 timeout=10,
                 proxy_url=proxy_key,
+                method='POST',
                 json=data
             )
             resp.raise_for_status()
@@ -1350,7 +1352,7 @@ def get_persistent_session(proxy_url=None):
         
         return SESSION_POOL[pool_key]
 
-def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, **kwargs):
+def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, method='GET', **kwargs):
     """Effettua una richiesta usando connessioni persistenti"""
     session = get_persistent_session(proxy_url)
     
@@ -1364,13 +1366,22 @@ def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, **k
         request_headers.update(headers)
     
     try:
-        response = session.get(
-            url, 
-            headers=request_headers, 
-            timeout=timeout or REQUEST_TIMEOUT,
-            verify=VERIFY_SSL,
-            **kwargs
-        )
+        if method.upper() == 'POST':
+            response = session.post(
+                url, 
+                headers=request_headers, 
+                timeout=timeout or REQUEST_TIMEOUT,
+                verify=VERIFY_SSL,
+                **kwargs
+            )
+        else:
+            response = session.get(
+                url, 
+                headers=request_headers, 
+                timeout=timeout or REQUEST_TIMEOUT,
+                verify=VERIFY_SSL,
+                **kwargs
+            )
         return response
     except requests.exceptions.ProxyError as e:
         # Gestione specifica per errori proxy (incluso 429)
