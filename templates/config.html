@@ -235,6 +235,12 @@
             color: #e53e3e;
         }
 
+        .alert-warning {
+            background: rgba(255, 193, 7, 0.1);
+            border: 1px solid rgba(255, 193, 7, 0.2);
+            color: #d69e2e;
+        }
+
         .row {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -610,6 +616,10 @@
                 <i class="fas fa-info-circle"></i> Informazioni.
             </div>
             
+            <div class="alert alert-warning" id="warningAlert" style="display: none;">
+                <i class="fas fa-exclamation-triangle"></i> Avviso.
+            </div>
+            
             <div class="alert alert-info" id="huggingfaceAlert" style="display: none;">
                 <i class="fas fa-cloud"></i> <strong>Ambiente HuggingFace Rilevato</strong><br>
                 La configurazione viene salvata in memoria e non persisterà dopo il riavvio del server.<br>
@@ -771,7 +781,7 @@
             if (!alert) {
                 console.error(`Elemento alert ${type}Alert non trovato`);
                 // Fallback: mostra un alert del browser
-                alert(message);
+                window.alert(message);
                 return;
             }
             
@@ -780,6 +790,7 @@
             if (type === 'success') icon = 'check-circle';
             else if (type === 'error') icon = 'exclamation-triangle';
             else if (type === 'info') icon = 'info-circle';
+            else if (type === 'warning') icon = 'exclamation-triangle';
             
             alert.innerHTML = `<i class="fas fa-${icon}"></i> ${message}`;
             alert.style.display = 'block';
