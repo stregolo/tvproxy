@@ -1146,15 +1146,15 @@ def get_daddylive_base_url():
         app.logger.info("Fetching dynamic DaddyLive base URL from GitHub...")
         github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
         
-        # Force direct connection for GitHub (no proxy)
-        response = requests.get(
+        # Always use direct connection for GitHub to avoid proxy rate limiting (429 errors)
+        main_url_req = requests.get(
             github_url,
             timeout=REQUEST_TIMEOUT,
-            proxies=None,  # Force direct connection
+            proxies=None,  # Force direct connection for GitHub to avoid rate limiting
             verify=VERIFY_SSL
         )
-        response.raise_for_status()
-        content = response.text
+        main_url_req.raise_for_status()
+        content = main_url_req.text
         match = re.search(r'src\s*=\s*"([^"]*)"', content)
         if match:
             base_url = match.group(1)
@@ -1328,7 +1328,7 @@ def resolve_m3u8_link(url, headers=None):
         main_url_req = requests.get(
             github_url,
             timeout=REQUEST_TIMEOUT,
-            proxies=get_proxy_for_url(github_url),
+            proxies=None,  # Force direct connection for GitHub to avoid rate limiting
             verify=VERIFY_SSL
         )
         main_url_req.raise_for_status()
