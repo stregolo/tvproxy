@@ -46,6 +46,11 @@ DADDYLIVE_BASE_URL = None
 LAST_FETCH_TIME = 0
 FETCH_INTERVAL = 3600
 
+# --- Sincronizzazione Sessioni tra Workers ---
+SESSION_SYNC_FILE = '/tmp/tvproxy_sessions.json'
+SESSION_SYNC_LOCK = Lock()
+SESSION_SYNC_INTERVAL = 30  # Sincronizzazione ogni 30 secondi
+
 # --- Funzioni di utilità ---
 def get_system_stats():
     """Ottiene le statistiche di sistema in tempo reale (sincronizzate tra workers)"""
@@ -367,9 +372,35 @@ def login_required(f):
     def decorated_function(*args, **kwargs):
         if not check_ip_allowed():
             return "Accesso negato: IP non autorizzato", 403
-        if 'logged_in' not in session:
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
+        
+        # Controlla prima la sessione locale
+        if 'logged_in' in session and session['logged_in']:
+            return f(*args, **kwargs)
+        
+        # Se non c'è sessione locale e la sincronizzazione è attiva, controlla le sessioni globali
+        if config_manager._use_global_sync:
+            try:
+                global_sessions = load_sessions_from_global()
+                current_time = time.time()
+                
+                # Cerca una sessione valida (non scaduta)
+                for session_id, session_data in global_sessions.items():
+                    if (session_data.get('logged_in') and 
+                        session_data.get('worker_id') != os.getpid() and
+                        current_time - session_data.get('last_activity', 0) <= 300):  # 5 minuti
+                        
+                        # Applica la sessione globale alla sessione locale
+                        session['logged_in'] = True
+                        session['username'] = session_data.get('username', 'unknown')
+                        session['_id'] = session_id
+                        app.logger.debug(f"Sessione sincronizzata da worker {session_data.get('worker_id')} per endpoint {request.endpoint}")
+                        return f(*args, **kwargs)
+                        
+            except Exception as e:
+                app.logger.warning(f"Errore nel controllo sessioni globali: {e}")
+        
+        # Se non c'è sessione valida, redirect al login
+        return redirect(url_for('login'))
     return decorated_function
     
 # --- Funzioni di Supporto IPv6 ---
@@ -2052,6 +2083,46 @@ def config_sync_thread():
             app.logger.warning(f"Errore nel thread di sincronizzazione configurazione: {e}")
             time.sleep(30)
 
+# Thread per sincronizzazione sessioni tra workers
+def sync_sessions_thread():
+    """Thread per sincronizzare le sessioni tra workers"""
+    while True:
+        try:
+            time.sleep(SESSION_SYNC_INTERVAL)
+            
+            if config_manager._use_global_sync:
+                # Salva le sessioni locali
+                save_sessions_to_global()
+                
+                # Carica e applica le sessioni globali
+                global_sessions = load_sessions_from_global()
+                current_time = time.time()
+                
+                # Pulisci sessioni scadute (più di 5 minuti)
+                expired_sessions = []
+                for session_id, session_data in global_sessions.items():
+                    if current_time - session_data.get('last_activity', 0) > 300:  # 5 minuti
+                        expired_sessions.append(session_id)
+                
+                for session_id in expired_sessions:
+                    del global_sessions[session_id]
+                
+                # Se ci sono sessioni globali valide, aggiorna la sessione locale
+                if global_sessions and 'logged_in' not in session:
+                    # Prendi la prima sessione valida
+                    for session_id, session_data in global_sessions.items():
+                        if session_data.get('logged_in') and session_data.get('worker_id') != os.getpid():
+                            # Applica la sessione globale alla sessione locale
+                            session['logged_in'] = True
+                            session['username'] = session_data.get('username', 'unknown')
+                            session['_id'] = session_id
+                            app.logger.debug(f"Sessione sincronizzata da worker {session_data.get('worker_id')}")
+                            break
+                            
+        except Exception as e:
+            app.logger.error(f"Errore nel thread sincronizzazione sessioni: {e}")
+            time.sleep(60)  # Aspetta 1 minuto in caso di errore
+
 # Avvia thread di backup solo per HuggingFace
 if config_manager._is_huggingface:
     backup_thread = Thread(target=config_backup_thread, daemon=True)
@@ -2081,6 +2152,13 @@ if config_manager._use_global_sync:
     system_sync_thread = Thread(target=system_stats_sync_thread, daemon=True)
     system_sync_thread.start()
     app.logger.info(f"Thread di sincronizzazione statistiche sistema avviato per {env_name}")
+    
+    # Avvia thread di sincronizzazione sessioni
+    session_sync_thread = Thread(target=sync_sessions_thread, daemon=True)
+    session_sync_thread.start()
+    app.logger.info(f"Thread di sincronizzazione sessioni avviato per {env_name}")
+    
+
 
 # --- Configurazione Proxy ---
 PROXY_LIST = []
@@ -2931,13 +3009,22 @@ def login():
         if check_auth(username, password):
             session['logged_in'] = True
             session['username'] = username
+            session['_id'] = str(id(session))  # ID univoco per la sessione
+            
+            # Sincronizza la sessione con tutti i workers
+            if config_manager._use_global_sync:
+                save_sessions_to_global()
+                app.logger.info(f"Login riuscito per utente: {username} - Sessione sincronizzata su tutti i workers")
+            else:
+                app.logger.info(f"Login riuscito per utente: {username}")
+            
             # Traccia la sessione se client_tracker è disponibile
             try:
                 if 'client_tracker' in globals():
                     client_tracker.track_session(session.get('_id', str(id(session))), request)
             except Exception as e:
                 app.logger.warning(f"Errore nel tracking sessione login: {e}")
-            app.logger.info(f"Login riuscito per utente: {username}")
+            
             return redirect(url_for('dashboard'))
         else:
             app.logger.warning(f"Tentativo di login fallito per utente: {username}")
@@ -3122,9 +3209,33 @@ def logout():
     except Exception as e:
         app.logger.warning(f"Errore nella rimozione sessione logout: {e}")
     
+    # Rimuovi la sessione locale
     session.pop('logged_in', None)
     session.pop('username', None)
-    app.logger.info(f"Logout per utente: {username}")
+    session.pop('_id', None)
+    
+    # Rimuovi la sessione dal file globale se la sincronizzazione è attiva
+    if config_manager._use_global_sync and session_id:
+        try:
+            global_sessions = load_sessions_from_global()
+            if session_id in global_sessions:
+                del global_sessions[session_id]
+                with SESSION_SYNC_LOCK:
+                    with open(SESSION_SYNC_FILE, 'w') as f:
+                        json.dump({
+                            'sessions': global_sessions,
+                            'worker_id': os.getpid(),
+                            'timestamp': time.time()
+                        }, f, indent=4)
+                app.logger.info(f"Logout per utente: {username} - Sessione rimossa da tutti i workers")
+            else:
+                app.logger.info(f"Logout per utente: {username}")
+        except Exception as e:
+            app.logger.warning(f"Errore nella rimozione sessione globale: {e}")
+            app.logger.info(f"Logout per utente: {username}")
+    else:
+        app.logger.info(f"Logout per utente: {username}")
+    
     return redirect(url_for('index'))
 
 @app.route('/admin/config/save', methods=['POST'])
@@ -5670,6 +5781,110 @@ def debug_system_stats_status():
             "status": "error",
             "message": str(e)
         }), 500
+
+@app.route('/admin/debug/session-sync-status')
+@login_required
+def debug_session_sync_status():
+    """Debug dello stato della sincronizzazione sessioni"""
+    try:
+        # Informazioni sulla sincronizzazione
+        sync_info = {
+            "enabled": config_manager._use_global_sync,
+            "file_exists": os.path.exists(SESSION_SYNC_FILE),
+            "file_size": os.path.getsize(SESSION_SYNC_FILE) if os.path.exists(SESSION_SYNC_FILE) else 0,
+            "file_age_seconds": time.time() - os.path.getmtime(SESSION_SYNC_FILE) if os.path.exists(SESSION_SYNC_FILE) else 0
+        }
+        
+        # Sessione locale
+        local_session = {
+            "logged_in": session.get('logged_in', False),
+            "username": session.get('username', 'none'),
+            "session_id": session.get('_id', 'none')
+        }
+        
+        # Sessioni globali se disponibili
+        global_sessions = None
+        if sync_info["enabled"] and sync_info["file_exists"]:
+            global_data = load_sessions_from_global()
+            if global_data:
+                global_sessions = {
+                    "total_sessions": len(global_data),
+                    "active_sessions": len([s for s in global_data.values() if s.get('logged_in')]),
+                    "sessions": global_data
+                }
+        
+        return jsonify({
+            "status": "success",
+            "local_session": local_session,
+            "sync": sync_info,
+            "global_sessions": global_sessions,
+            "current_worker_id": os.getpid(),
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+def save_sessions_to_global():
+    """Salva le sessioni attive nel file globale per sincronizzazione tra workers"""
+    try:
+        if not config_manager._use_global_sync:
+            return False
+        
+        # Raccogli tutte le sessioni attive
+        active_sessions = {}
+        current_time = time.time()
+        
+        # Per ora, salviamo solo le sessioni di login (logged_in=True)
+        # In futuro potremmo estendere per altre informazioni di sessione
+        if 'logged_in' in session and session['logged_in']:
+            session_id = session.get('_id', str(id(session)))
+            active_sessions[session_id] = {
+                'username': session.get('username', 'unknown'),
+                'logged_in': True,
+                'created_at': current_time,
+                'last_activity': current_time,
+                'worker_id': os.getpid()
+            }
+        
+        # Salva nel file globale
+        with SESSION_SYNC_LOCK:
+            try:
+                with open(SESSION_SYNC_FILE, 'w') as f:
+                    json.dump({
+                        'sessions': active_sessions,
+                        'worker_id': os.getpid(),
+                        'timestamp': current_time
+                    }, f, indent=4)
+                return True
+            except Exception as e:
+                app.logger.warning(f"Errore nel salvataggio sessioni globali: {e}")
+                return False
+                
+    except Exception as e:
+        app.logger.error(f"Errore nella sincronizzazione sessioni: {e}")
+        return False
+
+def load_sessions_from_global():
+    """Carica le sessioni dal file globale"""
+    try:
+        if not config_manager._use_global_sync or not os.path.exists(SESSION_SYNC_FILE):
+            return {}
+        
+        with SESSION_SYNC_LOCK:
+            try:
+                with open(SESSION_SYNC_FILE, 'r') as f:
+                    data = json.load(f)
+                    return data.get('sessions', {})
+            except Exception as e:
+                app.logger.warning(f"Errore nel caricamento sessioni globali: {e}")
+                return {}
+                
+    except Exception as e:
+        app.logger.error(f"Errore nel caricamento sessioni: {e}")
+        return {}
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
