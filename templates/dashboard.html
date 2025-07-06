@@ -768,6 +768,9 @@
                             <button class="sync-btn sync-btn-info" onclick="checkSyncPaths()">
                                 <i class="fas fa-folder"></i> Percorsi
                             </button>
+                            <button class="sync-btn sync-btn-danger" onclick="clearStatsCache()">
+                                <i class="fas fa-trash"></i> Pulisci Cache
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -1226,6 +1229,41 @@
                 }
             })
             .catch(error => {
+                showToast('❌ Errore di connessione: ' + error.message);
+            });
+        }
+
+        function clearStatsCache() {
+            const btn = event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Pulendo...';
+            btn.disabled = true;
+            
+            fetch('/admin/debug/clear-stats-cache', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                
+                if (result.status === 'success') {
+                    showToast('✅ Cache statistiche pulita! Ricarica la pagina per vedere i dati aggiornati.');
+                    // Ricarica la pagina dopo 2 secondi
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 2000);
+                } else {
+                    showToast('❌ Errore nella pulizia cache: ' + result.message);
+                }
+            })
+            .catch(error => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
                 showToast('❌ Errore di connessione: ' + error.message);
             });
         }
