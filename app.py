@@ -48,19 +48,22 @@ FETCH_INTERVAL = 3600
 
 # --- Funzioni di utilità ---
 def get_system_stats():
-    """Ottiene le statistiche di sistema in tempo reale"""
+    """Ottiene le statistiche di sistema in tempo reale (sincronizzate tra workers)"""
     global system_stats
+    
+    # Ottieni statistiche locali
+    local_stats = {}
     
     # Memoria RAM
     memory = psutil.virtual_memory()
-    system_stats['ram_usage'] = memory.percent
-    system_stats['ram_used_gb'] = memory.used / (1024**3)  # GB
-    system_stats['ram_total_gb'] = memory.total / (1024**3)  # GB
+    local_stats['ram_usage'] = memory.percent
+    local_stats['ram_used_gb'] = memory.used / (1024**3)  # GB
+    local_stats['ram_total_gb'] = memory.total / (1024**3)  # GB
     
     # Utilizzo di rete
     net_io = psutil.net_io_counters()
-    system_stats['network_sent'] = net_io.bytes_sent / (1024**2)  # MB
-    system_stats['network_recv'] = net_io.bytes_recv / (1024**2)  # MB
+    local_stats['network_sent'] = net_io.bytes_sent / (1024**2)  # MB
+    local_stats['network_recv'] = net_io.bytes_recv / (1024**2)  # MB
     
     # Statistiche pre-buffer
     try:
@@ -70,16 +73,24 @@ def get_system_stats():
                 sum(len(content) for content in segments.values())
                 for segments in pre_buffer_manager.pre_buffer.values()
             )
-            system_stats['prebuffer_streams'] = len(pre_buffer_manager.pre_buffer)
-            system_stats['prebuffer_segments'] = total_segments
-            system_stats['prebuffer_size_mb'] = round(total_size / (1024 * 1024), 2)
-            system_stats['prebuffer_threads'] = len(pre_buffer_manager.pre_buffer_threads)
+            local_stats['prebuffer_streams'] = len(pre_buffer_manager.pre_buffer)
+            local_stats['prebuffer_segments'] = total_segments
+            local_stats['prebuffer_size_mb'] = round(total_size / (1024 * 1024), 2)
+            local_stats['prebuffer_threads'] = len(pre_buffer_manager.pre_buffer_threads)
     except Exception as e:
         app.logger.error(f"Errore nel calcolo statistiche pre-buffer: {e}")
-        system_stats['prebuffer_streams'] = 0
-        system_stats['prebuffer_segments'] = 0
-        system_stats['prebuffer_size_mb'] = 0
-        system_stats['prebuffer_threads'] = 0
+        local_stats['prebuffer_streams'] = 0
+        local_stats['prebuffer_segments'] = 0
+        local_stats['prebuffer_size_mb'] = 0
+        local_stats['prebuffer_threads'] = 0
+    
+    # Aggiorna le statistiche globali
+    system_stats.update(local_stats)
+    
+    # Se la sincronizzazione è abilitata, combina con altri workers
+    if config_manager._use_global_sync:
+        merged_stats = merge_system_stats_from_all_workers()
+        system_stats.update(merged_stats)
     
     return system_stats
 
@@ -439,6 +450,16 @@ PROXY_BLACKLIST_LOCK = Lock()
 BLACKLIST_DURATION = 300  # 5 minuti di blacklist per errore 429
 MAX_ERRORS_BEFORE_PERMANENT = 5  # Dopo 5 errori, blacklist permanente per 1 ora
 
+# --- Sistema di Sincronizzazione Statistiche Client ---
+CLIENT_STATS_FILE = '/tmp/tvproxy_client_stats.json'  # File globale per statistiche client
+CLIENT_STATS_LOCK = Lock()
+CLIENT_STATS_SYNC_INTERVAL = 30  # Sincronizzazione ogni 30 secondi
+
+# --- Sistema di Sincronizzazione Statistiche Sistema ---
+SYSTEM_STATS_FILE = '/tmp/tvproxy_system_stats.json'  # File globale per statistiche sistema
+SYSTEM_STATS_LOCK = Lock()
+SYSTEM_STATS_SYNC_INTERVAL = 10  # Sincronizzazione ogni 10 secondi (più frequente per statistiche real-time)
+
 def add_proxy_to_blacklist(proxy_url, error_type="429"):
     """Aggiunge un proxy alla blacklist temporanea"""
     global PROXY_BLACKLIST
@@ -591,6 +612,226 @@ def cleanup_expired_blacklist():
             app.logger.info(f"Proxy DaddyLive {proxy_url} rimosso dalla blacklist (scaduto)")
     
     return len(expired_proxies) + len(expired_daddy_proxies)
+
+def save_client_stats_to_global():
+    """Salva le statistiche client nel file globale per sincronizzazione tra workers"""
+    try:
+        if 'client_tracker' not in globals():
+            return False
+        
+        with CLIENT_STATS_LOCK:
+            # Ottieni statistiche dal client tracker corrente
+            local_stats = client_tracker.get_client_stats()
+            
+            # Aggiungi informazioni del worker
+            global_stats = {
+                'worker_id': os.getpid(),
+                'worker_timestamp': time.time(),
+                'stats': local_stats
+            }
+            
+            # Salva nel file globale
+            with open(CLIENT_STATS_FILE, 'w') as f:
+                json.dump(global_stats, f, indent=2)
+            
+            return True
+    except Exception as e:
+        app.logger.error(f"Errore nel salvataggio statistiche client globali: {e}")
+        return False
+
+def load_client_stats_from_global():
+    """Carica le statistiche client dal file globale"""
+    try:
+        if not os.path.exists(CLIENT_STATS_FILE):
+            return None
+        
+        with CLIENT_STATS_LOCK:
+            with open(CLIENT_STATS_FILE, 'r') as f:
+                global_stats = json.load(f)
+            
+            # Verifica che il file non sia troppo vecchio (più di 2 minuti)
+            if time.time() - global_stats.get('worker_timestamp', 0) > 120:
+                app.logger.warning("File statistiche client globali troppo vecchio, ignorato")
+                return None
+            
+            return global_stats
+    except Exception as e:
+        app.logger.error(f"Errore nel caricamento statistiche client globali: {e}")
+        return None
+
+def merge_client_stats_from_all_workers():
+    """Combina le statistiche client da tutti i workers"""
+    try:
+        if 'client_tracker' not in globals():
+            return client_tracker.get_client_stats() if 'client_tracker' in globals() else None
+        
+        # Ottieni statistiche locali
+        local_stats = client_tracker.get_client_stats()
+        
+        # Se non usiamo sincronizzazione globale, restituisci solo le statistiche locali
+        if not config_manager._use_global_sync:
+            return local_stats
+        
+        # Carica statistiche globali
+        global_data = load_client_stats_from_global()
+        if not global_data:
+            return local_stats
+        
+        # Combina le statistiche
+        merged_stats = {
+            'total_clients': local_stats['total_clients'],
+            'total_sessions': local_stats['total_sessions'],
+            'client_counter': local_stats['client_counter'],
+            'active_clients': local_stats['active_clients'],
+            'active_sessions': local_stats['active_sessions'],
+            'total_requests': local_stats['total_requests'],
+            'm3u_clients': local_stats['m3u_clients'],
+            'm3u_requests': local_stats['m3u_requests'],
+            'avg_connection_time': local_stats['avg_connection_time'],
+            'clients': local_stats['clients'].copy(),  # Inizia con i client locali
+            'global_worker_id': global_data.get('worker_id'),
+            'global_timestamp': global_data.get('worker_timestamp'),
+            'sync_enabled': True
+        }
+        
+        # Aggiungi client da altri workers (se disponibili)
+        if global_data.get('stats', {}).get('clients'):
+            for global_client in global_data['stats']['clients']:
+                # Evita duplicati basandosi su IP e User Agent
+                client_exists = any(
+                    c['ip'] == global_client['ip'] and c['user_agent'] == global_client['user_agent']
+                    for c in merged_stats['clients']
+                )
+                if not client_exists:
+                    merged_stats['clients'].append(global_client)
+        
+        # Ricalcola statistiche aggregate
+        merged_stats['total_clients'] = len(merged_stats['clients'])
+        merged_stats['total_requests'] = sum(c['requests'] for c in merged_stats['clients'])
+        merged_stats['m3u_requests'] = sum(c.get('m3u_requests', 0) for c in merged_stats['clients'])
+        merged_stats['m3u_clients'] = len([c for c in merged_stats['clients'] if c.get('is_m3u_user', False)])
+        
+        return merged_stats
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella fusione statistiche client: {e}")
+        return local_stats if 'client_tracker' in globals() else None
+
+def client_stats_sync_thread():
+    """Thread per sincronizzare le statistiche client tra workers"""
+    while True:
+        try:
+            if config_manager._use_global_sync and 'client_tracker' in globals():
+                save_client_stats_to_global()
+            time.sleep(CLIENT_STATS_SYNC_INTERVAL)
+        except Exception as e:
+            app.logger.error(f"Errore nel thread di sincronizzazione statistiche client: {e}")
+            time.sleep(60)  # In caso di errore, aspetta 1 minuto
+
+def save_system_stats_to_global():
+    """Salva le statistiche di sistema nel file globale per sincronizzazione tra workers"""
+    try:
+        with SYSTEM_STATS_LOCK:
+            # Ottieni statistiche di sistema locali
+            local_stats = get_system_stats()
+            
+            # Aggiungi informazioni del worker
+            global_stats = {
+                'worker_id': os.getpid(),
+                'worker_timestamp': time.time(),
+                'stats': local_stats
+            }
+            
+            # Salva nel file globale
+            with open(SYSTEM_STATS_FILE, 'w') as f:
+                json.dump(global_stats, f, indent=2)
+            
+            return True
+    except Exception as e:
+        app.logger.error(f"Errore nel salvataggio statistiche sistema globali: {e}")
+        return False
+
+def load_system_stats_from_global():
+    """Carica le statistiche di sistema dal file globale"""
+    try:
+        if not os.path.exists(SYSTEM_STATS_FILE):
+            return None
+        
+        with SYSTEM_STATS_LOCK:
+            with open(SYSTEM_STATS_FILE, 'r') as f:
+                global_stats = json.load(f)
+            
+            # Verifica che il file non sia troppo vecchio (più di 30 secondi per statistiche real-time)
+            if time.time() - global_stats.get('worker_timestamp', 0) > 30:
+                app.logger.warning("File statistiche sistema globali troppo vecchio, ignorato")
+                return None
+            
+            return global_stats
+    except Exception as e:
+        app.logger.error(f"Errore nel caricamento statistiche sistema globali: {e}")
+        return None
+
+def merge_system_stats_from_all_workers():
+    """Combina le statistiche di sistema da tutti i workers"""
+    try:
+        # Ottieni statistiche locali
+        local_stats = get_system_stats()
+        
+        # Se non usiamo sincronizzazione globale, restituisci solo le statistiche locali
+        if not config_manager._use_global_sync:
+            return local_stats
+        
+        # Carica statistiche globali
+        global_data = load_system_stats_from_global()
+        if not global_data:
+            return local_stats
+        
+        # Per le statistiche di sistema, prendiamo i valori più alti o la media
+        global_stats = global_data.get('stats', {})
+        
+        merged_stats = local_stats.copy()
+        
+        # RAM: prendiamo il valore più alto (peggiore caso)
+        if global_stats.get('ram_usage', 0) > local_stats.get('ram_usage', 0):
+            merged_stats['ram_usage'] = global_stats['ram_usage']
+            merged_stats['ram_used_gb'] = global_stats.get('ram_used_gb', local_stats.get('ram_used_gb', 0))
+            merged_stats['ram_total_gb'] = global_stats.get('ram_total_gb', local_stats.get('ram_total_gb', 0))
+        
+        # Banda: sommiamo i valori (tutti i workers contribuiscono)
+        merged_stats['bandwidth_usage'] = local_stats.get('bandwidth_usage', 0) + global_stats.get('bandwidth_usage', 0)
+        merged_stats['network_sent'] = local_stats.get('network_sent', 0) + global_stats.get('network_sent', 0)
+        merged_stats['network_recv'] = local_stats.get('network_recv', 0) + global_stats.get('network_recv', 0)
+        
+        # Pre-buffer: sommiamo i valori (tutti i workers contribuiscono)
+        merged_stats['prebuffer_streams'] = local_stats.get('prebuffer_streams', 0) + global_stats.get('prebuffer_streams', 0)
+        merged_stats['prebuffer_segments'] = local_stats.get('prebuffer_segments', 0) + global_stats.get('prebuffer_segments', 0)
+        merged_stats['prebuffer_size_mb'] = local_stats.get('prebuffer_size_mb', 0) + global_stats.get('prebuffer_size_mb', 0)
+        merged_stats['prebuffer_threads'] = local_stats.get('prebuffer_threads', 0) + global_stats.get('prebuffer_threads', 0)
+        
+        # Aggiungi informazioni di sincronizzazione
+        merged_stats['sync_info'] = {
+            'enabled': True,
+            'global_worker_id': global_data.get('worker_id'),
+            'global_timestamp': global_data.get('worker_timestamp'),
+            'message': f"Statistiche sistema sincronizzate da tutti i workers (Worker {global_data.get('worker_id', 'N/A')})"
+        }
+        
+        return merged_stats
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella fusione statistiche sistema: {e}")
+        return local_stats
+
+def system_stats_sync_thread():
+    """Thread per sincronizzare le statistiche di sistema tra workers"""
+    while True:
+        try:
+            if config_manager._use_global_sync:
+                save_system_stats_to_global()
+            time.sleep(SYSTEM_STATS_SYNC_INTERVAL)
+        except Exception as e:
+            app.logger.error(f"Errore nel thread di sincronizzazione statistiche sistema: {e}")
+            time.sleep(30)  # In caso di errore, aspetta 30 secondi
 
 # Sistema di broadcasting per statistiche real-time
 def broadcast_stats():
@@ -1736,6 +1977,16 @@ if config_manager._use_global_sync:
     else:
         env_name = "Gunicorn con workers multipli"
     app.logger.info(f"Thread di sincronizzazione configurazione avviato per {env_name}")
+    
+    # Avvia thread di sincronizzazione statistiche client
+    client_sync_thread = Thread(target=client_stats_sync_thread, daemon=True)
+    client_sync_thread.start()
+    app.logger.info(f"Thread di sincronizzazione statistiche client avviato per {env_name}")
+    
+    # Avvia thread di sincronizzazione statistiche sistema
+    system_sync_thread = Thread(target=system_stats_sync_thread, daemon=True)
+    system_sync_thread.start()
+    app.logger.info(f"Thread di sincronizzazione statistiche sistema avviato per {env_name}")
 
 # --- Configurazione Proxy ---
 PROXY_LIST = []
@@ -3412,7 +3663,7 @@ def test_prebuffer():
 
 @app.route('/stats')
 def get_stats():
-    """Endpoint per ottenere le statistiche di sistema"""
+    """Endpoint per ottenere le statistiche di sistema (sincronizzate tra workers)"""
     stats = get_system_stats()
     stats['daddy_base_url'] = get_daddylive_base_url()
     stats['session_count'] = len(SESSION_POOL)
@@ -3525,10 +3776,27 @@ def admin_clients():
 @app.route('/admin/clients/stats')
 @login_required
 def get_client_stats():
-    """Endpoint per ottenere statistiche dettagliate sui client"""
+    """Endpoint per ottenere statistiche dettagliate sui client (sincronizzate tra workers)"""
     try:
-        if 'client_tracker' in globals():
-            return jsonify(client_tracker.get_client_stats())
+        # Usa le statistiche sincronizzate se disponibili
+        merged_stats = merge_client_stats_from_all_workers()
+        
+        if merged_stats:
+            # Aggiungi informazioni sulla sincronizzazione
+            if config_manager._use_global_sync:
+                merged_stats['sync_info'] = {
+                    'enabled': True,
+                    'global_worker_id': merged_stats.get('global_worker_id'),
+                    'global_timestamp': merged_stats.get('global_timestamp'),
+                    'message': f"Statistiche sincronizzate da tutti i workers (Worker {merged_stats.get('global_worker_id', 'N/A')})"
+                }
+            else:
+                merged_stats['sync_info'] = {
+                    'enabled': False,
+                    'message': "Sincronizzazione non necessaria (ambiente single-worker)"
+                }
+            
+            return jsonify(merged_stats)
         else:
             return jsonify({
                 'total_clients': 0,
@@ -3540,7 +3808,11 @@ def get_client_stats():
                 'm3u_clients': 0,
                 'm3u_requests': 0,
                 'avg_connection_time': 0,
-                'clients': []
+                'clients': [],
+                'sync_info': {
+                    'enabled': False,
+                    'message': "Client tracker non disponibile"
+                }
             })
     except Exception as e:
         app.logger.error(f"Errore nel recupero statistiche client: {e}")
@@ -3554,25 +3826,36 @@ def get_client_stats():
             'm3u_clients': 0,
             'm3u_requests': 0,
             'avg_connection_time': 0,
-            'clients': []
+            'clients': [],
+            'sync_info': {
+                'enabled': False,
+                'message': f"Errore: {str(e)}"
+            }
         }), 500
 
 @app.route('/admin/clients/m3u-stats')
 @login_required
 def get_m3u_client_stats():
-    """Endpoint per ottenere statistiche specifiche sui client che usano /proxy/m3u"""
+    """Endpoint per ottenere statistiche specifiche sui client che usano /proxy/m3u (sincronizzate tra workers)"""
     try:
-        if 'client_tracker' not in globals():
+        # Usa le statistiche sincronizzate se disponibili
+        merged_stats = merge_client_stats_from_all_workers()
+        
+        if not merged_stats:
             return jsonify({
                 'total_m3u_clients': 0,
                 'total_m3u_requests': 0,
                 'url_type_distribution': {},
                 'top_urls': [],
                 'clients': [],
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'sync_info': {
+                    'enabled': False,
+                    'message': "Client tracker non disponibile"
+                }
             })
         
-        stats = client_tracker.get_client_stats()
+        stats = merged_stats
         
         # Filtra solo client che usano /proxy/m3u
         m3u_clients = [client for client in stats['clients'] if client['is_m3u_user']]
@@ -3601,6 +3884,20 @@ def get_m3u_client_stats():
             'clients': m3u_clients,
             'timestamp': datetime.now().isoformat()
         }
+        
+        # Aggiungi informazioni sulla sincronizzazione
+        if config_manager._use_global_sync:
+            m3u_stats['sync_info'] = {
+                'enabled': True,
+                'global_worker_id': stats.get('global_worker_id'),
+                'global_timestamp': stats.get('global_timestamp'),
+                'message': f"Statistiche M3U sincronizzate da tutti i workers (Worker {stats.get('global_worker_id', 'N/A')})"
+            }
+        else:
+            m3u_stats['sync_info'] = {
+                'enabled': False,
+                'message': "Sincronizzazione non necessaria (ambiente single-worker)"
+            }
         
         return jsonify(m3u_stats)
         
@@ -5160,6 +5457,109 @@ def test_ipv6_proxies():
         return jsonify({
             'status': 'error',
             'message': f'Errore nel test IPv6: {str(e)}'
+        }), 500
+
+@app.route('/admin/debug/client-stats-status')
+@login_required
+def debug_client_stats_status():
+    """Debug dello stato delle statistiche client"""
+    try:
+        # Informazioni sul client tracker
+        client_tracker_info = {
+            "available": 'client_tracker' in globals(),
+            "active_clients": len(client_tracker.active_clients) if 'client_tracker' in globals() else 0,
+            "active_sessions": len(client_tracker.session_clients) if 'client_tracker' in globals() else 0,
+            "client_counter": client_tracker.client_counter if 'client_tracker' in globals() else 0
+        }
+        
+        # Informazioni sulla sincronizzazione
+        sync_info = {
+            "enabled": config_manager._use_global_sync,
+            "file_exists": os.path.exists(CLIENT_STATS_FILE),
+            "file_size": os.path.getsize(CLIENT_STATS_FILE) if os.path.exists(CLIENT_STATS_FILE) else 0,
+            "file_age_seconds": time.time() - os.path.getmtime(CLIENT_STATS_FILE) if os.path.exists(CLIENT_STATS_FILE) else 0
+        }
+        
+        # Statistiche globali se disponibili
+        global_stats = None
+        if sync_info["enabled"] and sync_info["file_exists"]:
+            global_data = load_client_stats_from_global()
+            if global_data:
+                global_stats = {
+                    "worker_id": global_data.get('worker_id'),
+                    "worker_timestamp": global_data.get('worker_timestamp'),
+                    "age_seconds": time.time() - global_data.get('worker_timestamp', 0),
+                    "stats_summary": {
+                        "total_clients": global_data.get('stats', {}).get('total_clients', 0),
+                        "total_requests": global_data.get('stats', {}).get('total_requests', 0),
+                        "m3u_clients": global_data.get('stats', {}).get('m3u_clients', 0)
+                    }
+                }
+        
+        return jsonify({
+            "status": "success",
+            "client_tracker": client_tracker_info,
+            "sync": sync_info,
+            "global_stats": global_stats,
+            "current_worker_id": os.getpid(),
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/admin/debug/system-stats-status')
+@login_required
+def debug_system_stats_status():
+    """Debug dello stato delle statistiche di sistema"""
+    try:
+        # Informazioni sulla sincronizzazione
+        sync_info = {
+            "enabled": config_manager._use_global_sync,
+            "file_exists": os.path.exists(SYSTEM_STATS_FILE),
+            "file_size": os.path.getsize(SYSTEM_STATS_FILE) if os.path.exists(SYSTEM_STATS_FILE) else 0,
+            "file_age_seconds": time.time() - os.path.getmtime(SYSTEM_STATS_FILE) if os.path.exists(SYSTEM_STATS_FILE) else 0
+        }
+        
+        # Statistiche locali
+        local_stats = get_system_stats()
+        
+        # Statistiche globali se disponibili
+        global_stats = None
+        if sync_info["enabled"] and sync_info["file_exists"]:
+            global_data = load_system_stats_from_global()
+            if global_data:
+                global_stats = {
+                    "worker_id": global_data.get('worker_id'),
+                    "worker_timestamp": global_data.get('worker_timestamp'),
+                    "age_seconds": time.time() - global_data.get('worker_timestamp', 0),
+                    "stats_summary": {
+                        "ram_usage": global_data.get('stats', {}).get('ram_usage', 0),
+                        "prebuffer_streams": global_data.get('stats', {}).get('prebuffer_streams', 0),
+                        "prebuffer_threads": global_data.get('stats', {}).get('prebuffer_threads', 0),
+                        "bandwidth_usage": global_data.get('stats', {}).get('bandwidth_usage', 0)
+                    }
+                }
+        
+        return jsonify({
+            "status": "success",
+            "local_stats": {
+                "ram_usage": local_stats.get('ram_usage', 0),
+                "prebuffer_streams": local_stats.get('prebuffer_streams', 0),
+                "prebuffer_threads": local_stats.get('prebuffer_threads', 0),
+                "bandwidth_usage": local_stats.get('bandwidth_usage', 0)
+            },
+            "sync": sync_info,
+            "global_stats": global_stats,
+            "current_worker_id": os.getpid(),
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
         }), 500
 
 if __name__ == '__main__':
