@@ -768,6 +768,8 @@ class ConfigManager:
         # Prova diverse directory per il file di configurazione
         self.config_file = self._get_writable_config_path()
         self.backup_file = '/tmp/tvproxy_config_backup.json'  # Backup per HuggingFace
+        self.global_config_file = '/tmp/tvproxy_global_config.json'  # Configurazione globale per tutti i workers
+        self.global_lock_file = '/tmp/tvproxy_config.lock'  # Lock file per sincronizzazione
         self.default_config = {
             'PROXY': '',  # Proxy unificati con riconoscimento automatico
             'DADDY_PROXY': '',  # Proxy dedicati per DaddyLive
@@ -799,10 +801,13 @@ class ConfigManager:
         self._is_huggingface = self._detect_huggingface_environment()
         self._last_backup_time = 0
         self._backup_interval = 300  # Backup ogni 5 minuti
+        self._last_sync_time = 0
+        self._sync_interval = 60  # Sincronizzazione ogni minuto
         
         # Ripristina configurazione dal backup se siamo su HuggingFace
         if self._is_huggingface:
             self._restore_from_backup()
+            self._sync_from_global_config()  # Sincronizza con la configurazione globale
         
     def _detect_huggingface_environment(self):
         """Rileva se siamo in un ambiente HuggingFace"""
@@ -813,6 +818,65 @@ class ConfigManager:
             '/tmp' in os.getcwd() or
             'huggingface' in os.getcwd().lower()
         )
+    
+    def _acquire_global_lock(self, timeout=10):
+        """Acquisisce il lock globale per la sincronizzazione"""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                # Prova a creare il lock file
+                with open(self.global_lock_file, 'w') as f:
+                    f.write(f"{os.getpid()}:{time.time()}")
+                return True
+            except (IOError, OSError):
+                # Se il lock esiste, controlla se è ancora valido (più di 30 secondi)
+                try:
+                    if os.path.exists(self.global_lock_file):
+                        lock_age = time.time() - os.path.getmtime(self.global_lock_file)
+                        if lock_age > 30:  # Lock scaduto
+                            os.remove(self.global_lock_file)
+                            continue
+                except:
+                    pass
+                time.sleep(0.1)
+        return False
+    
+    def _release_global_lock(self):
+        """Rilascia il lock globale"""
+        try:
+            if os.path.exists(self.global_lock_file):
+                os.remove(self.global_lock_file)
+        except:
+            pass
+    
+    def _sync_from_global_config(self):
+        """Sincronizza la configurazione dal file globale"""
+        try:
+            if os.path.exists(self.global_config_file):
+                with open(self.global_config_file, 'r') as f:
+                    global_config = json.loads(f.read())
+                    self._config_cache = global_config
+                    app.logger.info(f"Configurazione sincronizzata dal file globale: {self.global_config_file}")
+                    return True
+        except Exception as e:
+            app.logger.warning(f"Errore nella sincronizzazione dal file globale: {e}")
+        return False
+    
+    def _save_to_global_config(self, config):
+        """Salva la configurazione nel file globale per tutti i workers"""
+        try:
+            if self._acquire_global_lock():
+                try:
+                    with open(self.global_config_file, 'w') as f:
+                        json.dump(config, f, indent=4)
+                    self._last_sync_time = time.time()
+                    app.logger.debug(f"Configurazione salvata nel file globale: {self.global_config_file}")
+                    return True
+                finally:
+                    self._release_global_lock()
+        except Exception as e:
+            app.logger.warning(f"Errore nel salvataggio nel file globale: {e}")
+        return False
     
     def _restore_from_backup(self):
         """Ripristina la configurazione dal file di backup su HuggingFace"""
@@ -991,7 +1055,9 @@ class ConfigManager:
                 self._config_cache = config.copy()
                 # Salva anche un backup su file per persistenza
                 self._save_backup(config)
-                app.logger.info("Configurazione salvata in memoria e backup (ambiente HuggingFace)")
+                # Sincronizza con tutti i workers tramite file globale
+                self._save_to_global_config(config)
+                app.logger.info("Configurazione salvata in memoria, backup e file globale (ambiente HuggingFace)")
                 return True
             
             # Prova a salvare nel file
@@ -1005,9 +1071,10 @@ class ConfigManager:
             app.logger.warning(f"Impossibile scrivere il file di configurazione: {e}")
             app.logger.info("Configurazione salvata in memoria come fallback")
             self._config_cache = config.copy()
-            # Prova comunque a salvare il backup
+            # Prova comunque a salvare il backup e la sincronizzazione globale
             if self._is_huggingface:
                 self._save_backup(config)
+                self._save_to_global_config(config)
             return True
             
         except Exception as e:
@@ -1033,16 +1100,26 @@ class ConfigManager:
         if backup_exists:
             backup_age = time.time() - os.path.getmtime(self.backup_file)
         
+        # Informazioni sulla sincronizzazione globale
+        global_exists = os.path.exists(self.global_config_file) if self._is_huggingface else False
+        global_age = 0
+        if global_exists:
+            global_age = time.time() - os.path.getmtime(self.global_config_file)
+        
         return {
             'is_huggingface': self._is_huggingface,
             'config_file': self.config_file,
             'backup_file': self.backup_file,
+            'global_config_file': self.global_config_file,
             'has_memory_cache': self._config_cache is not None,
             'file_exists': os.path.exists(self.config_file),
             'file_writable': self._test_file_writable(),
             'backup_exists': backup_exists,
             'backup_age_seconds': backup_age,
             'backup_age_human': f"{int(backup_age // 3600)}h {int((backup_age % 3600) // 60)}m" if backup_age > 0 else "N/A",
+            'global_exists': global_exists,
+            'global_age_seconds': global_age,
+            'global_age_human': f"{int(global_age // 3600)}h {int((global_age % 3600) // 60)}m" if global_age > 0 else "N/A",
             'current_config_source': 'memory' if self._config_cache is not None else 'file' if os.path.exists(self.config_file) else 'default'
         }
     
@@ -1509,10 +1586,29 @@ def config_backup_thread():
             app.logger.warning(f"Errore nel thread di backup configurazione: {e}")
             time.sleep(60)
 
+# Thread per sincronizzazione automatica tra workers su HuggingFace
+def config_sync_thread():
+    """Thread per sincronizzare automaticamente la configurazione tra workers"""
+    while True:
+        try:
+            if config_manager._is_huggingface:
+                current_time = time.time()
+                if current_time - config_manager._last_sync_time > config_manager._sync_interval:
+                    # Sincronizza dal file globale
+                    config_manager._sync_from_global_config()
+            time.sleep(30)  # Controlla ogni 30 secondi
+        except Exception as e:
+            app.logger.warning(f"Errore nel thread di sincronizzazione configurazione: {e}")
+            time.sleep(30)
+
 if config_manager._is_huggingface:
     backup_thread = Thread(target=config_backup_thread, daemon=True)
     backup_thread.start()
     app.logger.info("Thread di backup configurazione avviato per HuggingFace")
+    
+    sync_thread = Thread(target=config_sync_thread, daemon=True)
+    sync_thread.start()
+    app.logger.info("Thread di sincronizzazione configurazione avviato per HuggingFace")
 
 # --- Configurazione Proxy ---
 PROXY_LIST = []
@@ -3911,6 +4007,7 @@ app.logger.info(f"Fonte config: {config_status['current_config_source']}")
 
 if config_status['is_huggingface']:
     app.logger.info("⚠️  AMBIENTE HUGGINGFACE: Configurazione salvata in memoria")
+    app.logger.info("🔄 Sincronizzazione globale tra workers attiva")
     app.logger.info("💡 Per configurazione permanente, usa i Secrets di HuggingFace")
 else:
     app.logger.info("✅ Configurazione salvata su file")
@@ -4654,6 +4751,15 @@ def debug_backup_status():
             backup_size = os.path.getsize(config_manager.backup_file)
             backup_age = time.time() - os.path.getmtime(config_manager.backup_file)
         
+        # Informazioni sul file globale
+        global_exists = os.path.exists(config_manager.global_config_file) if config_manager._is_huggingface else False
+        global_size = 0
+        global_age = 0
+        
+        if global_exists:
+            global_size = os.path.getsize(config_manager.global_config_file)
+            global_age = time.time() - os.path.getmtime(config_manager.global_config_file)
+        
         return jsonify({
             'status': 'success',
             'backup_info': {
@@ -4666,6 +4772,15 @@ def debug_backup_status():
                 'last_backup_time': config_manager._last_backup_time,
                 'backup_interval': config_manager._backup_interval,
                 'config_cache_exists': config_manager._config_cache is not None
+            },
+            'global_sync_info': {
+                'global_config_file': config_manager.global_config_file,
+                'global_exists': global_exists,
+                'global_size': global_size,
+                'global_age_seconds': global_age,
+                'global_age_human': f"{int(global_age // 3600)}h {int((global_age % 3600) // 60)}m" if global_age > 0 else "N/A",
+                'last_sync_time': config_manager._last_sync_time,
+                'sync_interval': config_manager._sync_interval
             }
         })
         
@@ -4674,6 +4789,40 @@ def debug_backup_status():
         return jsonify({
             'status': 'error',
             'message': f'Errore nel recupero stato backup: {str(e)}'
+        }), 500
+
+@app.route('/admin/debug/force-sync-config', methods=['POST'])
+@login_required
+def force_sync_config():
+    """Forza la sincronizzazione della configurazione tra workers"""
+    try:
+        if not config_manager._is_huggingface:
+            return jsonify({
+                'status': 'error',
+                'message': 'Sincronizzazione disponibile solo su HuggingFace'
+            }), 400
+        
+        # Forza la sincronizzazione dal file globale
+        sync_result = config_manager._sync_from_global_config()
+        
+        # Se abbiamo una configurazione in cache, sincronizzala anche nel file globale
+        global_save_result = False
+        if config_manager._config_cache:
+            global_save_result = config_manager._save_to_global_config(config_manager._config_cache)
+        
+        return jsonify({
+            'status': 'success',
+            'sync_result': sync_result,
+            'global_save_result': global_save_result,
+            'message': f'Sincronizzazione forzata: Lettura {"OK" if sync_result else "FALLITA"}, Scrittura {"OK" if global_save_result else "FALLITA"}',
+            'config_status': config_manager.get_config_status()
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella sincronizzazione forzata: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore nella sincronizzazione: {str(e)}'
         }), 500
 
 @app.route('/admin/debug/websocket-status')
