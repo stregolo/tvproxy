@@ -824,12 +824,16 @@ class ConfigManager:
         )
     
     def _should_use_global_sync(self):
-        """Determina se usare la sincronizzazione globale (HuggingFace o Gunicorn con workers multipli)"""
+        """Determina se usare la sincronizzazione globale (HuggingFace, Docker o Gunicorn con workers multipli)"""
         # Su HuggingFace sempre attiva
         if self._is_huggingface:
             return True
         
-        # In locale, controlla se stiamo usando Gunicorn con workers multipli
+        # Controlla se siamo in un ambiente Docker
+        if self._is_docker_environment():
+            return True
+        
+        # Controlla se stiamo usando Gunicorn con workers multipli
         # Gunicorn imposta la variabile d'ambiente GUNICORN_CMD_ARGS
         if os.environ.get('GUNICORN_CMD_ARGS'):
             return True
@@ -845,6 +849,36 @@ class ConfigManager:
             parent = current_process.parent()
             if parent and 'gunicorn' in parent.name().lower():
                 return True
+        except:
+            pass
+        
+        return False
+    
+    def _is_docker_environment(self):
+        """Rileva se siamo in un ambiente Docker"""
+        # Controlla se il file /proc/1/cgroup contiene 'docker'
+        try:
+            with open('/proc/1/cgroup', 'r') as f:
+                content = f.read()
+                if 'docker' in content.lower():
+                    return True
+        except:
+            pass
+        
+        # Controlla se esiste il file /.dockerenv
+        if os.path.exists('/.dockerenv'):
+            return True
+        
+        # Controlla variabili d'ambiente Docker
+        if os.environ.get('DOCKER_CONTAINER'):
+            return True
+        
+        # Controlla se il nome del container è presente
+        try:
+            with open('/proc/self/cgroup', 'r') as f:
+                content = f.read()
+                if 'docker' in content.lower():
+                    return True
         except:
             pass
         
@@ -1142,6 +1176,7 @@ class ConfigManager:
         
         return {
             'is_huggingface': self._is_huggingface,
+            'is_docker': self._is_docker_environment(),
             'use_global_sync': self._use_global_sync,
             'config_file': self.config_file,
             'backup_file': self.backup_file,
@@ -1646,7 +1681,12 @@ if config_manager._is_huggingface:
 if config_manager._use_global_sync:
     sync_thread = Thread(target=config_sync_thread, daemon=True)
     sync_thread.start()
-    env_name = "HuggingFace" if config_manager._is_huggingface else "Gunicorn con workers multipli"
+    if config_manager._is_huggingface:
+        env_name = "HuggingFace"
+    elif config_manager._is_docker_environment():
+        env_name = "Docker"
+    else:
+        env_name = "Gunicorn con workers multipli"
     app.logger.info(f"Thread di sincronizzazione configurazione avviato per {env_name}")
 
 # --- Configurazione Proxy ---
@@ -4048,6 +4088,9 @@ if config_status['is_huggingface']:
     app.logger.info("⚠️  AMBIENTE HUGGINGFACE: Configurazione salvata in memoria")
     app.logger.info("🔄 Sincronizzazione globale tra workers attiva")
     app.logger.info("💡 Per configurazione permanente, usa i Secrets di HuggingFace")
+elif config_status['is_docker']:
+    app.logger.info("🐳 AMBIENTE DOCKER: Sincronizzazione globale tra workers attiva")
+    app.logger.info("📁 Configurazione salvata in memoria e file globale")
 elif config_status['use_global_sync']:
     app.logger.info("🔄 AMBIENTE GUNICORN: Sincronizzazione globale tra workers attiva")
     app.logger.info("📁 Configurazione salvata in memoria e file globale")
