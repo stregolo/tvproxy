@@ -641,14 +641,38 @@ def save_client_stats_to_global():
             # Ottieni statistiche dal client tracker corrente
             local_stats = client_tracker.get_client_stats()
             
-            # Aggiungi informazioni del worker
-            global_stats = {
-                'worker_id': os.getpid(),
+            # Carica statistiche esistenti o crea nuovo file
+            all_workers_stats = {}
+            if os.path.exists(CLIENT_STATS_FILE):
+                try:
+                    with open(CLIENT_STATS_FILE, 'r') as f:
+                        existing_data = json.load(f)
+                        all_workers_stats = existing_data.get('workers', {})
+                except Exception as e:
+                    app.logger.warning(f"Errore nel caricamento statistiche client esistenti: {e}")
+                    all_workers_stats = {}
+            
+            # Aggiungi/aggiorna le statistiche del worker corrente
+            worker_id = str(os.getpid())
+            all_workers_stats[worker_id] = {
                 'worker_timestamp': time.time(),
                 'stats': local_stats
             }
             
-            # Salva nel file globale
+            # Pulisci statistiche di workers inattivi (più di 2 minuti)
+            current_time = time.time()
+            active_workers = {}
+            for wid, worker_data in all_workers_stats.items():
+                if current_time - worker_data.get('worker_timestamp', 0) <= 120:
+                    active_workers[wid] = worker_data
+            
+            # Salva nel file globale con tutte le statistiche dei workers attivi
+            global_stats = {
+                'last_update': current_time,
+                'active_workers_count': len(active_workers),
+                'workers': active_workers
+            }
+            
             with open(CLIENT_STATS_FILE, 'w') as f:
                 json.dump(global_stats, f, indent=2)
             
@@ -668,7 +692,7 @@ def load_client_stats_from_global():
                 global_stats = json.load(f)
             
             # Verifica che il file non sia troppo vecchio (più di 2 minuti)
-            if time.time() - global_stats.get('worker_timestamp', 0) > 120:
+            if time.time() - global_stats.get('last_update', 0) > 120:
                 app.logger.warning("File statistiche client globali troppo vecchio, ignorato")
                 return None
             
@@ -680,8 +704,10 @@ def load_client_stats_from_global():
 def merge_client_stats_from_all_workers():
     """Combina le statistiche client da tutti i workers"""
     try:
+        # Verifica che client_tracker sia disponibile
         if 'client_tracker' not in globals():
-            return client_tracker.get_client_stats() if 'client_tracker' in globals() else None
+            app.logger.warning("Client tracker non disponibile per merge statistiche")
+            return None
         
         # Ottieni statistiche locali
         local_stats = client_tracker.get_client_stats()
@@ -695,39 +721,57 @@ def merge_client_stats_from_all_workers():
         if not global_data:
             return local_stats
         
-        # Combina le statistiche
+        # Ottieni statistiche di tutti i workers
+        all_workers_stats = global_data.get('workers', {})
+        if not all_workers_stats:
+            return local_stats
+        
+        # Combina le statistiche di tutti i workers
+        all_clients = []
+        total_requests = 0
+        total_m3u_requests = 0
+        m3u_clients_count = 0
+        
+        # Raccogli client da tutti i workers
+        for worker_id, worker_data in all_workers_stats.items():
+            worker_stats = worker_data.get('stats', {})
+            if worker_stats.get('clients'):
+                for client in worker_stats['clients']:
+                    # Evita duplicati basandosi su IP e User Agent
+                    client_exists = any(
+                        c['ip'] == client['ip'] and c['user_agent'] == client['user_agent']
+                        for c in all_clients
+                    )
+                    if not client_exists:
+                        all_clients.append(client)
+                        total_requests += client.get('requests', 0)
+                        total_m3u_requests += client.get('m3u_requests', 0)
+                        if client.get('is_m3u_user', False):
+                            m3u_clients_count += 1
+        
+        # Calcola tempo medio di connessione
+        if all_clients:
+            total_connection_time = sum(c.get('connection_time_minutes', 0) for c in all_clients)
+            avg_connection_time = total_connection_time / len(all_clients)
+        else:
+            avg_connection_time = 0
+        
+        # Crea statistiche aggregate
         merged_stats = {
-            'total_clients': local_stats['total_clients'],
-            'total_sessions': local_stats['total_sessions'],
-            'client_counter': local_stats['client_counter'],
-            'active_clients': local_stats['active_clients'],
-            'active_sessions': local_stats['active_sessions'],
-            'total_requests': local_stats['total_requests'],
-            'm3u_clients': local_stats['m3u_clients'],
-            'm3u_requests': local_stats['m3u_requests'],
-            'avg_connection_time': local_stats['avg_connection_time'],
-            'clients': local_stats['clients'].copy(),  # Inizia con i client locali
-            'global_worker_id': global_data.get('worker_id'),
-            'global_timestamp': global_data.get('worker_timestamp'),
+            'total_clients': len(all_clients),
+            'total_sessions': len(all_clients),  # Ogni client ha una sessione
+            'client_counter': len(all_clients),
+            'active_clients': len(all_clients),
+            'active_sessions': len(all_clients),
+            'total_requests': total_requests,
+            'm3u_clients': m3u_clients_count,
+            'm3u_requests': total_m3u_requests,
+            'avg_connection_time': avg_connection_time,
+            'clients': all_clients,
+            'global_worker_id': global_data.get('active_workers_count', 1),
+            'global_timestamp': global_data.get('last_update', time.time()),
             'sync_enabled': True
         }
-        
-        # Aggiungi client da altri workers (se disponibili)
-        if global_data.get('stats', {}).get('clients'):
-            for global_client in global_data['stats']['clients']:
-                # Evita duplicati basandosi su IP e User Agent
-                client_exists = any(
-                    c['ip'] == global_client['ip'] and c['user_agent'] == global_client['user_agent']
-                    for c in merged_stats['clients']
-                )
-                if not client_exists:
-                    merged_stats['clients'].append(global_client)
-        
-        # Ricalcola statistiche aggregate
-        merged_stats['total_clients'] = len(merged_stats['clients'])
-        merged_stats['total_requests'] = sum(c['requests'] for c in merged_stats['clients'])
-        merged_stats['m3u_requests'] = sum(c.get('m3u_requests', 0) for c in merged_stats['clients'])
-        merged_stats['m3u_clients'] = len([c for c in merged_stats['clients'] if c.get('is_m3u_user', False)])
         
         return merged_stats
         
@@ -3355,7 +3399,7 @@ def login():
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    """Dashboard avanzata con statistiche di sistema"""
+    """Dashboard avanzata con statistiche di sistema e client (sincronizzate tra workers)"""
     # Traccia la richiesta se client_tracker è disponibile
     try:
         if 'client_tracker' in globals():
@@ -3373,6 +3417,29 @@ def dashboard():
         'buffer_size_mb': stats.get('prebuffer_size_mb', 0),
         'active_threads': stats.get('prebuffer_threads', 0)
     }
+    
+    # Aggiungi statistiche client sincronizzate
+    try:
+        merged_client_stats = merge_client_stats_from_all_workers()
+        if merged_client_stats:
+            stats['active_clients'] = merged_client_stats.get('active_clients', 0)
+            stats['active_sessions'] = merged_client_stats.get('active_sessions', 0)
+            stats['total_requests'] = merged_client_stats.get('total_requests', 0)
+            stats['m3u_clients'] = merged_client_stats.get('m3u_clients', 0)
+            stats['m3u_requests'] = merged_client_stats.get('m3u_requests', 0)
+        else:
+            stats['active_clients'] = 0
+            stats['active_sessions'] = 0
+            stats['total_requests'] = 0
+            stats['m3u_clients'] = 0
+            stats['m3u_requests'] = 0
+    except Exception as e:
+        app.logger.warning(f"Errore nel recupero statistiche client per dashboard: {e}")
+        stats['active_clients'] = 0
+        stats['active_sessions'] = 0
+        stats['total_requests'] = 0
+        stats['m3u_clients'] = 0
+        stats['m3u_requests'] = 0
     
     return render_template('dashboard.html', 
                          stats=stats, 
@@ -3469,7 +3536,7 @@ def admin_logs():
     
 @app.route('/')
 def index():
-    """Pagina principale migliorata con informazioni Vavoo"""
+    """Pagina principale migliorata con informazioni Vavoo (statistiche sincronizzate tra workers)"""
     # Traccia la richiesta se client_tracker è disponibile
     try:
         if 'client_tracker' in globals():
@@ -3487,6 +3554,29 @@ def index():
         'buffer_size_mb': stats.get('prebuffer_size_mb', 0),
         'active_threads': stats.get('prebuffer_threads', 0)
     }
+    
+    # Aggiungi statistiche client sincronizzate
+    try:
+        merged_client_stats = merge_client_stats_from_all_workers()
+        if merged_client_stats:
+            stats['active_clients'] = merged_client_stats.get('active_clients', 0)
+            stats['active_sessions'] = merged_client_stats.get('active_sessions', 0)
+            stats['total_requests'] = merged_client_stats.get('total_requests', 0)
+            stats['m3u_clients'] = merged_client_stats.get('m3u_clients', 0)
+            stats['m3u_requests'] = merged_client_stats.get('m3u_requests', 0)
+        else:
+            stats['active_clients'] = 0
+            stats['active_sessions'] = 0
+            stats['total_requests'] = 0
+            stats['m3u_clients'] = 0
+            stats['m3u_requests'] = 0
+    except Exception as e:
+        app.logger.warning(f"Errore nel recupero statistiche client per index: {e}")
+        stats['active_clients'] = 0
+        stats['active_sessions'] = 0
+        stats['total_requests'] = 0
+        stats['m3u_clients'] = 0
+        stats['m3u_requests'] = 0
     
     # Informazioni sulla funzionalità Vavoo
     vavoo_info = {
@@ -4102,13 +4192,32 @@ def proxy_prebuffer():
 @app.route('/admin/prebuffer/status')
 @login_required
 def prebuffer_status():
-    """Mostra lo stato del sistema di pre-buffering"""
+    """Mostra lo stato del sistema di pre-buffering (sincronizzate tra workers)"""
     try:
+        # Usa le statistiche di sistema sincronizzate per i totali
+        merged_stats = merge_system_stats_from_all_workers()
+        
+        if merged_stats:
+            # Usa le statistiche aggregate per i totali
+            total_streams = merged_stats.get('prebuffer_streams', 0)
+            total_segments = merged_stats.get('prebuffer_segments', 0)
+            total_size_mb = merged_stats.get('prebuffer_size_mb', 0)
+            active_threads = merged_stats.get('prebuffer_threads', 0)
+        else:
+            # Fallback alle statistiche locali
+            with pre_buffer_manager.pre_buffer_lock:
+                total_streams = len(pre_buffer_manager.pre_buffer)
+                total_segments = sum(len(segments) for segments in pre_buffer_manager.pre_buffer.values())
+                total_size = sum(
+                    sum(len(content) for content in segments.values())
+                    for segments in pre_buffer_manager.pre_buffer.values()
+                )
+                total_size_mb = round(total_size / (1024 * 1024), 2)
+                active_threads = len(pre_buffer_manager.pre_buffer_threads)
+        
+        # Per i dettagli degli stream, usa sempre i dati locali (non sincronizzabili)
         with pre_buffer_manager.pre_buffer_lock:
             buffer_info = {}
-            total_segments = 0
-            total_size = 0
-            
             for stream_id, segments in pre_buffer_manager.pre_buffer.items():
                 stream_size = sum(len(content) for content in segments.values())
                 buffer_info[stream_id] = {
@@ -4116,19 +4225,19 @@ def prebuffer_status():
                     "total_size_mb": round(stream_size / (1024 * 1024), 2),
                     "segments": list(segments.keys())[:5]  # Primi 5 segmenti
                 }
-                total_segments += len(segments)
-                total_size += stream_size
-            
-            active_threads = len(pre_buffer_manager.pre_buffer_threads)
             
         return jsonify({
             "status": "success",
             "pre_buffer_config": pre_buffer_manager.pre_buffer_config,
-            "active_streams": len(buffer_info),
+            "active_streams": total_streams,
             "active_threads": active_threads,
             "total_segments_buffered": total_segments,
-            "total_buffer_size_mb": round(total_size / (1024 * 1024), 2),
-            "streams": buffer_info
+            "total_buffer_size_mb": total_size_mb,
+            "streams": buffer_info,
+            "sync_info": {
+                "enabled": config_manager._use_global_sync,
+                "message": "Statistiche aggregate da tutti i workers" if merged_stats else "Statistiche locali"
+            }
         })
         
     except Exception as e:
@@ -4142,17 +4251,27 @@ def prebuffer_status():
 @app.route('/admin/prebuffer/clear', methods=['POST'])
 @login_required
 def clear_prebuffer():
-    """Pulisce tutti i buffer di pre-buffering"""
+    """Pulisce tutti i buffer di pre-buffering (locale e globale)"""
     try:
         with pre_buffer_manager.pre_buffer_lock:
             streams_cleared = len(pre_buffer_manager.pre_buffer)
             pre_buffer_manager.pre_buffer.clear()
             pre_buffer_manager.pre_buffer_threads.clear()
         
+        # Pulisci anche il file globale delle statistiche di sistema se la sincronizzazione è abilitata
+        if config_manager._use_global_sync:
+            try:
+                with SYSTEM_STATS_LOCK:
+                    if os.path.exists(SYSTEM_STATS_FILE):
+                        os.remove(SYSTEM_STATS_FILE)
+                        app.logger.info("File statistiche sistema globali rimosso")
+            except Exception as e:
+                app.logger.warning(f"Errore nella rimozione file statistiche sistema globali: {e}")
+        
         app.logger.info(f"Pre-buffer pulito: {streams_cleared} stream rimossi")
         return jsonify({
             "status": "success",
-            "message": f"Pre-buffer pulito: {streams_cleared} stream rimossi"
+            "message": f"Pre-buffer pulito: {streams_cleared} stream rimossi (locale e globale)"
         })
         
     except Exception as e:
@@ -4166,30 +4285,50 @@ def clear_prebuffer():
 @app.route('/admin/memory/status')
 @login_required
 def memory_status():
-    """Mostra lo stato della memoria e del buffer"""
+    """Mostra lo stato della memoria e del buffer (sincronizzate tra workers)"""
     try:
-        memory = psutil.virtual_memory()
+        # Usa le statistiche di sistema sincronizzate
+        merged_stats = merge_system_stats_from_all_workers()
         
-        with pre_buffer_manager.pre_buffer_lock:
-            total_buffer_size = sum(
-                sum(len(content) for content in segments.values())
-                for segments in pre_buffer_manager.pre_buffer.values()
-            )
-            buffer_memory_percent = (total_buffer_size / memory.total) * 100
+        if merged_stats:
+            # Usa le statistiche aggregate
+            memory_percent = merged_stats.get('ram_usage', 0)
+            memory_used_gb = merged_stats.get('ram_used_gb', 0)
+            memory_total_gb = merged_stats.get('ram_total_gb', 0)
+            prebuffer_streams = merged_stats.get('prebuffer_streams', 0)
+            prebuffer_segments = merged_stats.get('prebuffer_segments', 0)
+            prebuffer_size_mb = merged_stats.get('prebuffer_size_mb', 0)
+        else:
+            # Fallback alle statistiche locali
+            memory = psutil.virtual_memory()
+            memory_percent = memory.percent
+            memory_used_gb = memory.used / (1024**3)
+            memory_total_gb = memory.total / (1024**3)
+            
+            with pre_buffer_manager.pre_buffer_lock:
+                prebuffer_streams = len(pre_buffer_manager.pre_buffer)
+                prebuffer_segments = sum(len(segments) for segments in pre_buffer_manager.pre_buffer.values())
+                prebuffer_size_mb = round(
+                    sum(sum(len(content) for content in segments.values()) 
+                        for segments in pre_buffer_manager.pre_buffer.values()) / (1024 * 1024), 2
+                )
+        
+        memory_available_gb = memory_total_gb - memory_used_gb
+        buffer_memory_percent = (prebuffer_size_mb * 1024 * 1024 / (memory_total_gb * 1024**3)) * 100 if memory_total_gb > 0 else 0
         
         return jsonify({
             "status": "success",
             "system_memory": {
-                "total_gb": round(memory.total / (1024**3), 2),
-                "used_gb": round(memory.used / (1024**3), 2),
-                "available_gb": round(memory.available / (1024**3), 2),
-                "percent": round(memory.percent, 1)
+                "total_gb": round(memory_total_gb, 2),
+                "used_gb": round(memory_used_gb, 2),
+                "available_gb": round(memory_available_gb, 2),
+                "percent": round(memory_percent, 1)
             },
             "buffer_memory": {
-                "size_mb": round(total_buffer_size / (1024*1024), 2),
+                "size_mb": round(prebuffer_size_mb, 2),
                 "percent": round(buffer_memory_percent, 1),
-                "streams": len(pre_buffer_manager.pre_buffer),
-                "segments": sum(len(segments) for segments in pre_buffer_manager.pre_buffer.values())
+                "streams": prebuffer_streams,
+                "segments": prebuffer_segments
             },
             "config": pre_buffer_manager.pre_buffer_config
         })
@@ -4204,7 +4343,7 @@ def memory_status():
 @app.route('/admin/memory/cleanup', methods=['POST'])
 @login_required
 def memory_cleanup():
-    """Pulizia manuale della memoria"""
+    """Pulizia manuale della memoria (locale e globale)"""
     try:
         before_memory = psutil.virtual_memory()
         
@@ -4221,6 +4360,24 @@ def memory_cleanup():
         # Pulisci le cache
         setup_all_caches()
         
+        # Pulisci anche i file globali se la sincronizzazione è abilitata
+        if config_manager._use_global_sync:
+            try:
+                with SYSTEM_STATS_LOCK:
+                    if os.path.exists(SYSTEM_STATS_FILE):
+                        os.remove(SYSTEM_STATS_FILE)
+                        app.logger.info("File statistiche sistema globali rimosso")
+            except Exception as e:
+                app.logger.warning(f"Errore nella rimozione file statistiche sistema globali: {e}")
+            
+            try:
+                with CLIENT_STATS_LOCK:
+                    if os.path.exists(CLIENT_STATS_FILE):
+                        os.remove(CLIENT_STATS_FILE)
+                        app.logger.info("File statistiche client globali rimosso")
+            except Exception as e:
+                app.logger.warning(f"Errore nella rimozione file statistiche client globali: {e}")
+        
         after_memory = psutil.virtual_memory()
         memory_freed = before_memory.used - after_memory.used
         
@@ -4228,7 +4385,7 @@ def memory_cleanup():
         
         return jsonify({
             "status": "success",
-            "message": f"Pulizia completata: {streams_cleared} stream rimossi",
+            "message": f"Pulizia completata: {streams_cleared} stream rimossi (locale e globale)",
             "memory_freed_mb": round(memory_freed / (1024*1024), 2),
             "buffer_cleared_mb": round(total_size / (1024*1024), 2)
         })
@@ -4402,11 +4559,15 @@ def get_stats():
         'active_threads': stats.get('prebuffer_threads', 0)
     }
     
-    # Aggiungi statistiche client
+    # Aggiungi statistiche client (sincronizzate tra workers)
     try:
-        if 'client_tracker' in globals():
-            client_stats = client_tracker.get_realtime_stats()
-            stats.update(client_stats)
+        merged_client_stats = merge_client_stats_from_all_workers()
+        if merged_client_stats:
+            stats['active_clients'] = merged_client_stats.get('active_clients', 0)
+            stats['active_sessions'] = merged_client_stats.get('active_sessions', 0)
+            stats['total_requests'] = merged_client_stats.get('total_requests', 0)
+            stats['m3u_clients'] = merged_client_stats.get('m3u_clients', 0)
+            stats['m3u_requests'] = merged_client_stats.get('m3u_requests', 0)
         else:
             # Fallback se client_tracker non è ancora disponibile
             stats['active_clients'] = 0
@@ -4572,17 +4733,18 @@ def get_m3u_client_stats():
 @app.route('/admin/clients/export')
 @login_required
 def export_client_stats():
-    """Esporta le statistiche dei client in formato CSV"""
+    """Esporta le statistiche dei client in formato CSV (sincronizzate tra workers)"""
     try:
-        if 'client_tracker' not in globals():
-            return jsonify({"status": "error", "message": "Client tracker non disponibile"}), 500
+        # Usa le statistiche sincronizzate se disponibili
+        merged_stats = merge_client_stats_from_all_workers()
         
-        stats = client_tracker.get_client_stats()
+        if not merged_stats:
+            return jsonify({"status": "error", "message": "Client tracker non disponibile"}), 500
         
         # Crea CSV
         csv_data = "ID,IP,User Agent,Prima Connessione,Ultima Attività,Tempo Connessione (min),Richieste,Endpoint,Sessione\n"
         
-        for client in stats['clients']:
+        for client in merged_stats['clients']:
             csv_data += f"{client['id']},{client['ip']},\"{client['user_agent']}\",{client['first_seen']},{client['last_seen']},{client['connection_time_minutes']},{client['requests']},\"{','.join(client['endpoints'])}\",{'Sì' if client['has_session'] else 'No'}\n"
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -4603,21 +4765,32 @@ def export_client_stats():
 @app.route('/admin/clients/clear', methods=['POST'])
 @login_required
 def clear_client_stats():
-    """Pulisce le statistiche dei client"""
+    """Pulisce le statistiche dei client (locale e globale)"""
     try:
         if 'client_tracker' not in globals():
             return jsonify({"status": "error", "message": "Client tracker non disponibile"}), 500
         
+        # Pulisci statistiche locali
         with client_tracker.client_lock:
             cleared_count = len(client_tracker.active_clients)
             client_tracker.active_clients.clear()
             client_tracker.session_clients.clear()
             client_tracker.client_counter = 0
         
+        # Pulisci anche il file globale se la sincronizzazione è abilitata
+        if config_manager._use_global_sync:
+            try:
+                with CLIENT_STATS_LOCK:
+                    if os.path.exists(CLIENT_STATS_FILE):
+                        os.remove(CLIENT_STATS_FILE)
+                        app.logger.info("File statistiche client globali rimosso")
+            except Exception as e:
+                app.logger.warning(f"Errore nella rimozione file statistiche globali: {e}")
+        
         app.logger.info(f"Statistiche client pulite: {cleared_count} client rimossi")
         return jsonify({
             "status": "success",
-            "message": f"Statistiche client pulite: {cleared_count} client rimossi"
+            "message": f"Statistiche client pulite: {cleared_count} client rimossi (locale e globale)"
         })
     except Exception as e:
         app.logger.error(f"Errore nella pulizia statistiche client: {e}")
@@ -6146,14 +6319,36 @@ def debug_client_stats_status():
         if sync_info["enabled"] and sync_info["file_exists"]:
             global_data = load_client_stats_from_global()
             if global_data:
+                all_workers_stats = global_data.get('workers', {})
+                current_time = time.time()
+                
+                # Calcola statistiche aggregate
+                total_clients = 0
+                total_requests = 0
+                total_m3u_clients = 0
+                active_workers = 0
+                
+                for worker_id, worker_data in all_workers_stats.items():
+                    if current_time - worker_data.get('worker_timestamp', 0) <= 120:
+                        active_workers += 1
+                        worker_stats = worker_data.get('stats', {})
+                        total_clients += worker_stats.get('total_clients', 0)
+                        total_requests += worker_stats.get('total_requests', 0)
+                        total_m3u_clients += worker_stats.get('m3u_clients', 0)
+                
                 global_stats = {
-                    "worker_id": global_data.get('worker_id'),
-                    "worker_timestamp": global_data.get('worker_timestamp'),
-                    "age_seconds": time.time() - global_data.get('worker_timestamp', 0),
+                    "active_workers_count": global_data.get('active_workers_count', 0),
+                    "last_update": global_data.get('last_update', 0),
+                    "age_seconds": time.time() - global_data.get('last_update', 0),
                     "stats_summary": {
-                        "total_clients": global_data.get('stats', {}).get('total_clients', 0),
-                        "total_requests": global_data.get('stats', {}).get('total_requests', 0),
-                        "m3u_clients": global_data.get('stats', {}).get('m3u_clients', 0)
+                        "total_clients": total_clients,
+                        "total_requests": total_requests,
+                        "m3u_clients": total_m3u_clients
+                    },
+                    "workers_detail": {
+                        "total_workers": len(all_workers_stats),
+                        "active_workers": active_workers,
+                        "worker_ids": list(all_workers_stats.keys())
                     }
                 }
         
