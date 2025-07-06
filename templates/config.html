@@ -640,6 +640,13 @@
                 <i class="fas fa-sync-alt"></i> <strong>Sincronizzazione globale attiva</strong> - Tutti i workers condividono la stessa configurazione.
             </div>
             
+            <div class="alert alert-info" id="cloudAlert" style="display: none;">
+                <i class="fas fa-cloud"></i> <strong>Ambiente Cloud (Render/Railway/Heroku) Rilevato</strong><br>
+                La configurazione viene sincronizzata automaticamente tra tutti i workers tramite file globale.<br>
+                <i class="fas fa-sync-alt"></i> <strong>Sincronizzazione globale attiva</strong> - Tutti i workers condividono la stessa configurazione.<br>
+                <i class="fas fa-cog"></i> <strong>Configurazione permanente</strong> - Usa le variabili d'ambiente del cloud per impostazioni persistenti.
+            </div>
+            
             <div class="alert alert-info" id="dockerAlert" style="display: none;">
                 <i class="fas fa-docker"></i> <strong>Ambiente Docker con Workers Multipli Rilevato</strong><br>
                 La configurazione viene sincronizzata automaticamente tra tutti i workers tramite file globale.<br>
@@ -743,6 +750,14 @@
                             
                             // Log silenzioso delle informazioni di sincronizzazione
                             console.log('Ambiente Docker rilevato:', {
+                                global_exists: data.config_status.global_exists,
+                                global_age: data.config_status.global_age_human
+                            });
+                        } else if (data.config_status.is_cloud) {
+                            document.getElementById('cloudAlert').style.display = 'block';
+                            
+                            // Log silenzioso delle informazioni di sincronizzazione
+                            console.log('Ambiente Cloud rilevato:', {
                                 global_exists: data.config_status.global_exists,
                                 global_age: data.config_status.global_age_human
                             });
@@ -973,6 +988,8 @@
                         env_type = 'HuggingFace';
                     } else if (status.is_docker) {
                         env_type = 'Docker';
+                    } else if (status.is_cloud) {
+                        env_type = 'Cloud (Render/Railway/Heroku)';
                     } else if (status.use_global_sync) {
                         env_type = 'Gunicorn con workers multipli';
                     }
