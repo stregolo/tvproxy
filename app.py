@@ -1,30 +1,22 @@
 from flask import Flask, request, Response, jsonify
 import requests
-from urllib.parse import urlparse, urljoin, quote, unquote
+from urllib.parse import urlparse, urljoin, quote, unquote, quote_plus
 import re
-import traceback
 import json
 import base64
-from urllib.parse import quote_plus
+import traceback
 import os
 import random
 import time
-from cachetools import TTLCache, LRUCache
+from cachetools import TTLCache
 from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import psutil
 from threading import Thread, Lock
-import weakref
 import hashlib
-from functools import wraps
 import logging
-from logging.handlers import RotatingFileHandler
-import subprocess
-import concurrent.futures
-import threading
-from datetime import datetime, timedelta
-import math
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -761,67 +753,11 @@ def download_m3u_playlist_streaming(url):
         app.logger.error(f"Errore generico durante lo streaming del download da {url}: {str(e)}")
         raise
 
-# Sistema di statistiche (senza WebSocket)
-def get_system_stats():
-    """Ottiene le statistiche di sistema"""
-    stats = {}
-    
-    # Memoria RAM
-    memory = psutil.virtual_memory()
-    stats['ram_usage'] = memory.percent
-    stats['ram_used_gb'] = memory.used / (1024**3)  # GB
-    stats['ram_total_gb'] = memory.total / (1024**3)  # GB
-    
-    # Utilizzo di rete
-    net_io = psutil.net_io_counters()
-    stats['network_sent'] = net_io.bytes_sent / (1024**2)  # MB
-    stats['network_recv'] = net_io.bytes_recv / (1024**2)  # MB
-    
-    # Statistiche pre-buffer
-    try:
-        with pre_buffer_manager.pre_buffer_lock:
-            total_segments = sum(len(segments) for segments in pre_buffer_manager.pre_buffer.values())
-            total_size = sum(
-                sum(len(content) for content in segments.values())
-                for segments in pre_buffer_manager.pre_buffer.values()
-            )
-            stats['prebuffer_streams'] = len(pre_buffer_manager.pre_buffer)
-            stats['prebuffer_segments'] = total_segments
-            stats['prebuffer_size_mb'] = round(total_size / (1024 * 1024), 2)
-            stats['prebuffer_threads'] = len(pre_buffer_manager.pre_buffer_threads)
-    except Exception as e:
-        app.logger.error(f"Errore nel calcolo statistiche pre-buffer: {e}")
-        stats['prebuffer_streams'] = 0
-        stats['prebuffer_segments'] = 0
-        stats['prebuffer_size_mb'] = 0
-        stats['prebuffer_threads'] = 0
-    
-    return stats
-
 # Avvia il thread di pulizia del buffer
 cleanup_thread = Thread(target=pre_buffer_manager.cleanup_old_buffers, daemon=True)
 cleanup_thread.start()
 
-# --- Log Manager ---
-class LogManager:
-    def __init__(self):
-        pass
-        
-    def get_log_files(self):
-        """Log non salvati su file"""
-        return []
-    
-    def read_log_file(self, filename, lines=100):
-        """Log non salvati su file"""
-        return ["Log non salvati su file - solo output console"]
-    
-    def stream_log_file(self, filename):
-        """Log non salvati su file"""
-        def generate():
-            yield f"data: {json.dumps({'error': 'Log non salvati su file'})}\n\n"
-        return generate()
 
-log_manager = LogManager()
 
 # --- Variabili globali per cache e sessioni ---
 
@@ -834,40 +770,7 @@ KEY_CACHE = {}
 SESSION_POOL = {}
 SESSION_LOCK = Lock()
 
-def connection_manager():
-    """Thread per gestire le connessioni persistenti"""
-    while True:
-        try:
-            time.sleep(300)  # Controlla ogni 5 minuti
-            
-            # Statistiche connessioni
-            with SESSION_LOCK:
-                active_sessions = len(SESSION_POOL)
-                app.logger.info(f"Sessioni attive nel pool: {active_sessions}")
-                
-                # Pulizia periodica delle sessioni inattive
-                if active_sessions > 10:  # Se troppe sessioni, pulisci
-                    cleanup_sessions()
-                    
-        except Exception as e:
-            app.logger.error(f"Errore nel connection manager: {e}")
 
-def cleanup_sessions():
-    """Pulisce le sessioni inattive dal pool"""
-    global SESSION_POOL, SESSION_LOCK
-    
-    with SESSION_LOCK:
-        for key, session in list(SESSION_POOL.items()):
-            try:
-                session.close()
-            except:
-                pass
-        SESSION_POOL.clear()
-        app.logger.info("Pool di sessioni pulito")
-
-# Avvia il thread di gestione connessioni
-connection_thread = Thread(target=connection_manager, daemon=True)
-connection_thread.start()
 
 # --- Configurazione Proxy ---
 PROXY_LIST = []
