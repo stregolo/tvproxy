@@ -2766,10 +2766,37 @@ def toggle_cache():
     config = config_manager.load_config()
     new_value = not config.get('CACHE_ENABLED', True)
     config['CACHE_ENABLED'] = new_value
-    config_manager.save_config(config)
-    config_manager.apply_config_to_app(config)
-    setup_all_caches()
-    return jsonify({"status": "success", "cache_enabled": new_value})
+    
+    # Salva la configurazione con sincronizzazione
+    if config_manager.save_config(config):
+        config_manager.apply_config_to_app(config)
+        setup_all_caches()
+        
+        # Sincronizza con tutti i workers se necessario
+        sync_info = {}
+        if config_manager._use_global_sync:
+            # Attiva il ricaricamento proxy su tutti i workers
+            proxy_reload_result = trigger_proxy_reload()
+            sync_info = {
+                'global_sync': True,
+                'proxy_reload_result': proxy_reload_result,
+                'sync_message': f"Cache toggle sincronizzato su tutti i workers. Ricaricamento proxy: {'OK' if proxy_reload_result else 'FALLITO'}"
+            }
+            app.logger.info(f"Cache toggle sincronizzato su tutti i workers: {new_value}")
+        else:
+            sync_info = {
+                'global_sync': False,
+                'sync_message': "Sincronizzazione non necessaria (ambiente single-worker)"
+            }
+            app.logger.info(f"Cache toggle applicato: {new_value}")
+        
+        return jsonify({
+            "status": "success", 
+            "cache_enabled": new_value,
+            "sync_info": sync_info
+        })
+    else:
+        return jsonify({"status": "error", "message": "Errore nel salvataggio della configurazione"}), 500
 
 @app.route('/admin/debug/proxies')
 @login_required
