@@ -783,14 +783,53 @@ def save_system_stats_to_global():
                 local_stats['prebuffer_size_mb'] = 0
                 local_stats['prebuffer_threads'] = 0
             
-            # Aggiungi informazioni del worker
-            global_stats = {
-                'worker_id': os.getpid(),
+            # Cache size
+            local_stats['cache_size'] = f"{len(M3U8_CACHE) + len(TS_CACHE) + len(KEY_CACHE)} items"
+            
+            # Uptime
+            try:
+                process = psutil.Process()
+                uptime_seconds = time.time() - process.create_time()
+                uptime_hours = int(uptime_seconds // 3600)
+                local_stats['uptime'] = f"{uptime_hours}h"
+            except:
+                local_stats['uptime'] = "0h"
+            
+            # Richieste per minuto (stima basata su sessioni attive)
+            local_stats['requests_per_min'] = get_total_sessions_count() * 2
+            
+            # Carica statistiche esistenti o crea nuovo file
+            all_workers_stats = {}
+            if os.path.exists(SYSTEM_STATS_FILE):
+                try:
+                    with open(SYSTEM_STATS_FILE, 'r') as f:
+                        existing_data = json.load(f)
+                        all_workers_stats = existing_data.get('workers', {})
+                except Exception as e:
+                    app.logger.warning(f"Errore nel caricamento statistiche esistenti: {e}")
+                    all_workers_stats = {}
+            
+            # Aggiungi/aggiorna le statistiche del worker corrente
+            worker_id = str(os.getpid())
+            all_workers_stats[worker_id] = {
                 'worker_timestamp': time.time(),
                 'stats': local_stats
             }
             
-            # Salva nel file globale
+            # Pulisci statistiche di workers inattivi (più di 30 secondi)
+            current_time = time.time()
+            active_workers = {}
+            for wid, worker_data in all_workers_stats.items():
+                if current_time - worker_data.get('worker_timestamp', 0) <= 30:
+                    active_workers[wid] = worker_data
+            
+            # Salva nel file globale con tutte le statistiche dei workers attivi
+            global_stats = {
+                'last_update': current_time,
+                'active_workers_count': len(active_workers),
+                'workers': active_workers
+            }
+            
             with open(SYSTEM_STATS_FILE, 'w') as f:
                 json.dump(global_stats, f, indent=2)
             
@@ -810,7 +849,7 @@ def load_system_stats_from_global():
                 global_stats = json.load(f)
             
             # Verifica che il file non sia troppo vecchio (più di 30 secondi per statistiche real-time)
-            if time.time() - global_stats.get('worker_timestamp', 0) > 30:
+            if time.time() - global_stats.get('last_update', 0) > 30:
                 app.logger.warning("File statistiche sistema globali troppo vecchio, ignorato")
                 return None
             
@@ -855,6 +894,21 @@ def merge_system_stats_from_all_workers():
             local_stats['prebuffer_size_mb'] = 0
             local_stats['prebuffer_threads'] = 0
         
+        # Cache size
+        local_stats['cache_size'] = f"{len(M3U8_CACHE) + len(TS_CACHE) + len(KEY_CACHE)} items"
+        
+        # Uptime
+        try:
+            process = psutil.Process()
+            uptime_seconds = time.time() - process.create_time()
+            uptime_hours = int(uptime_seconds // 3600)
+            local_stats['uptime'] = f"{uptime_hours}h"
+        except:
+            local_stats['uptime'] = "0h"
+        
+        # Richieste per minuto (stima basata su sessioni attive)
+        local_stats['requests_per_min'] = get_total_sessions_count() * 2
+        
         # Se non usiamo sincronizzazione globale, restituisci solo le statistiche locali
         if not config_manager._use_global_sync:
             return local_stats
@@ -864,34 +918,95 @@ def merge_system_stats_from_all_workers():
         if not global_data:
             return local_stats
         
-        # Per le statistiche di sistema, prendiamo i valori più alti o la media
-        global_stats = global_data.get('stats', {})
+        # Ottieni statistiche di tutti i workers
+        all_workers_stats = global_data.get('workers', {})
+        if not all_workers_stats:
+            return local_stats
         
         merged_stats = local_stats.copy()
         
-        # RAM: prendiamo il valore più alto (peggiore caso)
-        if global_stats.get('ram_usage', 0) > local_stats.get('ram_usage', 0):
-            merged_stats['ram_usage'] = global_stats['ram_usage']
-            merged_stats['ram_used_gb'] = global_stats.get('ram_used_gb', local_stats.get('ram_used_gb', 0))
-            merged_stats['ram_total_gb'] = global_stats.get('ram_total_gb', local_stats.get('ram_total_gb', 0))
+        # Aggrega statistiche di tutti i workers
+        total_ram_usage = local_stats.get('ram_usage', 0)
+        total_ram_used_gb = local_stats.get('ram_used_gb', 0)
+        total_ram_total_gb = local_stats.get('ram_total_gb', 0)
+        total_network_sent = local_stats.get('network_sent', 0)
+        total_network_recv = local_stats.get('network_recv', 0)
+        total_prebuffer_streams = local_stats.get('prebuffer_streams', 0)
+        total_prebuffer_segments = local_stats.get('prebuffer_segments', 0)
+        total_prebuffer_size_mb = local_stats.get('prebuffer_size_mb', 0)
+        total_prebuffer_threads = local_stats.get('prebuffer_threads', 0)
         
-        # Banda: sommiamo i valori (tutti i workers contribuiscono)
-        merged_stats['bandwidth_usage'] = local_stats.get('bandwidth_usage', 0) + global_stats.get('bandwidth_usage', 0)
-        merged_stats['network_sent'] = local_stats.get('network_sent', 0) + global_stats.get('network_sent', 0)
-        merged_stats['network_recv'] = local_stats.get('network_recv', 0) + global_stats.get('network_recv', 0)
+        # Cache size e uptime (prendiamo i valori più alti)
+        total_cache_size = local_stats.get('cache_size', '0 items')
+        total_uptime = local_stats.get('uptime', '0h')
+        total_requests_per_min = local_stats.get('requests_per_min', 0)
         
-        # Pre-buffer: sommiamo i valori (tutti i workers contribuiscono)
-        merged_stats['prebuffer_streams'] = local_stats.get('prebuffer_streams', 0) + global_stats.get('prebuffer_streams', 0)
-        merged_stats['prebuffer_segments'] = local_stats.get('prebuffer_segments', 0) + global_stats.get('prebuffer_segments', 0)
-        merged_stats['prebuffer_size_mb'] = local_stats.get('prebuffer_size_mb', 0) + global_stats.get('prebuffer_size_mb', 0)
-        merged_stats['prebuffer_threads'] = local_stats.get('prebuffer_threads', 0) + global_stats.get('prebuffer_threads', 0)
+        # Somma le statistiche di tutti gli altri workers
+        for worker_id, worker_data in all_workers_stats.items():
+            if worker_id != str(os.getpid()):  # Escludi il worker corrente (già incluso)
+                worker_stats = worker_data.get('stats', {})
+                
+                # RAM: prendiamo il valore più alto (peggiore caso)
+                if worker_stats.get('ram_usage', 0) > total_ram_usage:
+                    total_ram_usage = worker_stats.get('ram_usage', 0)
+                    total_ram_used_gb = worker_stats.get('ram_used_gb', 0)
+                    total_ram_total_gb = worker_stats.get('ram_total_gb', 0)
+                
+                # Banda: sommiamo i valori (tutti i workers contribuiscono)
+                total_network_sent += worker_stats.get('network_sent', 0)
+                total_network_recv += worker_stats.get('network_recv', 0)
+                
+                # Pre-buffer: sommiamo i valori (tutti i workers contribuiscono)
+                total_prebuffer_streams += worker_stats.get('prebuffer_streams', 0)
+                total_prebuffer_segments += worker_stats.get('prebuffer_segments', 0)
+                total_prebuffer_size_mb += worker_stats.get('prebuffer_size_mb', 0)
+                total_prebuffer_threads += worker_stats.get('prebuffer_threads', 0)
+                
+                # Cache size: prendiamo il valore più alto (peggiore caso)
+                worker_cache_size = worker_stats.get('cache_size', '0 items')
+                if worker_cache_size != '0 items':
+                    try:
+                        worker_cache_count = int(worker_cache_size.split()[0])
+                        current_cache_count = int(total_cache_size.split()[0]) if total_cache_size != '0 items' else 0
+                        if worker_cache_count > current_cache_count:
+                            total_cache_size = worker_cache_size
+                    except:
+                        pass
+                
+                # Uptime: prendiamo il valore più alto (worker più vecchio)
+                worker_uptime = worker_stats.get('uptime', '0h')
+                if worker_uptime != '0h':
+                    try:
+                        worker_hours = int(worker_uptime.replace('h', ''))
+                        current_hours = int(total_uptime.replace('h', '')) if total_uptime != '0h' else 0
+                        if worker_hours > current_hours:
+                            total_uptime = worker_uptime
+                    except:
+                        pass
+                
+                # Richieste per minuto: sommiamo i valori (tutti i workers contribuiscono)
+                total_requests_per_min += worker_stats.get('requests_per_min', 0)
+        
+        # Aggiorna le statistiche aggregate
+        merged_stats['ram_usage'] = total_ram_usage
+        merged_stats['ram_used_gb'] = total_ram_used_gb
+        merged_stats['ram_total_gb'] = total_ram_total_gb
+        merged_stats['network_sent'] = total_network_sent
+        merged_stats['network_recv'] = total_network_recv
+        merged_stats['prebuffer_streams'] = total_prebuffer_streams
+        merged_stats['prebuffer_segments'] = total_prebuffer_segments
+        merged_stats['prebuffer_size_mb'] = total_prebuffer_size_mb
+        merged_stats['prebuffer_threads'] = total_prebuffer_threads
+        merged_stats['cache_size'] = total_cache_size
+        merged_stats['uptime'] = total_uptime
+        merged_stats['requests_per_min'] = total_requests_per_min
         
         # Aggiungi informazioni di sincronizzazione
         merged_stats['sync_info'] = {
             'enabled': True,
-            'global_worker_id': global_data.get('worker_id'),
-            'global_timestamp': global_data.get('worker_timestamp'),
-            'message': f"Statistiche sistema sincronizzate da tutti i workers (Worker {global_data.get('worker_id', 'N/A')})"
+            'active_workers_count': global_data.get('active_workers_count', 1),
+            'last_update': global_data.get('last_update', 0),
+            'message': f"Statistiche sistema sincronizzate da {global_data.get('active_workers_count', 1)} workers attivi"
         }
         
         return merged_stats
@@ -937,7 +1052,7 @@ def broadcast_stats():
         try:
             stats = get_system_stats()
             stats['daddy_base_url'] = get_daddylive_base_url()
-            stats['session_count'] = len(SESSION_POOL)
+            stats['session_count'] = get_total_sessions_count()
             stats['proxy_count'] = len(PROXY_LIST)
             
             # Aggiungi statistiche proxy
@@ -989,26 +1104,65 @@ def broadcast_stats():
             
             stats['timestamp'] = time.time()
             
-            # Aggiungi statistiche client se disponibile
+            # Aggiungi statistiche client aggregate se disponibili
             try:
-                if 'client_tracker' in globals():
-                    client_stats = client_tracker.get_realtime_stats()
-                    stats.update(client_stats)
+                merged_client_stats = merge_client_stats_from_all_workers()
+                if merged_client_stats:
+                    # Usa le statistiche aggregate
+                    stats.update({
+                        'active_clients': merged_client_stats.get('active_clients', 0),
+                        'active_sessions': merged_client_stats.get('active_sessions', 0),
+                        'total_requests': merged_client_stats.get('total_requests', 0),
+                        'm3u_clients': merged_client_stats.get('m3u_clients', 0),
+                        'm3u_requests': merged_client_stats.get('m3u_requests', 0),
+                        'avg_connection_time': merged_client_stats.get('avg_connection_time', 0)
+                    })
+                    
+                    # Aggiungi informazioni di sincronizzazione
+                    if config_manager._use_global_sync:
+                        stats['sync_info'] = {
+                            'enabled': True,
+                            'global_worker_id': merged_client_stats.get('global_worker_id'),
+                            'global_timestamp': merged_client_stats.get('global_timestamp'),
+                            'message': f"Statistiche sincronizzate da tutti i workers (Worker {merged_client_stats.get('global_worker_id', 'N/A')})"
+                        }
+                    else:
+                        stats['sync_info'] = {
+                            'enabled': False,
+                            'message': "Sincronizzazione non necessaria (ambiente single-worker)"
+                        }
                 else:
-                    # Fallback se client_tracker non è ancora disponibile
-                    stats['active_clients'] = 0
-                    stats['active_sessions'] = 0
-                    stats['total_requests'] = 0
-                    stats['m3u_clients'] = 0
-                    stats['m3u_requests'] = 0
+                    # Fallback alle statistiche locali
+                    if 'client_tracker' in globals():
+                        client_stats = client_tracker.get_realtime_stats()
+                        stats.update(client_stats)
+                    else:
+                        # Fallback se client_tracker non è ancora disponibile
+                        stats['active_clients'] = 0
+                        stats['active_sessions'] = 0
+                        stats['total_requests'] = 0
+                        stats['m3u_clients'] = 0
+                        stats['m3u_requests'] = 0
+                        stats['avg_connection_time'] = 0
+                    
+                    # Informazioni di sincronizzazione per fallback
+                    stats['sync_info'] = {
+                        'enabled': False,
+                        'message': "Client tracker non disponibile"
+                    }
             except Exception as e:
-                app.logger.warning(f"Errore nel recupero statistiche client: {e}")
+                app.logger.warning(f"Errore nel recupero statistiche client aggregate: {e}")
                 # Fallback con valori di default
                 stats['active_clients'] = 0
                 stats['active_sessions'] = 0
                 stats['total_requests'] = 0
                 stats['m3u_clients'] = 0
                 stats['m3u_requests'] = 0
+                stats['avg_connection_time'] = 0
+                stats['sync_info'] = {
+                    'enabled': False,
+                    'message': f"Errore: {str(e)}"
+                }
             
             socketio.emit('stats_update', stats)
             time.sleep(2)  # Aggiorna ogni 2 secondi
@@ -1026,26 +1180,65 @@ def handle_connect():
     # Invia immediatamente le statistiche correnti
     stats = get_system_stats()
     
-    # Aggiungi statistiche client se disponibile
+    # Aggiungi statistiche client aggregate se disponibili
     try:
-        if 'client_tracker' in globals():
-            client_stats = client_tracker.get_realtime_stats()
-            stats.update(client_stats)
+        merged_client_stats = merge_client_stats_from_all_workers()
+        if merged_client_stats:
+            # Usa le statistiche aggregate
+            stats.update({
+                'active_clients': merged_client_stats.get('active_clients', 0),
+                'active_sessions': merged_client_stats.get('active_sessions', 0),
+                'total_requests': merged_client_stats.get('total_requests', 0),
+                'm3u_clients': merged_client_stats.get('m3u_clients', 0),
+                'm3u_requests': merged_client_stats.get('m3u_requests', 0),
+                'avg_connection_time': merged_client_stats.get('avg_connection_time', 0)
+            })
+            
+            # Aggiungi informazioni di sincronizzazione
+            if config_manager._use_global_sync:
+                stats['sync_info'] = {
+                    'enabled': True,
+                    'global_worker_id': merged_client_stats.get('global_worker_id'),
+                    'global_timestamp': merged_client_stats.get('global_timestamp'),
+                    'message': f"Statistiche sincronizzate da tutti i workers (Worker {merged_client_stats.get('global_worker_id', 'N/A')})"
+                }
+            else:
+                stats['sync_info'] = {
+                    'enabled': False,
+                    'message': "Sincronizzazione non necessaria (ambiente single-worker)"
+                }
         else:
-            # Fallback se client_tracker non è ancora disponibile
-            stats['active_clients'] = 0
-            stats['active_sessions'] = 0
-            stats['total_requests'] = 0
-            stats['m3u_clients'] = 0
-            stats['m3u_requests'] = 0
+            # Fallback alle statistiche locali
+            if 'client_tracker' in globals():
+                client_stats = client_tracker.get_realtime_stats()
+                stats.update(client_stats)
+            else:
+                # Fallback se client_tracker non è ancora disponibile
+                stats['active_clients'] = 0
+                stats['active_sessions'] = 0
+                stats['total_requests'] = 0
+                stats['m3u_clients'] = 0
+                stats['m3u_requests'] = 0
+                stats['avg_connection_time'] = 0
+            
+            # Informazioni di sincronizzazione per fallback
+            stats['sync_info'] = {
+                'enabled': False,
+                'message': "Client tracker non disponibile"
+            }
     except Exception as e:
-        app.logger.warning(f"Errore nel recupero statistiche client per nuova connessione: {e}")
+        app.logger.warning(f"Errore nel recupero statistiche client aggregate per nuova connessione: {e}")
         # Fallback con valori di default
         stats['active_clients'] = 0
         stats['active_sessions'] = 0
         stats['total_requests'] = 0
         stats['m3u_clients'] = 0
         stats['m3u_requests'] = 0
+        stats['avg_connection_time'] = 0
+        stats['sync_info'] = {
+            'enabled': False,
+            'message': f"Errore: {str(e)}"
+        }
     
     emit('stats_update', stats)
 
@@ -3184,7 +3377,7 @@ def dashboard():
     return render_template('dashboard.html', 
                          stats=stats, 
                          daddy_base_url=daddy_base_url,
-                         session_count=len(SESSION_POOL),
+                         session_count=get_total_sessions_count(),
                          proxy_count=len(PROXY_LIST))
 
 @app.route('/admin')
@@ -3312,7 +3505,7 @@ def index():
     return render_template('index.html', 
                          stats=stats, 
                          base_url=base_url,
-                         session_count=len(SESSION_POOL),
+                         session_count=get_total_sessions_count(),
                          vavoo_info=vavoo_info)
 
 @app.route('/logout')
@@ -4109,9 +4302,18 @@ def test_prebuffer():
 @app.route('/stats')
 def get_stats():
     """Endpoint per ottenere le statistiche di sistema (sincronizzate tra workers)"""
-    stats = get_system_stats()
+    # Usa le statistiche di sistema aggregate se disponibili
+    merged_stats = merge_system_stats_from_all_workers()
+    
+    if merged_stats:
+        # Usa le statistiche aggregate
+        stats = merged_stats.copy()
+    else:
+        # Fallback alle statistiche locali
+        stats = get_system_stats()
+    
     stats['daddy_base_url'] = get_daddylive_base_url()
-    stats['session_count'] = len(SESSION_POOL)
+    stats['session_count'] = get_total_sessions_count()
     stats['proxy_count'] = len(PROXY_LIST)
     stats['daddy_proxy_count'] = len(DADDY_PROXY_LIST)
     
@@ -4163,20 +4365,34 @@ def get_stats():
     }
     
     # Aggiungi campi mancanti per il template admin.html
-    stats['active_connections'] = len(SESSION_POOL)
-    stats['cache_size'] = f"{len(M3U8_CACHE) + len(TS_CACHE) + len(KEY_CACHE)} items"
+    stats['active_connections'] = get_total_sessions_count()
     
-    # Calcola uptime (tempo dall'avvio del processo)
-    try:
-        process = psutil.Process()
-        uptime_seconds = time.time() - process.create_time()
-        uptime_hours = int(uptime_seconds // 3600)
-        stats['uptime'] = f"{uptime_hours}h"
-    except:
-        stats['uptime'] = "0h"
+    # Cache size aggregata da tutti i workers
+    if merged_stats and 'cache_size' in merged_stats:
+        stats['cache_size'] = merged_stats['cache_size']
+    else:
+        # Fallback alla cache locale
+        stats['cache_size'] = f"{len(M3U8_CACHE) + len(TS_CACHE) + len(KEY_CACHE)} items"
     
-    # Calcola richieste per minuto (semplificato)
-    stats['requests_per_min'] = len(SESSION_POOL) * 2  # Stima basata su sessioni attive
+    # Uptime aggregato (massimo uptime tra tutti i workers)
+    if merged_stats and 'uptime' in merged_stats:
+        stats['uptime'] = merged_stats['uptime']
+    else:
+        # Fallback all'uptime locale
+        try:
+            process = psutil.Process()
+            uptime_seconds = time.time() - process.create_time()
+            uptime_hours = int(uptime_seconds // 3600)
+            stats['uptime'] = f"{uptime_hours}h"
+        except:
+            stats['uptime'] = "0h"
+    
+    # Richieste per minuto aggregate
+    if merged_stats and 'requests_per_min' in merged_stats:
+        stats['requests_per_min'] = merged_stats['requests_per_min']
+    else:
+        # Fallback alla stima locale
+        stats['requests_per_min'] = get_total_sessions_count() * 2  # Stima basata su sessioni attive
     
     # Aggiungi statistiche pre-buffer
     stats['prebuffer_info'] = {
@@ -5976,15 +6192,47 @@ def debug_system_stats_status():
         if sync_info["enabled"] and sync_info["file_exists"]:
             global_data = load_system_stats_from_global()
             if global_data:
+                all_workers_stats = global_data.get('workers', {})
+                current_time = time.time()
+                
+                # Calcola statistiche aggregate
+                total_ram_usage = 0
+                total_prebuffer_streams = 0
+                total_prebuffer_threads = 0
+                total_network_sent = 0
+                total_network_recv = 0
+                active_workers = 0
+                
+                for worker_id, worker_data in all_workers_stats.items():
+                    if current_time - worker_data.get('worker_timestamp', 0) <= 30:
+                        active_workers += 1
+                        worker_stats = worker_data.get('stats', {})
+                        
+                        # RAM: prendiamo il valore più alto
+                        if worker_stats.get('ram_usage', 0) > total_ram_usage:
+                            total_ram_usage = worker_stats.get('ram_usage', 0)
+                        
+                        # Somma le altre statistiche
+                        total_prebuffer_streams += worker_stats.get('prebuffer_streams', 0)
+                        total_prebuffer_threads += worker_stats.get('prebuffer_threads', 0)
+                        total_network_sent += worker_stats.get('network_sent', 0)
+                        total_network_recv += worker_stats.get('network_recv', 0)
+                
                 global_stats = {
-                    "worker_id": global_data.get('worker_id'),
-                    "worker_timestamp": global_data.get('worker_timestamp'),
-                    "age_seconds": time.time() - global_data.get('worker_timestamp', 0),
+                    "active_workers_count": global_data.get('active_workers_count', 0),
+                    "last_update": global_data.get('last_update', 0),
+                    "age_seconds": time.time() - global_data.get('last_update', 0),
                     "stats_summary": {
-                        "ram_usage": global_data.get('stats', {}).get('ram_usage', 0),
-                        "prebuffer_streams": global_data.get('stats', {}).get('prebuffer_streams', 0),
-                        "prebuffer_threads": global_data.get('stats', {}).get('prebuffer_threads', 0),
-                        "bandwidth_usage": global_data.get('stats', {}).get('bandwidth_usage', 0)
+                        "ram_usage": total_ram_usage,
+                        "prebuffer_streams": total_prebuffer_streams,
+                        "prebuffer_threads": total_prebuffer_threads,
+                        "network_sent_mb": round(total_network_sent, 2),
+                        "network_recv_mb": round(total_network_recv, 2)
+                    },
+                    "workers_detail": {
+                        "total_workers": len(all_workers_stats),
+                        "active_workers": active_workers,
+                        "worker_ids": list(all_workers_stats.keys())
                     }
                 }
         
@@ -6032,9 +6280,25 @@ def debug_session_sync_status():
         if sync_info["enabled"] and sync_info["file_exists"]:
             global_data = load_sessions_from_global()
             if global_data:
+                current_time = time.time()
+                pool_sessions = 0
+                worker_heartbeats = 0
+                active_workers = set()
+                
+                for session_id, session_data in global_data.items():
+                    if current_time - session_data.get('last_activity', 0) <= 300:  # 5 minuti
+                        if session_data.get('type') == 'pool_session':
+                            pool_sessions += 1
+                        elif session_data.get('type') == 'worker_heartbeat':
+                            worker_heartbeats += 1
+                            active_workers.add(session_data.get('worker_id'))
+                
                 global_sessions = {
                     "total_sessions": len(global_data),
-                    "active_sessions": len([s for s in global_data.values() if s.get('logged_in')]),
+                    "pool_sessions": pool_sessions,
+                    "worker_heartbeats": worker_heartbeats,
+                    "active_workers": list(active_workers),
+                    "total_sessions_count": get_total_sessions_count(),
                     "sessions": global_data
                 }
         
@@ -6190,8 +6454,19 @@ def save_sessions_to_global():
         active_sessions = {}
         current_time = time.time()
         
-        # Per ora, salviamo solo un heartbeat del worker
-        # Le sessioni reali verranno gestite tramite login/logout espliciti
+        # Salva le sessioni del pool locale
+        for session_key, session_data in SESSION_POOL.items():
+            session_id = f"pool_{os.getpid()}_{session_key}"
+            active_sessions[session_id] = {
+                'type': 'pool_session',
+                'worker_id': os.getpid(),
+                'session_key': session_key,
+                'created_at': current_time,
+                'last_activity': current_time,
+                'status': 'active'
+            }
+        
+        # Salva anche un heartbeat del worker
         worker_session_id = f"worker_{os.getpid()}"
         active_sessions[worker_session_id] = {
             'type': 'worker_heartbeat',
@@ -6237,6 +6512,39 @@ def load_sessions_from_global():
     except Exception as e:
         app.logger.error(f"Errore nel caricamento sessioni: {e}")
         return {}
+
+def get_total_sessions_count():
+    """Ottiene il numero totale di sessioni da tutti i workers"""
+    try:
+        if not config_manager._use_global_sync:
+            # Se non c'è sincronizzazione, restituisci solo le sessioni locali
+            return len(SESSION_POOL)
+        
+        # Carica le sessioni globali
+        global_sessions = load_sessions_from_global()
+        current_time = time.time()
+        
+        # Conta solo le sessioni valide (non scadute)
+        valid_sessions = 0
+        active_workers = set()
+        
+        for session_id, session_data in global_sessions.items():
+            # Verifica che la sessione non sia scaduta (5 minuti)
+            if current_time - session_data.get('last_activity', 0) <= 300:
+                if session_data.get('type') == 'pool_session':
+                    valid_sessions += 1
+                elif session_data.get('type') == 'worker_heartbeat':
+                    active_workers.add(session_data.get('worker_id'))
+        
+        # Se non ci sono sessioni globali valide, usa le sessioni locali
+        if valid_sessions == 0:
+            return len(SESSION_POOL)
+        
+        return valid_sessions
+        
+    except Exception as e:
+        app.logger.warning(f"Errore nel calcolo sessioni totali: {e}")
+        return len(SESSION_POOL)
 
 def trigger_proxy_reload():
     """Attiva il ricaricamento proxy su tutti i workers"""
