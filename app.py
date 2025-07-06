@@ -1697,7 +1697,6 @@ def url_builder():
             <div class="output-area">
                 <label for="generated-url">URL Generato</label>
                 <div id="generated-url">L'URL apparirà qui...</div>
-                <button type="button" class="btn" onclick="copyUrl()">Copia URL</button>
             </div>
 
             <div class="home-link">
@@ -1772,18 +1771,7 @@ def url_builder():
                 document.getElementById('generated-url').textContent = finalUrl;
             }
 
-            function copyUrl() {
-                const urlText = document.getElementById('generated-url').textContent;
-                if (urlText && !urlText.startsWith('L\\'URL') && !urlText.startsWith('Nessuna')) {
-                    navigator.clipboard.writeText(urlText).then(() => {
-                        alert('URL copiato negli appunti!');
-                    }).catch(err => {
-                        alert('Errore durante la copia: ' + err);
-                    });
-                } else {
-                    alert('Nessun URL da copiare.');
-                }
-            }
+
         </script>
     </body>
     </html>
