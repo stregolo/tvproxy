@@ -323,6 +323,39 @@
             background: linear-gradient(135deg, #e91e63 0%, #f44336 100%) !important;
         }
         
+        .sync-btn-danger {
+            background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%) !important;
+            color: white !important;
+        }
+        
+        .sync-btn-danger:hover {
+            transform: translateY(-2px) !important;
+            box-shadow: 0 8px 25px rgba(244, 67, 54, 0.3) !important;
+            background: linear-gradient(135deg, #d32f2f 0%, #b71c1c 100%) !important;
+        }
+        
+        .sync-btn-info {
+            background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%) !important;
+            color: white !important;
+        }
+        
+        .sync-btn-info:hover {
+            transform: translateY(-2px) !important;
+            box-shadow: 0 8px 25px rgba(33, 150, 243, 0.3) !important;
+            background: linear-gradient(135deg, #1976d2 0%, #1565c0 100%) !important;
+        }
+        
+        .sync-btn-secondary {
+            background: linear-gradient(135deg, #6c757d 0%, #495057 100%) !important;
+            color: white !important;
+        }
+        
+        .sync-btn-secondary:hover {
+            transform: translateY(-2px) !important;
+            box-shadow: 0 8px 25px rgba(108, 117, 125, 0.3) !important;
+            background: linear-gradient(135deg, #495057 0%, #343a40 100%) !important;
+        }
+        
         .sync-btn:disabled {
             opacity: 0.6;
             cursor: not-allowed;
@@ -770,6 +803,18 @@
                             </button>
                             <button class="sync-btn sync-btn-danger" onclick="clearStatsCache()">
                                 <i class="fas fa-trash"></i> Pulisci Cache
+                            </button>
+                            <button class="sync-btn sync-btn-warning" onclick="repairJsonFiles()">
+                                <i class="fas fa-wrench"></i> Ripara JSON
+                            </button>
+                            <button class="sync-btn sync-btn-danger" onclick="forceRepairJson()">
+                                <i class="fas fa-exclamation-triangle"></i> Forza Riparazione
+                            </button>
+                            <button class="sync-btn sync-btn-info" onclick="clearDashboardCache()">
+                                <i class="fas fa-sync-alt"></i> Pulisci Cache Dashboard
+                            </button>
+                            <button class="sync-btn sync-btn-secondary" onclick="checkDashboardCache()">
+                                <i class="fas fa-info-circle"></i> Stato Cache
                             </button>
                         </div>
                     </div>
@@ -1259,6 +1304,159 @@
                     }, 2000);
                 } else {
                     showToast('❌ Errore nella pulizia cache: ' + result.message);
+                }
+            })
+            .catch(error => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                showToast('❌ Errore di connessione: ' + error.message);
+            });
+        }
+
+        function repairJsonFiles() {
+            const btn = event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Riparando...';
+            btn.disabled = true;
+            
+            fetch('/admin/debug/repair-json-files', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                
+                if (result.status === 'success') {
+                    let message = '✅ File JSON riparati!\n';
+                    if (result.results) {
+                        Object.entries(result.results).forEach(([file, status]) => {
+                            message += `${file}: ${status}\n`;
+                        });
+                    }
+                    showToast(message);
+                    
+                    // Ricarica la pagina dopo 3 secondi
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 3000);
+                } else {
+                    showToast('❌ Errore nella riparazione JSON: ' + result.message);
+                }
+            })
+            .catch(error => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                showToast('❌ Errore di connessione: ' + error.message);
+            });
+        }
+
+        function forceRepairJson() {
+            if (!confirm('⚠️ ATTENZIONE: Questa operazione pulirà tutte le cache e riparerà forzatamente tutti i file JSON. Continuare?')) {
+                return;
+            }
+            
+            const btn = event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Forzando...';
+            btn.disabled = true;
+            
+            fetch('/admin/debug/force-repair-json', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                
+                if (result.status === 'success') {
+                    showToast('✅ Riparazione forzata completata! Ricarica la pagina per vedere i risultati.');
+                    
+                    // Ricarica la pagina dopo 2 secondi
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 2000);
+                } else {
+                    showToast('❌ Errore nella riparazione forzata: ' + result.message);
+                }
+            })
+            .catch(error => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                showToast('❌ Errore di connessione: ' + error.message);
+            });
+        }
+
+        function clearDashboardCache() {
+            const btn = event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Pulendo...';
+            btn.disabled = true;
+            
+            fetch('/admin/debug/clear-dashboard-cache', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                
+                if (result.status === 'success') {
+                    showToast('✅ Cache dashboard pulita! I dati verranno aggiornati al prossimo refresh.');
+                    
+                    // Ricarica la pagina dopo 1 secondo
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1000);
+                } else {
+                    showToast('❌ Errore nella pulizia cache: ' + result.message);
+                }
+            })
+            .catch(error => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                showToast('❌ Errore di connessione: ' + error.message);
+            });
+        }
+
+        function checkDashboardCache() {
+            const btn = event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Controllando...';
+            btn.disabled = true;
+            
+            fetch('/admin/debug/dashboard-cache-status')
+            .then(response => response.json())
+            .then(result => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                
+                if (result.status === 'success') {
+                    const cache = result.cache_status.dashboard_cache;
+                    const status = cache.is_valid ? '✅' : '❌';
+                    const age = Math.round(cache.age_seconds);
+                    
+                    let message = `Cache Dashboard:\n`;
+                    message += `${status} Stato: ${cache.is_valid ? 'Valida' : 'Scaduta'}\n`;
+                    message += `📊 Età: ${age}s / ${cache.ttl_seconds}s\n`;
+                    message += `📁 Dati: ${cache.has_data ? 'Presenti' : 'Assenti'}\n`;
+                    message += `🔑 Chiavi: ${cache.data_keys.length}`;
+                    
+                    showToast(message);
+                } else {
+                    showToast('❌ Errore nel controllo cache: ' + result.message);
                 }
             })
             .catch(error => {
