@@ -116,8 +116,8 @@ def get_daddylive_base_url():
         session.trust_env = False  # Ignore environment proxy variables
         main_url_req = session.get(
             github_url,
-            timeout=REQUEST_TIMEOUT,
-            verify=VERIFY_SSL
+            timeout=get_request_timeout(),
+            verify=get_verify_ssl()
         )
         main_url_req.raise_for_status()
         content = main_url_req.text
@@ -307,7 +307,7 @@ vavoo_resolver = VavooResolver()
 # --- Configurazione Autenticazione ---
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
 ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'password123')
-ALLOWED_IPS = os.environ.get('ALLOWED_IPS', '').split(',') if os.environ.get('ALLOWED_IPS') else []
+# ALLOWED_IPS viene caricato dinamicamente dalla configurazione web
 
 def setup_all_caches():
     global M3U8_CACHE, TS_CACHE, KEY_CACHE
@@ -1042,23 +1042,47 @@ def handle_disconnect():
     app.logger.info("Client disconnesso")
 
 # --- Configurazione Generale ---
-VERIFY_SSL = os.environ.get('VERIFY_SSL', 'false').lower() not in ('false', '0', 'no')
+# Tutte le configurazioni tecniche vengono caricate dinamicamente dalla configurazione web
+# I valori di default vengono impostati nel ConfigManager
+
+def get_config_value(key, default=None):
+    """Ottiene un valore dalla configurazione web con fallback al default"""
+    try:
+        config = config_manager.load_config()
+        return config.get(key, default)
+    except:
+        return default
+
+def get_request_timeout():
+    """Ottiene il timeout per le richieste dalla configurazione web"""
+    return get_config_value('REQUEST_TIMEOUT', 30)
+
+def get_verify_ssl():
+    """Ottiene la configurazione SSL dalla configurazione web"""
+    return get_config_value('VERIFY_SSL', False)
+
+def get_keep_alive_timeout():
+    """Ottiene il timeout Keep-Alive dalla configurazione web"""
+    return get_config_value('KEEP_ALIVE_TIMEOUT', 300)
+
+def get_max_keep_alive_requests():
+    """Ottiene il numero massimo di richieste Keep-Alive dalla configurazione web"""
+    return get_config_value('MAX_KEEP_ALIVE_REQUESTS', 1000)
+
+def get_pool_connections():
+    """Ottiene il numero di connessioni del pool dalla configurazione web"""
+    return get_config_value('POOL_CONNECTIONS', 20)
+
+def get_pool_maxsize():
+    """Ottiene la dimensione massima del pool dalla configurazione web"""
+    return get_config_value('POOL_MAXSIZE', 50)
+
+# Configurazione SSL iniziale
+VERIFY_SSL = get_verify_ssl()
 if not VERIFY_SSL:
     print("ATTENZIONE: La verifica del certificato SSL è DISABILITATA. Questo potrebbe esporre a rischi di sicurezza.")
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# Timeout aumentato per gestire meglio i segmenti TS di grandi dimensioni
-REQUEST_TIMEOUT = int(os.environ.get('REQUEST_TIMEOUT', 30))
-print(f"Timeout per le richieste impostato a {REQUEST_TIMEOUT} secondi.")
-
-# Configurazioni Keep-Alive
-KEEP_ALIVE_TIMEOUT = int(os.environ.get('KEEP_ALIVE_TIMEOUT', 300))  # 5 minuti
-MAX_KEEP_ALIVE_REQUESTS = int(os.environ.get('MAX_KEEP_ALIVE_REQUESTS', 1000))
-POOL_CONNECTIONS = int(os.environ.get('POOL_CONNECTIONS', 20))
-POOL_MAXSIZE = int(os.environ.get('POOL_MAXSIZE', 50))
-
-print(f"Keep-Alive configurato: timeout={KEEP_ALIVE_TIMEOUT}s, max_requests={MAX_KEEP_ALIVE_REQUESTS}")
 
 # --- Setup Logging System ---
 def setup_logging():
@@ -1450,9 +1474,9 @@ class ConfigManager:
                 
                 app.logger.info(f"Proxy combinati per {key}: {len(unique_proxies)} totali")
         
-        # Per le altre variabili, mantieni la priorità alle env vars SOLO se non sono già state caricate
+        # Per le altre variabili, mantieni la priorità alle env vars SOLO per ADMIN_PASSWORD e SECRET_KEY
         for key in config.keys():
-            if key not in proxy_keys:  # Salta i proxy che abbiamo già gestito
+            if key in ['ADMIN_PASSWORD', 'SECRET_KEY']:  # Solo queste due variabili possono essere sovrascritte dalle env vars
                 env_value = os.environ.get(key)
                 if env_value is not None:
                     # Controlla se il valore è già stato caricato da file/cache (non è il default)
@@ -1461,24 +1485,7 @@ class ConfigManager:
                     
                     # Sovrascrivi solo se il valore corrente è uguale al default (non è stato salvato)
                     if current_value == default_value:
-                        # Converti il tipo appropriato
-                        if key in ['VERIFY_SSL', 'CACHE_ENABLED', 'PREBUFFER_ENABLED']:
-                            config[key] = env_value.lower() in ('true', '1', 'yes')
-                        elif key in ['REQUEST_TIMEOUT', 'KEEP_ALIVE_TIMEOUT', 'MAX_KEEP_ALIVE_REQUESTS', 
-                                    'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'CACHE_TTL_M3U8', 'CACHE_TTL_TS', 
-                                    'CACHE_TTL_KEY', 'CACHE_MAXSIZE_M3U8', 'CACHE_MAXSIZE_TS', 'CACHE_MAXSIZE_KEY',
-                                    'PREBUFFER_MAX_SEGMENTS', 'PREBUFFER_MAX_SIZE_MB', 'PREBUFFER_CLEANUP_INTERVAL']:
-                            try:
-                                config[key] = int(env_value)
-                            except ValueError:
-                                app.logger.warning(f"Valore non valido per {key}: {env_value}")
-                        elif key in ['PREBUFFER_MAX_MEMORY_PERCENT', 'PREBUFFER_EMERGENCY_THRESHOLD']:
-                            try:
-                                config[key] = float(env_value)
-                            except ValueError:
-                                app.logger.warning(f"Valore non valido per {key}: {env_value}")
-                        else:
-                            config[key] = env_value
+                        config[key] = env_value
                         app.logger.debug(f"Variabile d'ambiente {key} sovrascrive default: {env_value}")
                     else:
                         app.logger.debug(f"Valore salvato per {key} ({current_value}) ha priorità su env var ({env_value})")
@@ -2220,7 +2227,7 @@ def create_robust_session():
     # Configurazione Keep-Alive
     session.headers.update({
         'Connection': 'keep-alive',
-        'Keep-Alive': f'timeout={KEEP_ALIVE_TIMEOUT}, max={MAX_KEEP_ALIVE_REQUESTS}'
+        'Keep-Alive': f'timeout={get_keep_alive_timeout()}, max={get_max_keep_alive_requests()}'
     })
     
     retry_strategy = Retry(
@@ -2234,8 +2241,8 @@ def create_robust_session():
     
     adapter = HTTPAdapter(
         max_retries=retry_strategy,
-        pool_connections=POOL_CONNECTIONS,
-        pool_maxsize=POOL_MAXSIZE,
+        pool_connections=get_pool_connections(),
+        pool_maxsize=get_pool_maxsize(),
         pool_block=False
     )
     
@@ -2271,7 +2278,7 @@ def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, met
     # Headers per keep-alive
     request_headers = {
         'Connection': 'keep-alive',
-        'Keep-Alive': f'timeout={KEEP_ALIVE_TIMEOUT}, max={MAX_KEEP_ALIVE_REQUESTS}'
+        'Keep-Alive': f'timeout={get_keep_alive_timeout()}, max={get_max_keep_alive_requests()}'
     }
     
     if headers:
@@ -2282,16 +2289,16 @@ def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, met
             response = session.post(
                 url, 
                 headers=request_headers, 
-                timeout=timeout or REQUEST_TIMEOUT,
-                verify=VERIFY_SSL,
+                timeout=timeout or get_request_timeout(),
+                verify=get_verify_ssl(),
                 **kwargs
             )
         else:
             response = session.get(
                 url, 
                 headers=request_headers, 
-                timeout=timeout or REQUEST_TIMEOUT,
-                verify=VERIFY_SSL,
+                timeout=timeout or get_request_timeout(),
+                verify=get_verify_ssl(),
                 **kwargs
             )
         return response
@@ -2315,8 +2322,10 @@ def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, met
                 del SESSION_POOL[proxy_url]
         raise
 
-def get_dynamic_timeout(url, base_timeout=REQUEST_TIMEOUT):
+def get_dynamic_timeout(url, base_timeout=None):
     """Calcola timeout dinamico basato sul tipo di risorsa."""
+    if base_timeout is None:
+        base_timeout = get_request_timeout()
     if '.ts' in url.lower():
         return base_timeout * 2  # Timeout doppio per segmenti TS
     elif '.m3u8' in url.lower():
@@ -2493,8 +2502,8 @@ def resolve_m3u8_link(url, headers=None):
         
         main_url_req = session.get(
             github_url,
-            timeout=REQUEST_TIMEOUT,
-            verify=VERIFY_SSL
+            timeout=get_request_timeout(),
+            verify=get_verify_ssl()
         )
         main_url_req.raise_for_status()
         main_url = main_url_req.text
@@ -2516,7 +2525,7 @@ def resolve_m3u8_link(url, headers=None):
 
         app.logger.info(f"Passo 1: Richiesta a {stream_url}")
         proxy_config = get_proxy_for_url(stream_url, original_url=clean_url)
-        response = safe_http_request(stream_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
+        response = safe_http_request(stream_url, headers=final_headers_for_resolving, timeout=get_request_timeout(), proxies=proxy_config)
         response.raise_for_status()
 
         iframes = re.findall(r'<a[^>]*href="([^"]+)"[^>]*>\s*<button[^>]*>\s*Player\s*2\s*</button>', response.text)
@@ -2535,7 +2544,7 @@ def resolve_m3u8_link(url, headers=None):
 
         app.logger.info(f"Passo 3: Richiesta a Player 2: {url2}")
         proxy_config = get_proxy_for_url(url2, original_url=clean_url)
-        response = safe_http_request(url2, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
+        response = safe_http_request(url2, headers=final_headers_for_resolving, timeout=get_request_timeout(), proxies=proxy_config)
         response.raise_for_status()
 
         iframes = re.findall(r'iframe src="([^"]*)', response.text)
@@ -2548,7 +2557,7 @@ def resolve_m3u8_link(url, headers=None):
 
         app.logger.info(f"Passo 5: Richiesta iframe: {iframe_url}")
         proxy_config = get_proxy_for_url(iframe_url, original_url=clean_url)
-        response = safe_http_request(iframe_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
+        response = safe_http_request(iframe_url, headers=final_headers_for_resolving, timeout=get_request_timeout(), proxies=proxy_config)
         response.raise_for_status()
 
         iframe_content = response.text
@@ -2575,7 +2584,7 @@ def resolve_m3u8_link(url, headers=None):
         auth_url = f'{auth_host}{auth_php}?channel_id={channel_key}&ts={auth_ts}&rnd={auth_rnd}&sig={auth_sig}'
         app.logger.info(f"Passo 6: Autenticazione: {auth_url}")
         proxy_config = get_proxy_for_url(auth_url, original_url=clean_url)
-        auth_response = safe_http_request(auth_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
+        auth_response = safe_http_request(auth_url, headers=final_headers_for_resolving, timeout=get_request_timeout(), proxies=proxy_config)
         auth_response.raise_for_status()
 
         host = re.findall('(?s)m3u8 =.*?:.*?:.*?".*?".*?"([^"]*)', iframe_content)[0]
@@ -2584,7 +2593,7 @@ def resolve_m3u8_link(url, headers=None):
         app.logger.info(f"Passo 7: Server lookup: {server_lookup_url}")
 
         proxy_config = get_proxy_for_url(server_lookup_url, original_url=clean_url)
-        lookup_response = safe_http_request(server_lookup_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config)
+        lookup_response = safe_http_request(server_lookup_url, headers=final_headers_for_resolving, timeout=get_request_timeout(), proxies=proxy_config)
         lookup_response.raise_for_status()
         server_data = lookup_response.json()
         server_key = server_data['server_key']
@@ -2672,15 +2681,31 @@ def debug_env():
     """Debug delle variabili d'ambiente"""
     env_vars = {}
     config_keys = [
-        'ADMIN_PASSWORD', 'SECRET_KEY', 'CACHE_TTL_M3U8', 'CACHE_MAXSIZE_M3U8',
-        'CACHE_TTL_TS', 'CACHE_MAXSIZE_TS', 'CACHE_TTL_KEY', 'CACHE_MAXSIZE_KEY',
-        'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'MAX_KEEP_ALIVE_REQUESTS',
-        'KEEP_ALIVE_TIMEOUT', 'REQUEST_TIMEOUT'
+        'ADMIN_PASSWORD', 'SECRET_KEY'
     ]
     
     for key in config_keys:
         env_vars[key] = {
             'env_value': os.environ.get(key, 'NON_IMPOSTATA'),
+            'current_config': config_manager.load_config().get(key, 'NON_TROVATA')
+        }
+    
+    # Configurazioni tecniche (solo dal pannello web)
+    technical_configs = [
+        'CACHE_TTL_M3U8', 'CACHE_MAXSIZE_M3U8', 'CACHE_TTL_TS', 'CACHE_MAXSIZE_TS', 
+        'CACHE_TTL_KEY', 'CACHE_MAXSIZE_KEY', 'POOL_CONNECTIONS', 'POOL_MAXSIZE', 
+        'MAX_KEEP_ALIVE_REQUESTS', 'KEEP_ALIVE_TIMEOUT', 'REQUEST_TIMEOUT', 
+        'VERIFY_SSL', 'ALLOWED_IPS'
+    ]
+    
+    env_vars['technical_configs'] = {
+        'note': 'Configurate solo tramite pannello web',
+        'configs': {}
+    }
+    
+    for key in technical_configs:
+        env_vars['technical_configs']['configs'][key] = {
+            'env_value': 'NON_UTILIZZATA (solo configurazione web)',
             'current_config': config_manager.load_config().get(key, 'NON_TROVATA')
         }
     
@@ -2723,14 +2748,15 @@ def debug_config_status():
                     'source': 'saved'
                 }
             else:
-                # Controlla se c'è una variabile d'ambiente che sovrascrive
-                env_value = os.environ.get(key)
-                if env_value is not None:
-                    env_overrides[key] = {
-                        'current': value,
-                        'env_value': env_value,
-                        'source': 'environment'
-                    }
+                # Controlla se c'è una variabile d'ambiente che sovrascrive (solo per ADMIN_PASSWORD e SECRET_KEY)
+                if key in ['ADMIN_PASSWORD', 'SECRET_KEY']:
+                    env_value = os.environ.get(key)
+                    if env_value is not None:
+                        env_overrides[key] = {
+                            'current': value,
+                            'env_value': env_value,
+                            'source': 'environment'
+                        }
     
     return jsonify({
         'config_status': config_status,
@@ -4417,7 +4443,7 @@ def proxy():
         
         response = make_persistent_request(
             m3u_url,
-            timeout=REQUEST_TIMEOUT,
+            timeout=get_request_timeout(),
             proxy_url=proxy_key
         )
         response.raise_for_status()
@@ -4541,7 +4567,7 @@ def proxy_key():
         response = make_persistent_request(
             key_url,
             headers=headers,
-            timeout=REQUEST_TIMEOUT,
+            timeout=get_request_timeout(),
             proxy_url=proxy_key,
             allow_redirects=True
         )
@@ -4894,9 +4920,9 @@ def safe_http_request(url, headers=None, timeout=None, proxies=None, **kwargs):
             response = requests.get(
                 url,
                 headers=headers,
-                timeout=timeout or REQUEST_TIMEOUT,
+                timeout=timeout or get_request_timeout(),
                 proxies=proxy_dict,
-                verify=VERIFY_SSL,
+                verify=get_verify_ssl(),
                 **kwargs
             )
             return response
