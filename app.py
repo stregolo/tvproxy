@@ -103,6 +103,7 @@ class VavooResolver:
             result = resp.json()
             addon_sig = result.get("addonSig")
             if addon_sig:
+                app.logger.info("Signature Vavoo ottenuta con successo")
                 return addon_sig
             else:
                 app.logger.warning("Signature Vavoo non trovata nella risposta")
@@ -123,7 +124,7 @@ class VavooResolver:
         """
         if not "vavoo.to" in link:
             if verbose:
-                app.logger.debug(f"Link non è Vavoo: {link}")
+                app.logger.info("Il link non è un link Vavoo")
             return None
             
         # Solo metodo principale per il proxy
@@ -152,14 +153,17 @@ class VavooResolver:
             resp.raise_for_status()
             
             if verbose:
-                app.logger.debug(f"Risposta Vavoo ricevuta: {resp.status_code}")
+                app.logger.info(f"Vavoo response status: {resp.status_code}")
+                app.logger.info(f"Vavoo response body: {resp.text}")
             
             result = resp.json()
             if isinstance(result, list) and result and result[0].get("url"):
                 resolved_url = result[0]["url"]
                 channel_name = result[0].get("name", "Unknown")
+                app.logger.info(f"Vavoo risolto: {channel_name} -> {resolved_url}")
                 return resolved_url
             elif isinstance(result, dict) and result.get("url"):
+                app.logger.info(f"Vavoo risolto: {result['url']}")
                 return result["url"]
             else:
                 app.logger.warning("Nessun link valido trovato nella risposta Vavoo")
@@ -181,6 +185,7 @@ def setup_all_caches():
             M3U8_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_M3U8'], ttl=config['CACHE_TTL_M3U8'])
             TS_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_TS'], ttl=config['CACHE_TTL_TS'])
             KEY_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_KEY'], ttl=config['CACHE_TTL_KEY'])
+            app.logger.info("Cache ABILITATA su tutte le risorse.")
         else:
             M3U8_CACHE = {}
             TS_CACHE = {}
@@ -191,6 +196,7 @@ def setup_all_caches():
         M3U8_CACHE = TTLCache(maxsize=100, ttl=300)
         TS_CACHE = TTLCache(maxsize=1000, ttl=60)
         KEY_CACHE = TTLCache(maxsize=50, ttl=3600)
+        app.logger.info("Cache inizializzata con valori di fallback.")
 
 # --- Configurazione Generale ---
 VERIFY_SSL = os.environ.get('VERIFY_SSL', 'false').lower() not in ('false', '0', 'no')
@@ -276,11 +282,13 @@ class ConfigManager:
         proxy_value = os.environ.get('PROXY', '')
         if proxy_value and proxy_value.strip():
             config['PROXY'] = proxy_value.strip()
+            app.logger.info(f"Proxy generale configurato: {proxy_value}")
         
         # Gestione proxy DaddyLive specifico
         daddy_proxy_value = os.environ.get('DADDY_PROXY', '')
         if daddy_proxy_value and daddy_proxy_value.strip():
             config['DADDY_PROXY'] = daddy_proxy_value.strip()
+            app.logger.info(f"Proxy DaddyLive configurato: {daddy_proxy_value}")
         
         # Per le altre variabili, mantieni la priorità alle env vars
         for key in config.keys():
@@ -371,6 +379,7 @@ class PreBufferManager:
                 'max_memory_percent': max_memory_percent,  # Max RAM percent
                 'emergency_cleanup_threshold': emergency_threshold  # Cleanup se RAM > threshold%
             }
+            app.logger.info(f"Configurazione pre-buffer aggiornata: {self.pre_buffer_config}")
         except Exception as e:
             app.logger.error(f"Errore nell'aggiornamento configurazione pre-buffer: {e}")
             # Configurazione di fallback
@@ -397,6 +406,7 @@ class PreBufferManager:
                 )
                 buffer_memory_percent = (total_buffer_size / memory.total) * 100
             
+            app.logger.info(f"Memoria sistema: {memory_percent:.1f}%, Buffer: {buffer_memory_percent:.1f}%")
             
             # Cleanup di emergenza se la RAM supera la soglia
             emergency_threshold = self.pre_buffer_config['emergency_cleanup_threshold']
@@ -471,6 +481,7 @@ class PreBufferManager:
                 if stream_id in self.pre_buffer_threads:
                     del self.pre_buffer_threads[stream_id]
             
+            app.logger.info(f"Pulizia automatica: {len(streams_to_remove)} stream rimossi, {freed_memory / (1024*1024):.1f}MB liberati")
     
     def get_stream_id_from_url(self, url):
         """Estrae un ID stream univoco dall'URL"""
@@ -481,6 +492,7 @@ class PreBufferManager:
         """Pre-scarica i segmenti successivi in background"""
         # Controlla se il pre-buffering è abilitato
         if not self.pre_buffer_config.get('enabled', True):
+            app.logger.info(f"Pre-buffering disabilitato per stream {stream_id}")
             return
         
         # Controlla l'uso di memoria prima di iniziare
@@ -502,6 +514,7 @@ class PreBufferManager:
             
             # Pre-scarica i primi N segmenti
             max_segments = self.pre_buffer_config['max_segments']
+            app.logger.info(f"Pre-buffering per stream {stream_id}: {len(segment_urls)} segmenti disponibili, max_segments={max_segments}")
             segments_to_buffer = segment_urls[:max_segments]
             
             def buffer_worker():
@@ -548,11 +561,13 @@ class PreBufferManager:
                                 self.pre_buffer[stream_id][segment_url] = segment_content
                                 current_buffer_size += segment_size
                             
+                            app.logger.info(f"Segmento pre-buffato: {segment_url} ({segment_size} bytes) per stream {stream_id}")
                             
                         except Exception as e:
                             app.logger.error(f"Errore nel pre-buffering del segmento {segment_url}: {e}")
                             continue
                     
+                    app.logger.info(f"Pre-buffering completato per stream {stream_id}: {len(segments_to_buffer)} segmenti")
                     
                 except Exception as e:
                     app.logger.error(f"Errore nel worker di pre-buffering per stream {stream_id}: {e}")
@@ -579,6 +594,7 @@ class PreBufferManager:
                 content = self.pre_buffer[stream_id][segment_url]
                 # Rimuovi dal buffer dopo l'uso
                 del self.pre_buffer[stream_id][segment_url]
+                app.logger.info(f"Segmento servito dal buffer: {segment_url} per stream {stream_id}")
                 return content
         return None
     
@@ -602,6 +618,7 @@ class PreBufferManager:
                     
                     for stream_id in streams_to_remove:
                         del self.pre_buffer[stream_id]
+                        app.logger.info(f"Buffer pulito per stream {stream_id}")
                 
             except Exception as e:
                 app.logger.error(f"Errore nella pulizia del buffer: {e}")
@@ -637,11 +654,13 @@ def rewrite_m3u_links_streaming(m3u_lines_iterator, base_url, api_password):
                         header_key = header_key.strip()
                         header_value = header_value.strip()
                         current_ext_headers[header_key] = header_value
+                        app.logger.info(f"Trovato header da #EXTVLCOPT (http-header): {{'{header_key}': '{header_value}'}}")
                     elif key_vlc.startswith('http-'):
                         # Gestisce http-user-agent, http-referer etc.
                         header_key = '-'.join(word.capitalize() for word in key_vlc[len('http-'):].split('-'))
                     
                         current_ext_headers[header_key] = value_vlc
+                        app.logger.info(f"Trovato header da #EXTVLCOPT: {{'{header_key}': '{value_vlc}'}}")
             except Exception as e:
                 app.logger.error(f"Errore nel parsing di #EXTVLCOPT '{logical_line}': {e}")
         
@@ -651,6 +670,7 @@ def rewrite_m3u_links_streaming(m3u_lines_iterator, base_url, api_password):
                 json_str = logical_line.split(':', 1)[1]
                 # Sostituisce tutti gli header correnti con quelli del JSON
                 current_ext_headers = json.loads(json_str)
+                app.logger.info(f"Trovati headers da #EXTHTTP: {current_ext_headers}")
             except Exception as e:
                 app.logger.error(f"Errore nel parsing di #EXTHTTP '{logical_line}': {e}")
                 current_ext_headers = {} # Resetta in caso di errore
@@ -661,6 +681,7 @@ def rewrite_m3u_links_streaming(m3u_lines_iterator, base_url, api_password):
         
         if logical_line and not logical_line.startswith('#') and \
            ('http://' in logical_line or 'https://' in logical_line):
+            app.logger.info(f"Processando link: {logical_line[:100]}...")
             
             # Decide la logica di riscrittura in base alla presenza della password
             if api_password is not None:
@@ -669,23 +690,29 @@ def rewrite_m3u_links_streaming(m3u_lines_iterator, base_url, api_password):
                 
                 if 'vixsrc.to' in logical_line:
                     processed_url_content = f"{base_url}/extractor/video?host=VixCloud&redirect_stream=true&api_password={api_password}&d={logical_line}"
+                    app.logger.info(f"Riscritto VixCloud: {logical_line[:50]}... -> {processed_url_content[:50]}...")
                 elif '.m3u8' in logical_line:
                     processed_url_content = f"{base_url}/proxy/hls/manifest.m3u8?api_password={api_password}&d={logical_line}"
+                    app.logger.info(f"Riscritto M3U8: {logical_line[:50]}... -> {processed_url_content[:50]}...")
                 elif '.mpd' in logical_line:
                     processed_url_content = f"{base_url}/proxy/mpd/manifest.m3u8?api_password={api_password}&d={logical_line}"
+                    app.logger.info(f"Riscritto MPD: {logical_line[:50]}... -> {processed_url_content[:50]}...")
                 elif '.php' in logical_line:
                     processed_url_content = f"{base_url}/extractor/video?host=DLHD&redirect_stream=true&api_password={api_password}&d={logical_line}"
+                    app.logger.info(f"Riscritto PHP: {logical_line[:50]}... -> {processed_url_content[:50]}...")
                 else:
                     # Link non modificato dalle regole, ma gli header potrebbero essere aggiunti
-                    pass
+                    app.logger.info(f"Link non modificato (pattern): {logical_line[:50]}...")
             else:
                 # --- NUOVA LOGICA SENZA PASSWORD ---
                 processed_url_content = f"{base_url}/proxy/m3u?url={logical_line}"
+                app.logger.info(f"Riscritto (senza password): {logical_line[:50]}... -> {processed_url_content[:50]}...")
             
             # Applica gli header raccolti, indipendentemente dalla modalità
             if current_ext_headers:
                 header_params_str = "".join([f"&h_{quote(key)}={quote(quote(value))}" for key, value in current_ext_headers.items()])
                 processed_url_content += header_params_str
+                app.logger.info(f"Aggiunti headers a URL: {header_params_str} -> {processed_url_content[:150]}...")
                 current_ext_headers = {}
             
             yield processed_url_content + '\n'
@@ -703,11 +730,14 @@ def download_m3u_playlist_streaming(url):
             'Connection': 'keep-alive'
         }
         
+        app.logger.info(f"Scaricamento (streaming) da: {url}")
         
         proxy_config = get_proxy_for_url(url)
         proxy_key = proxy_config['http'] if proxy_config else None
         
         with make_persistent_request(url, headers=headers, timeout=REQUEST_TIMEOUT, proxy_url=proxy_key, stream=True) as response:
+            app.logger.info(f"Status code: {response.status_code}")
+            app.logger.info(f"Headers risposta (prime parti): {{k: v[:100] for k, v in dict(response.headers).items()}}")
             response.raise_for_status()
             for line_bytes in response.iter_lines():
                 decoded_line = line_bytes.decode('utf-8', errors='replace')
@@ -761,26 +791,32 @@ def setup_proxies():
             if proxy.startswith('socks5://'):
                 # Converti SOCKS5 in SOCKS5H per risoluzione DNS remota
                 final_proxy_url = 'socks5h' + proxy[len('socks5'):]
+                app.logger.info(f"Proxy SOCKS5 convertito: {proxy} -> {final_proxy_url}")
             elif proxy.startswith('socks5h://'):
                 final_proxy_url = proxy
+                app.logger.info(f"Proxy SOCKS5H configurato: {proxy}")
             elif proxy.startswith('http://') or proxy.startswith('https://'):
                 final_proxy_url = proxy
+                app.logger.info(f"Proxy HTTP/HTTPS configurato: {proxy}")
             else:
                 # Se non ha protocollo, assume HTTP
                 if not proxy.startswith('http://') and not proxy.startswith('https://'):
                     final_proxy_url = f"http://{proxy}"
+                    app.logger.info(f"Proxy senza protocollo, convertito in HTTP: {proxy} -> {final_proxy_url}")
                 else:
                     final_proxy_url = proxy
+                    app.logger.info(f"Proxy configurato: {proxy}")
             
             proxies_found.append(final_proxy_url)
         
+        app.logger.info(f"Trovati {len(proxies_found)} proxy generali. Verranno usati a rotazione per ogni richiesta.")
 
     PROXY_LIST = proxies_found
 
     if PROXY_LIST:
-        app.logger.info(f"Proxy configurati: {len(PROXY_LIST)}")
+        app.logger.info(f"Totale di {len(PROXY_LIST)} proxy generali configurati.")
     else:
-        app.logger.warning("Nessun proxy configurato")
+        app.logger.info("Nessun proxy generale configurato.")
 
 def get_daddy_proxy_list():
     """Carica la lista di proxy specifici per DaddyLive."""
@@ -797,19 +833,25 @@ def get_daddy_proxy_list():
             if proxy.startswith('socks5://'):
                 # Converti SOCKS5 in SOCKS5H per risoluzione DNS remota
                 final_proxy_url = 'socks5h' + proxy[len('socks5'):]
+                app.logger.info(f"Proxy DaddyLive SOCKS5 convertito: {proxy} -> {final_proxy_url}")
             elif proxy.startswith('socks5h://'):
                 final_proxy_url = proxy
+                app.logger.info(f"Proxy DaddyLive SOCKS5H configurato: {proxy}")
             elif proxy.startswith('http://') or proxy.startswith('https://'):
                 final_proxy_url = proxy
+                app.logger.info(f"Proxy DaddyLive HTTP/HTTPS configurato: {proxy}")
             else:
                 # Se non ha protocollo, assume HTTP
                 if not proxy.startswith('http://') and not proxy.startswith('https://'):
                     final_proxy_url = f"http://{proxy}"
+                    app.logger.info(f"Proxy DaddyLive senza protocollo, convertito in HTTP: {proxy} -> {final_proxy_url}")
                 else:
                     final_proxy_url = proxy
+                    app.logger.info(f"Proxy DaddyLive configurato: {proxy}")
             
             daddy_proxies.append(final_proxy_url)
         
+        app.logger.info(f"Trovati {len(daddy_proxies)} proxy DaddyLive. Verranno usati a rotazione per contenuti DaddyLive.")
     
     return daddy_proxies
 
@@ -906,6 +948,7 @@ def get_persistent_session(proxy_url=None):
                 session.proxies.update({'http': proxy_url, 'https': proxy_url})
             
             SESSION_POOL[pool_key] = session
+            app.logger.info(f"Nuova sessione persistente creata per: {pool_key}")
         
         return SESSION_POOL[pool_key]
 
@@ -966,6 +1009,7 @@ def get_daddylive_base_url():
         return DADDYLIVE_BASE_URL
 
     try:
+        app.logger.info("Fetching dynamic DaddyLive base URL from GitHub...")
         github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
         
         # Force direct connection for GitHub (no proxy)
@@ -984,11 +1028,13 @@ def get_daddylive_base_url():
                 base_url += '/'
             DADDYLIVE_BASE_URL = base_url
             LAST_FETCH_TIME = current_time
+            app.logger.info(f"Dynamic DaddyLive base URL updated to: {DADDYLIVE_BASE_URL}")
             return DADDYLIVE_BASE_URL
     except requests.RequestException as e:
         app.logger.error(f"Error fetching dynamic DaddyLive URL: {e}. Using fallback.")
     
     DADDYLIVE_BASE_URL = "https://daddylive.sx/"
+    app.logger.info(f"Using fallback DaddyLive URL: {DADDYLIVE_BASE_URL}")
     return DADDYLIVE_BASE_URL
 
 get_daddylive_base_url()
@@ -1029,6 +1075,7 @@ def process_daddylive_url(url):
     if match_premium:
         channel_id = match_premium.group(1)
         new_url = f"{daddy_base_url}watch/stream-{channel_id}.php"
+        app.logger.info(f"URL processato da {url} a {new_url}")
         return new_url
 
     if daddy_domain in url and any(p in url for p in ['/watch/', '/stream/', '/cast/', '/player/']):
@@ -1054,6 +1101,7 @@ def resolve_m3u8_link(url, headers=None):
     clean_url = url
     extracted_headers = {}
     if '&h_' in url or '%26h_' in url:
+        app.logger.info("Rilevati parametri header nell'URL - Estrazione in corso...")
         temp_url = url
         if 'vavoo.to' in temp_url.lower() and '%26' in temp_url:
              temp_url = temp_url.replace('%26', '&')
@@ -1095,10 +1143,12 @@ def resolve_m3u8_link(url, headers=None):
         # Controlla se è un link Vavoo e prova a risolverlo
         # Supporta sia /vavoo-iptv/play/ che /play/ 
         if 'vavoo.to' in clean_url.lower() and ('/vavoo-iptv/play/' in clean_url.lower() or '/play/' in clean_url.lower()):
+            app.logger.info(f"Rilevato link Vavoo, tentativo di risoluzione: {clean_url}")
             
             try:
                 resolved_vavoo = vavoo_resolver.resolve_vavoo_link(clean_url, verbose=True)
                 if resolved_vavoo:
+                    app.logger.info(f"Vavoo risolto con successo: {resolved_vavoo}")
                     return {
                         "resolved_url": resolved_vavoo,
                         "headers": final_headers
@@ -1117,6 +1167,7 @@ def resolve_m3u8_link(url, headers=None):
                 }
         
         # Per tutti gli altri link non-DaddyLive
+        app.logger.info(f"URL non riconosciuto come DaddyLive o Vavoo, verrà passato direttamente: {clean_url}")
         return {
             "resolved_url": clean_url,
             "headers": final_headers
@@ -1124,6 +1175,7 @@ def resolve_m3u8_link(url, headers=None):
     # --- FINE DELLA NUOVA SEZIONE ---
 
     # 3. Se il controllo è superato, procede con la logica di risoluzione DaddyLive (invariata)
+    app.logger.info(f"Tentativo di risoluzione URL (DaddyLive): {clean_url}")
 
     daddy_base_url = get_daddylive_base_url()
     daddy_origin = urlparse(daddy_base_url).scheme + "://" + urlparse(daddy_base_url).netloc
@@ -1136,6 +1188,7 @@ def resolve_m3u8_link(url, headers=None):
     final_headers_for_resolving = {**final_headers, **daddylive_headers}
 
     try:
+        app.logger.info("Ottengo URL base dinamico...")
         github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
         main_url_req = requests.get(
             github_url,
@@ -1146,18 +1199,22 @@ def resolve_m3u8_link(url, headers=None):
         main_url_req.raise_for_status()
         main_url = main_url_req.text
         baseurl = re.findall('(?s)src = "([^"]*)', main_url)[0]
+        app.logger.info(f"URL base ottenuto: {baseurl}")
 
         channel_id = extract_channel_id(clean_url)
         if not channel_id:
             app.logger.error(f"Impossibile estrarre ID canale da {clean_url}")
             return {"resolved_url": clean_url, "headers": current_headers}
 
+        app.logger.info(f"ID canale estratto: {channel_id}")
 
         stream_url = f"{baseurl}stream/stream-{channel_id}.php"
+        app.logger.info(f"URL stream costruito: {stream_url}")
 
         final_headers_for_resolving['Referer'] = baseurl + '/'
         final_headers_for_resolving['Origin'] = baseurl
 
+        app.logger.info(f"Passo 1: Richiesta a {stream_url}")
         max_retries = 3
         for retry in range(max_retries):
             try:
@@ -1185,6 +1242,7 @@ def resolve_m3u8_link(url, headers=None):
             app.logger.error("Nessun link Player 2 trovato")
             return {"resolved_url": clean_url, "headers": current_headers}
 
+        app.logger.info(f"Passo 2: Trovato link Player 2: {iframes[0]}")
 
         url2 = iframes[0]
         url2 = baseurl + url2
@@ -1193,6 +1251,7 @@ def resolve_m3u8_link(url, headers=None):
         final_headers_for_resolving['Referer'] = url2
         final_headers_for_resolving['Origin'] = url2
 
+        app.logger.info(f"Passo 3: Richiesta a Player 2: {url2}")
         response = requests.get(url2, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(url2), verify=VERIFY_SSL)
         response.raise_for_status()
 
@@ -1202,7 +1261,9 @@ def resolve_m3u8_link(url, headers=None):
             return {"resolved_url": clean_url, "headers": current_headers}
 
         iframe_url = iframes[0]
+        app.logger.info(f"Passo 4: Trovato iframe: {iframe_url}")
 
+        app.logger.info(f"Passo 5: Richiesta iframe: {iframe_url}")
         response = requests.get(iframe_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(iframe_url), verify=VERIFY_SSL)
         response.raise_for_status()
 
@@ -1221,26 +1282,31 @@ def resolve_m3u8_link(url, headers=None):
             auth_host = base64.b64decode(auth_host_b64).decode('utf-8')
             auth_php_b64 = re.findall(r'(?s)b = atob\("([^"]*)', iframe_content)[0]
             auth_php = base64.b64decode(auth_php_b64).decode('utf-8')
+            app.logger.info(f"Parametri estratti: channel_key={channel_key}")
 
         except (IndexError, Exception) as e:
             app.logger.error(f"Errore estrazione parametri: {e}")
             return {"resolved_url": clean_url, "headers": current_headers}
 
         auth_url = f'{auth_host}{auth_php}?channel_id={channel_key}&ts={auth_ts}&rnd={auth_rnd}&sig={auth_sig}'
+        app.logger.info(f"Passo 6: Autenticazione: {auth_url}")
         auth_response = requests.get(auth_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(auth_url), verify=VERIFY_SSL)
         auth_response.raise_for_status()
 
         host = re.findall('(?s)m3u8 =.*?:.*?:.*?".*?".*?"([^"]*)', iframe_content)[0]
         server_lookup = re.findall(r'n fetchWithRetry\(\s*\'([^\']*)', iframe_content)[0]
         server_lookup_url = f"https://{urlparse(iframe_url).netloc}{server_lookup}{channel_key}"
+        app.logger.info(f"Passo 7: Server lookup: {server_lookup_url}")
 
         lookup_response = requests.get(server_lookup_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(server_lookup_url), verify=VERIFY_SSL)
         lookup_response.raise_for_status()
         server_data = lookup_response.json()
         server_key = server_data['server_key']
+        app.logger.info(f"Server key ottenuto: {server_key}")
 
         referer_raw = f'https://{urlparse(iframe_url).netloc}'
         clean_m3u8_url = f'https://{server_key}{host}{server_key}/{channel_key}/mono.m3u8'
+        app.logger.info(f"URL M3U8 pulito costruito: {clean_m3u8_url}")
 
         final_headers_for_fetch = {
             'User-Agent': final_headers_for_resolving.get('User-Agent'),
@@ -1640,9 +1706,11 @@ def proxy_vavoo():
         }), 400
 
     try:
+        app.logger.info(f"Richiesta risoluzione Vavoo: {url}")
         resolved = vavoo_resolver.resolve_vavoo_link(url, verbose=True)
         
         if resolved:
+            app.logger.info(f"Vavoo risolto: {resolved}")
             return jsonify({
                 "status": "success",
                 "original_url": url,
@@ -1680,9 +1748,11 @@ def proxy_m3u():
     cache_enabled = config.get('CACHE_ENABLED', True)
     
     if cache_enabled and cache_key in M3U8_CACHE:
+        app.logger.info(f"Cache HIT per M3U8: {m3u_url}")
         cached_response = M3U8_CACHE[cache_key]
         return Response(cached_response, content_type="application/vnd.apple.mpegurl")
 
+    app.logger.info(f"Cache MISS per M3U8: {m3u_url} (primo avvio, risposta diretta)")
 
     request_headers = {
         unquote(key[2:]).replace("_", "-"): unquote(value).strip()
@@ -1694,6 +1764,7 @@ def proxy_m3u():
     processed_url = process_daddylive_url(m3u_url)
 
     try:
+        app.logger.info(f"Chiamata a resolve_m3u8_link per URL processato: {processed_url}")
         result = resolve_m3u8_link(processed_url, headers)
         if not result["resolved_url"]:
             return "Errore: Impossibile risolvere l'URL in un M3U8 valido.", 500
@@ -1701,11 +1772,13 @@ def proxy_m3u():
         resolved_url = result["resolved_url"]
         current_headers_for_proxy = result["headers"]
 
+        app.logger.info(f"Risoluzione completata. URL M3U8 finale: {resolved_url}")
 
         if not resolved_url.endswith('.m3u8'):
             app.logger.error(f"URL risolto non è un M3U8: {resolved_url}")
             return "Errore: Impossibile ottenere un M3U8 valido dal canale", 500
 
+        app.logger.info(f"Fetching M3U8 content from clean URL: {resolved_url}")
 
         timeout = get_dynamic_timeout(resolved_url)
         proxy_config = get_proxy_for_url(resolved_url)
@@ -1764,6 +1837,7 @@ def proxy_m3u():
                 return
             try:
                 M3U8_CACHE[cache_key] = modified_m3u8_content
+                app.logger.info(f"M3U8 cache salvata per {m3u_url}")
             except Exception as e:
                 app.logger.error(f"Errore nel salvataggio cache M3U8: {e}")
 
@@ -1828,12 +1902,15 @@ def proxy_ts():
     if stream_id:
         buffered_content = pre_buffer_manager.get_buffered_segment(ts_url, stream_id)
         if buffered_content:
+            app.logger.info(f"Pre-buffer HIT per TS: {ts_url}")
             return Response(buffered_content, content_type="video/mp2t")
     
     # 2. Controlla la cache normale
     if cache_enabled and ts_url in TS_CACHE:
+        app.logger.info(f"Cache HIT per TS: {ts_url}")
         return Response(TS_CACHE[ts_url], content_type="video/mp2t")
 
+    app.logger.info(f"Cache MISS per TS: {ts_url}")
 
     headers = {
         unquote(key[2:]).replace("_", "-"): unquote(value).strip()
@@ -1875,6 +1952,7 @@ def proxy_ts():
                     ts_content = b"".join(content_parts)
                     if cache_enabled and ts_content and len(ts_content) > 1024:
                         TS_CACHE[ts_url] = ts_content
+                        app.logger.info(f"Segmento TS cachato ({len(ts_content)} bytes) per: {ts_url}")
 
             return Response(generate_and_cache(), content_type="video/mp2t")
 
@@ -1917,6 +1995,8 @@ def proxy_playlist_combiner():
     """Gestisce la combinazione di multiple playlist"""
     try:
         query_string = request.query_string.decode('utf-8')
+        app.logger.info(f"=== DEBUG PROXY COMBINER ===")
+        app.logger.info(f"Query string: {query_string}")
 
         if not query_string:
             return "Query string mancante", 400
@@ -1952,18 +2032,20 @@ def proxy_playlist_combiner():
                         api_password = possible_pass
                 
                 if api_password is not None:
-                    app.logger.debug(f"Password API trovata per {base_url_part}")
+                    app.logger.info(f"  [{definition_idx}] Base URL: {base_url_part}, Password: {'*' * len(api_password)}")
                 else:
                     # Nessuna password fornita (o la parte dopo ':' era una porta/scheme)
-                    pass
+                    app.logger.info(f"  [{definition_idx}] Base URL: {base_url_part}, Modalità senza password.")
 
                 base_url_part = base_url_part.rstrip('/')
+                app.logger.info(f"[{definition_idx}] Processing Playlist (streaming): {playlist_url_str}")
 
                 current_playlist_had_lines = False
                 first_line_of_this_segment = True
                 lines_processed_for_current_playlist = 0
                 try:
                     downloaded_lines_iter = download_m3u_playlist_streaming(playlist_url_str)
+                    app.logger.info(f"  [{definition_idx}] Download stream initiated for {playlist_url_str}")
                     rewritten_lines_iter = rewrite_m3u_links_streaming(
                         downloaded_lines_iter, base_url_part, api_password
                     )
@@ -1983,6 +2065,7 @@ def proxy_playlist_combiner():
                             
                             if total_bytes_yielded // log_interval_bytes > last_log_bytes_milestone:
                                 last_log_bytes_milestone = total_bytes_yielded // log_interval_bytes
+                                app.logger.info(f"ℹ️ [{definition_idx}] Total data yielded: {total_bytes_yielded / (1024*1024):.2f} MB. Current playlist lines: {lines_processed_for_current_playlist}")
 
                             if len(line) > 10000: 
                                 app.logger.warning(f"⚠️ [{definition_idx}] VERY LONG LINE encountered (length={len(line)}, lines in current playlist={lines_processed_for_current_playlist}): {line[:100]}...")
@@ -2002,6 +2085,7 @@ def proxy_playlist_combiner():
                             total_bytes_yielded += line_bytes
                             if total_bytes_yielded // log_interval_bytes > last_log_bytes_milestone:
                                 last_log_bytes_milestone = total_bytes_yielded // log_interval_bytes
+                                app.logger.info(f"ℹ️ [{definition_idx}] Total data yielded: {total_bytes_yielded / (1024*1024):.2f} MB. Current playlist lines: {lines_processed_for_current_playlist}")
                             if len(line) > 10000:
                                 app.logger.warning(f"⚠️ [{definition_idx}] VERY LONG LINE encountered (length={len(line)}, lines in current playlist={lines_processed_for_current_playlist}): {line[:100]}...")
 
@@ -2009,12 +2093,14 @@ def proxy_playlist_combiner():
                     app.logger.error(f"💥 [{definition_idx}] Error processing playlist {playlist_url_str} (after ~{lines_processed_for_current_playlist} lines yielded for it): {str(e)}")
                     yield f"# ERROR processing playlist {playlist_url_str}: {str(e)}\n"
                 
+                app.logger.info(f"✅ [{definition_idx}] Finished processing playlist {playlist_url_str}. Lines processed in this segment: {lines_processed_for_current_playlist}")
                 if current_playlist_had_lines and not first_playlist_header_handled:
                     # This playlist (which was effectively the first with content) finished,
                     # and no #EXTM3U was found to mark as the main header.
                     # Mark header as handled so subsequent playlists skip their #EXTM3U.
                     first_playlist_header_handled = True
         
+        app.logger.info(f"🏁 Avvio streaming del contenuto combinato... (Total definitions: {len(playlist_definitions)})")
         # The final total_bytes_yielded will be known only if the generator completes fully.
         return Response(
             generate_combined_playlist(),
@@ -2143,8 +2229,10 @@ def proxy_key():
     cache_enabled = config.get('CACHE_ENABLED', True)
     
     if cache_enabled and key_url in KEY_CACHE:
+        app.logger.info(f"Cache HIT per KEY: {key_url}")
         return Response(KEY_CACHE[key_url], content_type="application/octet-stream")
 
+    app.logger.info(f"Cache MISS per KEY: {key_url}")
 
     headers = {
         unquote(key[2:]).replace("_", "-"): unquote(value).strip()
@@ -2194,8 +2282,11 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
     
     # Log di avvio
+    app.logger.info("="*50)
     app.logger.info("PROXY SERVER AVVIATO")
+    app.logger.info("="*50)
     app.logger.info(f"Porta: {port}")
+    app.logger.info("="*50)
     
     # Avvia solo Flask senza WebSocket
     app.run(host="0.0.0.0", port=port, debug=False)
