@@ -629,8 +629,9 @@
             
             <div class="alert alert-info" id="huggingfaceAlert" style="display: none;">
                 <i class="fas fa-cloud"></i> <strong>Ambiente HuggingFace Rilevato</strong><br>
-                La configurazione viene salvata in memoria e non persisterà dopo il riavvio del server.<br>
-                Per una configurazione permanente, usa le variabili d'ambiente nei Secrets di HuggingFace.
+                La configurazione viene salvata in memoria e sincronizzata automaticamente tra tutti i workers.<br>
+                Per una configurazione permanente, usa le variabili d'ambiente nei Secrets di HuggingFace.<br>
+                <i class="fas fa-sync-alt"></i> <strong>Sincronizzazione globale attiva</strong> - Tutti i workers condividono la stessa configurazione.
             </div>
             
             <div class="action-box">
@@ -677,6 +678,12 @@
                             <button type="button" class="btn btn-secondary btn-sm" onclick="showConfigStatus()">
                                 <i class="fas fa-info-circle"></i> Stato Config
                             </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="showBackupStatus()">
+                                <i class="fas fa-database"></i> Stato Backup
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="forceSyncConfig()">
+                                <i class="fas fa-sync-alt"></i> Sincronizza Workers
+                            </button>
                             <button type="button" class="btn btn-secondary btn-sm" onclick="repairConfig()">
                                 <i class="fas fa-wrench"></i> Ripara Config
                             </button>
@@ -710,6 +717,14 @@
                 .then(data => {
                     if (data.config_status && data.config_status.is_huggingface) {
                         document.getElementById('huggingfaceAlert').style.display = 'block';
+                        
+                        // Log silenzioso delle informazioni di sincronizzazione
+                        console.log('Ambiente HuggingFace rilevato:', {
+                            global_exists: data.config_status.global_exists,
+                            global_age: data.config_status.global_age_human,
+                            backup_exists: data.config_status.backup_exists,
+                            backup_age: data.config_status.backup_age_human
+                        });
                     }
                 })
                 .catch(error => {
@@ -926,8 +941,18 @@
                     message += `💾 <strong>Cache Memoria:</strong> ${status.has_memory_cache ? 'Sì' : 'No'}<br>`;
                     message += `📄 <strong>File Esiste:</strong> ${status.file_exists ? 'Sì' : 'No'}<br>`;
                     message += `✏️ <strong>File Scrivibile:</strong> ${status.file_writable ? 'Sì' : 'No'}<br>`;
-                    message += `🔧 <strong>Fonte Config:</strong> ${status.current_config_source}<br><br>`;
-                    message += `📈 <strong>Riepilogo Configurazione:</strong><br>`;
+                    message += `🔧 <strong>Fonte Config:</strong> ${status.current_config_source}<br>`;
+                    
+                    // Aggiungi informazioni sulla sincronizzazione globale se siamo su HuggingFace
+                    if (status.is_huggingface) {
+                        message += `🔄 <strong>File Globale:</strong> ${status.global_config_file}<br>`;
+                        message += `🌍 <strong>File Globale Esiste:</strong> ${status.global_exists ? 'Sì' : 'No'}<br>`;
+                        if (status.global_exists) {
+                            message += `⏰ <strong>Età File Globale:</strong> ${status.global_age_human}<br>`;
+                        }
+                    }
+                    
+                    message += `<br>📈 <strong>Riepilogo Configurazione:</strong><br>`;
                     message += `• Impostazioni totali: ${summary.total_settings}<br>`;
                     message += `• Proxy configurati: ${summary.proxy_configured ? 'Sì' : 'No'}<br>`;
                     message += `• Proxy DaddyLive: ${summary.daddy_proxy_configured ? 'Sì' : 'No'}<br>`;
@@ -939,6 +964,92 @@
                 .catch(error => {
                     showAlert('error', 'Errore nel recupero stato configurazione: ' + error.message);
                 });
+        }
+        
+        function showBackupStatus() {
+            fetch('/admin/debug/backup-status')
+                .then(response => response.json())
+                .then(data => {
+                    const backupInfo = data.backup_info;
+                    const globalInfo = data.global_sync_info;
+                    
+                    let message = `💾 <strong>Stato Backup e Sincronizzazione</strong><br><br>`;
+                    message += `🌐 <strong>Ambiente:</strong> ${backupInfo.is_huggingface ? 'HuggingFace' : 'Standard'}<br>`;
+                    
+                    message += `<br>📁 <strong>Backup Locale:</strong><br>`;
+                    message += `• File: ${backupInfo.backup_file}<br>`;
+                    message += `• Esiste: ${backupInfo.backup_exists ? 'Sì' : 'No'}<br>`;
+                    if (backupInfo.backup_exists) {
+                        message += `• Dimensione: ${backupInfo.backup_size} bytes<br>`;
+                        message += `• Età: ${backupInfo.backup_age_human}<br>`;
+                    }
+                    message += `• Ultimo backup: ${backupInfo.last_backup_time > 0 ? new Date(backupInfo.last_backup_time * 1000).toLocaleString() : 'Mai'}<br>`;
+                    message += `• Intervallo backup: ${backupInfo.backup_interval} secondi<br>`;
+                    message += `• Cache memoria: ${backupInfo.config_cache_exists ? 'Sì' : 'No'}`;
+                    
+                    if (backupInfo.is_huggingface) {
+                        message += `<br><br>🔄 <strong>Sincronizzazione Globale:</strong><br>`;
+                        message += `• File globale: ${globalInfo.global_config_file}<br>`;
+                        message += `• Esiste: ${globalInfo.global_exists ? 'Sì' : 'No'}<br>`;
+                        if (globalInfo.global_exists) {
+                            message += `• Dimensione: ${globalInfo.global_size} bytes<br>`;
+                            message += `• Età: ${globalInfo.global_age_human}<br>`;
+                        }
+                        message += `• Ultima sincronizzazione: ${globalInfo.last_sync_time > 0 ? new Date(globalInfo.last_sync_time * 1000).toLocaleString() : 'Mai'}<br>`;
+                        message += `• Intervallo sincronizzazione: ${globalInfo.sync_interval} secondi`;
+                    }
+                    
+                    showAlert('info', message);
+                })
+                .catch(error => {
+                    showAlert('error', 'Errore nel recupero stato backup: ' + error.message);
+                });
+        }
+        
+        function forceSyncConfig() {
+            const syncBtn = event.target;
+            syncBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sincronizzando...';
+            syncBtn.disabled = true;
+            
+            fetch('/admin/debug/force-sync-config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                syncBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Sincronizza Workers';
+                syncBtn.disabled = false;
+                
+                if (result.status === 'success') {
+                    let message = `🔄 <strong>Sincronizzazione Forzata</strong><br><br>`;
+                    message += `✅ <strong>Risultato:</strong> ${result.message}<br>`;
+                    message += `📖 <strong>Lettura:</strong> ${result.sync_result ? 'OK' : 'FALLITA'}<br>`;
+                    message += `✏️ <strong>Scrittura:</strong> ${result.global_save_result ? 'OK' : 'FALLITA'}<br>`;
+                    
+                    if (result.config_status) {
+                        const status = result.config_status;
+                        message += `<br>📊 <strong>Stato Attuale:</strong><br>`;
+                        message += `• Ambiente: ${status.is_huggingface ? 'HuggingFace' : 'Standard'}<br>`;
+                        message += `• File globale: ${status.global_exists ? 'Esiste' : 'Non esiste'}<br>`;
+                        if (status.global_exists) {
+                            message += `• Età file globale: ${status.global_age_human}<br>`;
+                        }
+                        message += `• Cache memoria: ${status.has_memory_cache ? 'Sì' : 'No'}`;
+                    }
+                    
+                    showAlert('success', message);
+                } else {
+                    showAlert('error', result.message);
+                }
+            })
+            .catch(error => {
+                syncBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Sincronizza Workers';
+                syncBtn.disabled = false;
+                showAlert('error', 'Errore nella sincronizzazione: ' + error.message);
+            });
         }
         
         function repairConfig() {
