@@ -89,8 +89,13 @@ def get_system_stats():
     
     # Se la sincronizzazione è abilitata, combina con altri workers
     if config_manager._use_global_sync:
-        merged_stats = merge_system_stats_from_all_workers()
-        system_stats.update(merged_stats)
+        try:
+            merged_stats = merge_system_stats_from_all_workers()
+            if merged_stats:
+                system_stats.update(merged_stats)
+        except Exception as e:
+            app.logger.error(f"Errore nella sincronizzazione statistiche sistema: {e}")
+            # In caso di errore, usa solo le statistiche locali
     
     return system_stats
 
@@ -732,8 +737,38 @@ def save_system_stats_to_global():
     """Salva le statistiche di sistema nel file globale per sincronizzazione tra workers"""
     try:
         with SYSTEM_STATS_LOCK:
-            # Ottieni statistiche di sistema locali
-            local_stats = get_system_stats()
+            # Ottieni statistiche di sistema locali (senza ricorsione)
+            local_stats = {}
+            
+            # Memoria RAM
+            memory = psutil.virtual_memory()
+            local_stats['ram_usage'] = memory.percent
+            local_stats['ram_used_gb'] = memory.used / (1024**3)  # GB
+            local_stats['ram_total_gb'] = memory.total / (1024**3)  # GB
+            
+            # Utilizzo di rete
+            net_io = psutil.net_io_counters()
+            local_stats['network_sent'] = net_io.bytes_sent / (1024**2)  # MB
+            local_stats['network_recv'] = net_io.bytes_recv / (1024**2)  # MB
+            
+            # Statistiche pre-buffer
+            try:
+                with pre_buffer_manager.pre_buffer_lock:
+                    total_segments = sum(len(segments) for segments in pre_buffer_manager.pre_buffer.values())
+                    total_size = sum(
+                        sum(len(content) for content in segments.values())
+                        for segments in pre_buffer_manager.pre_buffer.values()
+                    )
+                    local_stats['prebuffer_streams'] = len(pre_buffer_manager.pre_buffer)
+                    local_stats['prebuffer_segments'] = total_segments
+                    local_stats['prebuffer_size_mb'] = round(total_size / (1024 * 1024), 2)
+                    local_stats['prebuffer_threads'] = len(pre_buffer_manager.pre_buffer_threads)
+            except Exception as e:
+                app.logger.error(f"Errore nel calcolo statistiche pre-buffer: {e}")
+                local_stats['prebuffer_streams'] = 0
+                local_stats['prebuffer_segments'] = 0
+                local_stats['prebuffer_size_mb'] = 0
+                local_stats['prebuffer_threads'] = 0
             
             # Aggiungi informazioni del worker
             global_stats = {
@@ -774,8 +809,38 @@ def load_system_stats_from_global():
 def merge_system_stats_from_all_workers():
     """Combina le statistiche di sistema da tutti i workers"""
     try:
-        # Ottieni statistiche locali
-        local_stats = get_system_stats()
+        # Ottieni statistiche locali (senza ricorsione)
+        local_stats = {}
+        
+        # Memoria RAM
+        memory = psutil.virtual_memory()
+        local_stats['ram_usage'] = memory.percent
+        local_stats['ram_used_gb'] = memory.used / (1024**3)  # GB
+        local_stats['ram_total_gb'] = memory.total / (1024**3)  # GB
+        
+        # Utilizzo di rete
+        net_io = psutil.net_io_counters()
+        local_stats['network_sent'] = net_io.bytes_sent / (1024**2)  # MB
+        local_stats['network_recv'] = net_io.bytes_recv / (1024**2)  # MB
+        
+        # Statistiche pre-buffer
+        try:
+            with pre_buffer_manager.pre_buffer_lock:
+                total_segments = sum(len(segments) for segments in pre_buffer_manager.pre_buffer.values())
+                total_size = sum(
+                    sum(len(content) for content in segments.values())
+                    for segments in pre_buffer_manager.pre_buffer.values()
+                )
+                local_stats['prebuffer_streams'] = len(pre_buffer_manager.pre_buffer)
+                local_stats['prebuffer_segments'] = total_segments
+                local_stats['prebuffer_size_mb'] = round(total_size / (1024 * 1024), 2)
+                local_stats['prebuffer_threads'] = len(pre_buffer_manager.pre_buffer_threads)
+        except Exception as e:
+            app.logger.error(f"Errore nel calcolo statistiche pre-buffer: {e}")
+            local_stats['prebuffer_streams'] = 0
+            local_stats['prebuffer_segments'] = 0
+            local_stats['prebuffer_size_mb'] = 0
+            local_stats['prebuffer_threads'] = 0
         
         # Se non usiamo sincronizzazione globale, restituisci solo le statistiche locali
         if not config_manager._use_global_sync:
@@ -820,7 +885,23 @@ def merge_system_stats_from_all_workers():
         
     except Exception as e:
         app.logger.error(f"Errore nella fusione statistiche sistema: {e}")
-        return local_stats
+        # In caso di errore, restituisci statistiche locali di base
+        try:
+            memory = psutil.virtual_memory()
+            return {
+                'ram_usage': memory.percent,
+                'ram_used_gb': memory.used / (1024**3),
+                'ram_total_gb': memory.total / (1024**3),
+                'network_sent': 0,
+                'network_recv': 0,
+                'bandwidth_usage': 0,
+                'prebuffer_streams': 0,
+                'prebuffer_segments': 0,
+                'prebuffer_size_mb': 0,
+                'prebuffer_threads': 0
+            }
+        except:
+            return {}
 
 def system_stats_sync_thread():
     """Thread per sincronizzare le statistiche di sistema tra workers"""
@@ -832,6 +913,9 @@ def system_stats_sync_thread():
         except Exception as e:
             app.logger.error(f"Errore nel thread di sincronizzazione statistiche sistema: {e}")
             time.sleep(30)  # In caso di errore, aspetta 30 secondi
+        except KeyboardInterrupt:
+            app.logger.info("Thread di sincronizzazione statistiche sistema interrotto")
+            break
 
 # Sistema di broadcasting per statistiche real-time
 def broadcast_stats():
@@ -918,6 +1002,9 @@ def broadcast_stats():
         except Exception as e:
             app.logger.error(f"Errore nel broadcast statistiche: {e}")
             time.sleep(5)
+        except KeyboardInterrupt:
+            app.logger.info("Thread di broadcast statistiche interrotto")
+            break
 
 @socketio.on('connect')
 def handle_connect():
