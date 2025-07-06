@@ -767,6 +767,7 @@ class ConfigManager:
     def __init__(self):
         # Prova diverse directory per il file di configurazione
         self.config_file = self._get_writable_config_path()
+        self.backup_file = '/tmp/tvproxy_config_backup.json'  # Backup per HuggingFace
         self.default_config = {
             'PROXY': '',  # Proxy unificati con riconoscimento automatico
             'DADDY_PROXY': '',  # Proxy dedicati per DaddyLive
@@ -796,6 +797,12 @@ class ConfigManager:
         }
         self._config_cache = None  # Cache in memoria per HuggingFace
         self._is_huggingface = self._detect_huggingface_environment()
+        self._last_backup_time = 0
+        self._backup_interval = 300  # Backup ogni 5 minuti
+        
+        # Ripristina configurazione dal backup se siamo su HuggingFace
+        if self._is_huggingface:
+            self._restore_from_backup()
         
     def _detect_huggingface_environment(self):
         """Rileva se siamo in un ambiente HuggingFace"""
@@ -806,6 +813,31 @@ class ConfigManager:
             '/tmp' in os.getcwd() or
             'huggingface' in os.getcwd().lower()
         )
+    
+    def _restore_from_backup(self):
+        """Ripristina la configurazione dal file di backup su HuggingFace"""
+        try:
+            if os.path.exists(self.backup_file):
+                with open(self.backup_file, 'r') as f:
+                    backup_config = json.loads(f.read())
+                    self._config_cache = backup_config
+                    app.logger.info(f"Configurazione ripristinata dal backup: {self.backup_file}")
+                    return True
+        except Exception as e:
+            app.logger.warning(f"Errore nel ripristino del backup: {e}")
+        return False
+    
+    def _save_backup(self, config):
+        """Salva un backup della configurazione per HuggingFace"""
+        try:
+            with open(self.backup_file, 'w') as f:
+                json.dump(config, f, indent=4)
+            self._last_backup_time = time.time()
+            app.logger.debug(f"Backup configurazione salvato: {self.backup_file}")
+            return True
+        except Exception as e:
+            app.logger.warning(f"Errore nel salvataggio del backup: {e}")
+            return False
     
     def _get_writable_config_path(self):
         """Trova una directory scrivibile per il file di configurazione"""
@@ -957,7 +989,9 @@ class ConfigManager:
             # Se siamo su HuggingFace o non riusciamo a scrivere, usa la cache in memoria
             if self._is_huggingface:
                 self._config_cache = config.copy()
-                app.logger.info("Configurazione salvata in memoria (ambiente HuggingFace)")
+                # Salva anche un backup su file per persistenza
+                self._save_backup(config)
+                app.logger.info("Configurazione salvata in memoria e backup (ambiente HuggingFace)")
                 return True
             
             # Prova a salvare nel file
@@ -971,6 +1005,9 @@ class ConfigManager:
             app.logger.warning(f"Impossibile scrivere il file di configurazione: {e}")
             app.logger.info("Configurazione salvata in memoria come fallback")
             self._config_cache = config.copy()
+            # Prova comunque a salvare il backup
+            if self._is_huggingface:
+                self._save_backup(config)
             return True
             
         except Exception as e:
@@ -991,12 +1028,21 @@ class ConfigManager:
     
     def get_config_status(self):
         """Restituisce informazioni sullo stato della configurazione"""
+        backup_exists = os.path.exists(self.backup_file) if self._is_huggingface else False
+        backup_age = 0
+        if backup_exists:
+            backup_age = time.time() - os.path.getmtime(self.backup_file)
+        
         return {
             'is_huggingface': self._is_huggingface,
             'config_file': self.config_file,
+            'backup_file': self.backup_file,
             'has_memory_cache': self._config_cache is not None,
             'file_exists': os.path.exists(self.config_file),
             'file_writable': self._test_file_writable(),
+            'backup_exists': backup_exists,
+            'backup_age_seconds': backup_age,
+            'backup_age_human': f"{int(backup_age // 3600)}h {int((backup_age % 3600) // 60)}m" if backup_age > 0 else "N/A",
             'current_config_source': 'memory' if self._config_cache is not None else 'file' if os.path.exists(self.config_file) else 'default'
         }
     
@@ -1448,6 +1494,25 @@ bandwidth_thread.start()
 
 connection_thread = Thread(target=connection_manager, daemon=True)
 connection_thread.start()
+
+# Thread per backup automatico della configurazione su HuggingFace
+def config_backup_thread():
+    """Thread per salvare automaticamente la configurazione su HuggingFace"""
+    while True:
+        try:
+            if config_manager._is_huggingface and config_manager._config_cache:
+                current_time = time.time()
+                if current_time - config_manager._last_backup_time > config_manager._backup_interval:
+                    config_manager._save_backup(config_manager._config_cache)
+            time.sleep(60)  # Controlla ogni minuto
+        except Exception as e:
+            app.logger.warning(f"Errore nel thread di backup configurazione: {e}")
+            time.sleep(60)
+
+if config_manager._is_huggingface:
+    backup_thread = Thread(target=config_backup_thread, daemon=True)
+    backup_thread.start()
+    app.logger.info("Thread di backup configurazione avviato per HuggingFace")
 
 # --- Configurazione Proxy ---
 PROXY_LIST = []
@@ -4395,6 +4460,11 @@ def force_save_config():
         # Forza il salvataggio
         save_result = config_manager.save_config(current_config)
         
+        # Forza anche il backup se siamo su HuggingFace
+        backup_result = False
+        if config_manager._is_huggingface and config_manager._config_cache:
+            backup_result = config_manager._save_backup(config_manager._config_cache)
+        
         if save_result:
             # Ricarica per verificare
             reloaded_config = config_manager.load_config()
@@ -4406,12 +4476,15 @@ def force_save_config():
                     if value != config_manager.default_config[key]:
                         saved_count += 1
             
+            backup_message = f', Backup: {"OK" if backup_result else "FALLITO"}' if config_manager._is_huggingface else ''
+            
             return jsonify({
                 'status': 'success',
-                'message': f'Configurazione forzatamente salvata ({saved_count} valori personalizzati)',
+                'message': f'Configurazione forzatamente salvata ({saved_count} valori personalizzati){backup_message}',
                 'config_status': config_manager.get_config_status(),
                 'saved_values_count': saved_count,
-                'total_values': len(reloaded_config)
+                'total_values': len(reloaded_config),
+                'backup_result': backup_result
             })
         else:
             return jsonify({
@@ -4566,6 +4639,41 @@ def debug_proxy_status():
         return jsonify({
             'status': 'error',
             'message': f'Errore nel recupero stato proxy: {str(e)}'
+        }), 500
+
+@app.route('/admin/debug/backup-status')
+@login_required
+def debug_backup_status():
+    """Debug dello stato del backup configurazione"""
+    try:
+        backup_exists = os.path.exists(config_manager.backup_file) if config_manager._is_huggingface else False
+        backup_size = 0
+        backup_age = 0
+        
+        if backup_exists:
+            backup_size = os.path.getsize(config_manager.backup_file)
+            backup_age = time.time() - os.path.getmtime(config_manager.backup_file)
+        
+        return jsonify({
+            'status': 'success',
+            'backup_info': {
+                'is_huggingface': config_manager._is_huggingface,
+                'backup_file': config_manager.backup_file,
+                'backup_exists': backup_exists,
+                'backup_size': backup_size,
+                'backup_age_seconds': backup_age,
+                'backup_age_human': f"{int(backup_age // 3600)}h {int((backup_age % 3600) // 60)}m" if backup_age > 0 else "N/A",
+                'last_backup_time': config_manager._last_backup_time,
+                'backup_interval': config_manager._backup_interval,
+                'config_cache_exists': config_manager._config_cache is not None
+            }
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero stato backup: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore nel recupero stato backup: {str(e)}'
         }), 500
 
 @app.route('/admin/debug/websocket-status')
