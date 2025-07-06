@@ -525,6 +525,12 @@
             <p><strong><i class="fas fa-star"></i> Proxy DaddyLive:</strong> <span id="availableDaddyProxies">{{ stats.proxy_status.available_daddy_proxies if stats.proxy_status else 0 }}</span> disponibili | <span id="blacklistedDaddyProxies">{{ stats.proxy_status.blacklisted_daddy_proxies if stats.proxy_status else 0 }}</span> in blacklist</p>
         </div>
 
+        <!-- Alert per sincronizzazione -->
+        <div class="alert alert-info" id="syncAlert" style="display: none; margin-bottom: 2rem;">
+            <i class="fas fa-sync-alt"></i> <strong>Sincronizzazione Statistiche Sistema</strong><br>
+            Le statistiche vengono sincronizzate automaticamente tra tutti i workers per mostrare i dati completi del sistema.
+        </div>
+
         <div class="stats-grid">
             <div class="stat-card">
                 <div class="stat-header">
@@ -772,6 +778,14 @@
             // Aggiorna URL base se cambiato
             if (stats.daddy_base_url) {
                 document.getElementById('daddyBaseUrl').textContent = stats.daddy_base_url;
+            }
+            
+            // Mostra alert di sincronizzazione se abilitata
+            if (stats.sync_info && stats.sync_info.enabled) {
+                document.getElementById('syncAlert').style.display = 'block';
+                console.log(`🔄 ${stats.sync_info.message}`);
+            } else {
+                document.getElementById('syncAlert').style.display = 'none';
             }
             
             // Aggiorna statistiche pre-buffer
