@@ -47,12 +47,12 @@ LAST_FETCH_TIME = 0
 FETCH_INTERVAL = 3600
 
 # --- Sincronizzazione Sessioni tra Workers ---
-SESSION_SYNC_FILE = '/tmp/tvproxy_sessions.json'
+SESSION_SYNC_FILE = os.path.join(os.getcwd(), 'tvproxy_sessions.json')
 SESSION_SYNC_LOCK = Lock()
 SESSION_SYNC_INTERVAL = 30  # Sincronizzazione ogni 30 secondi
 
 # --- Sincronizzazione Proxy tra Workers ---
-PROXY_SYNC_FILE = '/tmp/tvproxy_proxy_sync.json'
+PROXY_SYNC_FILE = os.path.join(os.getcwd(), 'tvproxy_proxy_sync.json')
 PROXY_SYNC_LOCK = Lock()
 
 # --- Funzioni di utilità ---
@@ -99,9 +99,15 @@ def get_system_stats():
     # Se la sincronizzazione è abilitata, combina con altri workers
     if config_manager._use_global_sync:
         try:
+            # Forza il salvataggio delle statistiche locali prima del merge
+            save_system_stats_to_global()
+            
             merged_stats = merge_system_stats_from_all_workers()
             if merged_stats:
                 system_stats.update(merged_stats)
+                app.logger.debug(f"Statistiche sistema sincronizzate: {len(merged_stats)} campi")
+            else:
+                app.logger.debug("Nessuna statistica sistema globale trovata, uso solo locali")
         except Exception as e:
             app.logger.error(f"Errore nella sincronizzazione statistiche sistema: {e}")
             # In caso di errore, usa solo le statistiche locali
@@ -469,12 +475,12 @@ BLACKLIST_DURATION = 300  # 5 minuti di blacklist per errore 429
 MAX_ERRORS_BEFORE_PERMANENT = 5  # Dopo 5 errori, blacklist permanente per 1 ora
 
 # --- Sistema di Sincronizzazione Statistiche Client ---
-CLIENT_STATS_FILE = '/tmp/tvproxy_client_stats.json'  # File globale per statistiche client
+CLIENT_STATS_FILE = os.path.join(os.getcwd(), 'tvproxy_client_stats.json')  # File globale per statistiche client
 CLIENT_STATS_LOCK = Lock()
 CLIENT_STATS_SYNC_INTERVAL = 30  # Sincronizzazione ogni 30 secondi
 
 # --- Sistema di Sincronizzazione Statistiche Sistema ---
-SYSTEM_STATS_FILE = '/tmp/tvproxy_system_stats.json'  # File globale per statistiche sistema
+SYSTEM_STATS_FILE = os.path.join(os.getcwd(), 'tvproxy_system_stats.json')  # File globale per statistiche sistema
 SYSTEM_STATS_LOCK = Lock()
 SYSTEM_STATS_SYNC_INTERVAL = 10  # Sincronizzazione ogni 10 secondi (più frequente per statistiche real-time)
 
@@ -1369,9 +1375,9 @@ class ConfigManager:
     def __init__(self):
         # Prova diverse directory per il file di configurazione
         self.config_file = self._get_writable_config_path()
-        self.backup_file = '/tmp/tvproxy_config_backup.json'  # Backup per HuggingFace
-        self.global_config_file = '/tmp/tvproxy_global_config.json'  # Configurazione globale per tutti i workers
-        self.global_lock_file = '/tmp/tvproxy_config.lock'  # Lock file per sincronizzazione
+        self.backup_file = os.path.join(os.getcwd(), 'tvproxy_config_backup.json')  # Backup per HuggingFace
+        self.global_config_file = os.path.join(os.getcwd(), 'tvproxy_global_config.json')  # Configurazione globale per tutti i workers
+        self.global_lock_file = os.path.join(os.getcwd(), 'tvproxy_config.lock')  # Lock file per sincronizzazione
         self.default_config = {
             'PROXY': '',  # Proxy unificati con riconoscimento automatico
             'DADDY_PROXY': '',  # Proxy dedicati per DaddyLive
@@ -1623,9 +1629,8 @@ class ConfigManager:
         """Trova una directory scrivibile per il file di configurazione"""
         possible_paths = [
             'proxy_config.json',  # Directory corrente
-            '/tmp/proxy_config.json',  # Directory temporanea
-            '/tmp/tvproxy_config.json',  # Directory temporanea con nome specifico
             os.path.join(os.getcwd(), 'proxy_config.json'),  # Directory corrente assoluta
+            os.path.join(os.getcwd(), 'tvproxy_config.json'),  # Directory corrente con nome specifico
         ]
         
         # Prova a scrivere un file di test in ogni directory
@@ -2454,40 +2459,7 @@ def sync_sessions_thread():
             app.logger.error(f"Errore nel thread sincronizzazione sessioni: {e}")
             time.sleep(60)  # Aspetta 1 minuto in caso di errore
 
-# Avvia thread di backup solo per HuggingFace
-if config_manager._is_huggingface:
-    backup_thread = Thread(target=config_backup_thread, daemon=True)
-    backup_thread.start()
-    app.logger.info("Thread di backup configurazione avviato per HuggingFace")
 
-# Avvia thread di sincronizzazione per tutti gli ambienti con workers multipli
-if config_manager._use_global_sync:
-    sync_thread = Thread(target=config_sync_thread, daemon=True)
-    sync_thread.start()
-    if config_manager._is_huggingface:
-        env_name = "HuggingFace"
-    elif config_manager._is_docker_environment():
-        env_name = "Docker"
-    elif config_manager._is_cloud_environment():
-        env_name = "Cloud (Render/Railway/Heroku)"
-    else:
-        env_name = "Gunicorn con workers multipli"
-    app.logger.info(f"Thread di sincronizzazione configurazione avviato per {env_name}")
-    
-    # Avvia thread di sincronizzazione statistiche client
-    client_sync_thread = Thread(target=client_stats_sync_thread, daemon=True)
-    client_sync_thread.start()
-    app.logger.info(f"Thread di sincronizzazione statistiche client avviato per {env_name}")
-    
-    # Avvia thread di sincronizzazione statistiche sistema
-    system_sync_thread = Thread(target=system_stats_sync_thread, daemon=True)
-    system_sync_thread.start()
-    app.logger.info(f"Thread di sincronizzazione statistiche sistema avviato per {env_name}")
-    
-    # Avvia thread di sincronizzazione sessioni
-    session_sync_thread = Thread(target=sync_sessions_thread, daemon=True)
-    session_sync_thread.start()
-    app.logger.info(f"Thread di sincronizzazione sessioni avviato per {env_name}")
     
 
 
@@ -3029,10 +3001,40 @@ def resolve_m3u8_link(url, headers=None):
         # In caso di errore nella risoluzione, restituisce l'URL originale
         return {"resolved_url": clean_url, "headers": final_headers}
 
-stats_thread = threading.Thread(target=broadcast_stats, daemon=True)
-stats_thread.start()
+# Avvia thread di backup solo per HuggingFace
+if config_manager._is_huggingface:
+    backup_thread = Thread(target=config_backup_thread, daemon=True)
+    backup_thread.start()
+    app.logger.info("Thread di backup configurazione avviato per HuggingFace")
 
-
+# Avvia thread di sincronizzazione per tutti gli ambienti con workers multipli
+if config_manager._use_global_sync:
+    sync_thread = Thread(target=config_sync_thread, daemon=True)
+    sync_thread.start()
+    if config_manager._is_huggingface:
+        env_name = "HuggingFace"
+    elif config_manager._is_docker_environment():
+        env_name = "Docker"
+    elif config_manager._is_cloud_environment():
+        env_name = "Cloud (Render/Railway/Heroku)"
+    else:
+        env_name = "Gunicorn con workers multipli"
+    app.logger.info(f"Thread di sincronizzazione configurazione avviato per {env_name}")
+    
+    # Avvia thread di sincronizzazione statistiche client
+    client_sync_thread = Thread(target=client_stats_sync_thread, daemon=True)
+    client_sync_thread.start()
+    app.logger.info(f"Thread di sincronizzazione statistiche client avviato per {env_name}")
+    
+    # Avvia thread di sincronizzazione statistiche sistema
+    system_sync_thread = Thread(target=system_stats_sync_thread, daemon=True)
+    system_sync_thread.start()
+    app.logger.info(f"Thread di sincronizzazione statistiche sistema avviato per {env_name}")
+    
+    # Avvia thread di sincronizzazione sessioni
+    session_sync_thread = Thread(target=sync_sessions_thread, daemon=True)
+    session_sync_thread.start()
+    app.logger.info(f"Thread di sincronizzazione sessioni avviato per {env_name}")
 
 @app.route('/admin/cache/toggle', methods=['POST'])
 @login_required
@@ -3420,6 +3422,10 @@ def dashboard():
     
     # Aggiungi statistiche client sincronizzate
     try:
+        # Forza il salvataggio delle statistiche client locali prima del merge
+        if config_manager._use_global_sync and 'client_tracker' in globals():
+            save_client_stats_to_global()
+        
         merged_client_stats = merge_client_stats_from_all_workers()
         if merged_client_stats:
             stats['active_clients'] = merged_client_stats.get('active_clients', 0)
@@ -3427,12 +3433,14 @@ def dashboard():
             stats['total_requests'] = merged_client_stats.get('total_requests', 0)
             stats['m3u_clients'] = merged_client_stats.get('m3u_clients', 0)
             stats['m3u_requests'] = merged_client_stats.get('m3u_requests', 0)
+            app.logger.debug(f"Statistiche client sincronizzate: {stats['active_clients']} client attivi")
         else:
             stats['active_clients'] = 0
             stats['active_sessions'] = 0
             stats['total_requests'] = 0
             stats['m3u_clients'] = 0
             stats['m3u_requests'] = 0
+            app.logger.debug("Nessuna statistica client globale trovata, uso solo locali")
     except Exception as e:
         app.logger.warning(f"Errore nel recupero statistiche client per dashboard: {e}")
         stats['active_clients'] = 0
@@ -3440,6 +3448,10 @@ def dashboard():
         stats['total_requests'] = 0
         stats['m3u_clients'] = 0
         stats['m3u_requests'] = 0
+    
+    # Forza il salvataggio delle sessioni prima di ottenere il conteggio
+    if config_manager._use_global_sync:
+        save_sessions_to_global()
     
     return render_template('dashboard.html', 
                          stats=stats, 
@@ -3557,6 +3569,10 @@ def index():
     
     # Aggiungi statistiche client sincronizzate
     try:
+        # Forza il salvataggio delle statistiche client locali prima del merge
+        if config_manager._use_global_sync and 'client_tracker' in globals():
+            save_client_stats_to_global()
+        
         merged_client_stats = merge_client_stats_from_all_workers()
         if merged_client_stats:
             stats['active_clients'] = merged_client_stats.get('active_clients', 0)
@@ -3564,12 +3580,14 @@ def index():
             stats['total_requests'] = merged_client_stats.get('total_requests', 0)
             stats['m3u_clients'] = merged_client_stats.get('m3u_clients', 0)
             stats['m3u_requests'] = merged_client_stats.get('m3u_requests', 0)
+            app.logger.debug(f"Statistiche client sincronizzate (index): {stats['active_clients']} client attivi")
         else:
             stats['active_clients'] = 0
             stats['active_sessions'] = 0
             stats['total_requests'] = 0
             stats['m3u_clients'] = 0
             stats['m3u_requests'] = 0
+            app.logger.debug("Nessuna statistica client globale trovata (index), uso solo locali")
     except Exception as e:
         app.logger.warning(f"Errore nel recupero statistiche client per index: {e}")
         stats['active_clients'] = 0
@@ -3591,6 +3609,10 @@ def index():
             "vavoo_direct": "/proxy/vavoo?url=[VAVOO_URL]"
         }
     }
+    
+    # Forza il salvataggio delle sessioni prima di ottenere il conteggio
+    if config_manager._use_global_sync:
+        save_sessions_to_global()
     
     return render_template('index.html', 
                          stats=stats, 
@@ -5560,6 +5582,50 @@ def cleanup_clients_thread():
 cleanup_clients_thread_instance = Thread(target=cleanup_clients_thread, daemon=True)
 cleanup_clients_thread_instance.start()
 
+# Avvia thread di backup solo per HuggingFace
+if config_manager._is_huggingface:
+    backup_thread = Thread(target=config_backup_thread, daemon=True)
+    backup_thread.start()
+    app.logger.info("Thread di backup configurazione avviato per HuggingFace")
+
+# Avvia thread di sincronizzazione per tutti gli ambienti con workers multipli
+if config_manager._use_global_sync:
+    sync_thread = Thread(target=config_sync_thread, daemon=True)
+    sync_thread.start()
+    if config_manager._is_huggingface:
+        env_name = "HuggingFace"
+    elif config_manager._is_docker_environment():
+        env_name = "Docker"
+    elif config_manager._is_cloud_environment():
+        env_name = "Cloud (Render/Railway/Heroku)"
+    else:
+        env_name = "Gunicorn con workers multipli"
+    app.logger.info(f"Thread di sincronizzazione configurazione avviato per {env_name}")
+    
+    # Avvia thread di sincronizzazione statistiche client
+    client_sync_thread = Thread(target=client_stats_sync_thread, daemon=True)
+    client_sync_thread.start()
+    app.logger.info(f"Thread di sincronizzazione statistiche client avviato per {env_name}")
+    
+    # Avvia thread di sincronizzazione statistiche sistema
+    system_sync_thread = Thread(target=system_stats_sync_thread, daemon=True)
+    system_sync_thread.start()
+    app.logger.info(f"Thread di sincronizzazione statistiche sistema avviato per {env_name}")
+    
+    # Avvia thread di sincronizzazione sessioni
+    session_sync_thread = Thread(target=sync_sessions_thread, daemon=True)
+    session_sync_thread.start()
+    app.logger.info(f"Thread di sincronizzazione sessioni avviato per {env_name}")
+
+# Avvia thread per broadcast statistiche WebSocket
+stats_thread = Thread(target=broadcast_stats, daemon=True)
+stats_thread.start()
+
+# Inizializzazione finale
+setup_logging()
+setup_all_caches()
+setup_proxies()
+
 def get_proxy_for_url(url, original_url=None):
     """
     Ottiene un proxy per un URL, controllando anche l'URL originale per link Vavoo risolti
@@ -6568,6 +6634,66 @@ def debug_proxy_sync_status():
         return jsonify({
             "status": "error",
             "message": str(e)
+        }), 500
+
+@app.route('/admin/debug/force-all-sync', methods=['POST'])
+@login_required
+def force_all_sync():
+    """Forza la sincronizzazione di tutti i dati tra workers"""
+    try:
+        if not config_manager._use_global_sync:
+            return jsonify({
+                "status": "error",
+                "message": "Sincronizzazione non abilitata (ambiente single-worker)"
+            }), 400
+        
+        results = {}
+        
+        # Forza sincronizzazione statistiche sistema
+        try:
+            save_system_stats_to_global()
+            results['system_stats'] = "OK"
+        except Exception as e:
+            results['system_stats'] = f"Errore: {e}"
+        
+        # Forza sincronizzazione statistiche client
+        try:
+            if 'client_tracker' in globals():
+                save_client_stats_to_global()
+                results['client_stats'] = "OK"
+            else:
+                results['client_stats'] = "Client tracker non disponibile"
+        except Exception as e:
+            results['client_stats'] = f"Errore: {e}"
+        
+        # Forza sincronizzazione sessioni
+        try:
+            save_sessions_to_global()
+            results['sessions'] = "OK"
+        except Exception as e:
+            results['sessions'] = f"Errore: {e}"
+        
+        # Forza sincronizzazione configurazione
+        try:
+            config = config_manager.load_config()
+            config_manager._save_to_global_config(config)
+            results['config'] = "OK"
+        except Exception as e:
+            results['config'] = f"Errore: {e}"
+        
+        return jsonify({
+            "status": "success",
+            "message": "Sincronizzazione forzata completata",
+            "results": results,
+            "worker_id": os.getpid(),
+            "timestamp": time.time()
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel forzare la sincronizzazione completa: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore: {str(e)}"
         }), 500
 
 @app.route('/admin/debug/force-proxy-sync', methods=['POST'])
