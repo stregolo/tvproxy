@@ -1198,7 +1198,11 @@ class ConfigManager:
         
         # Sincronizza con la configurazione globale se necessario
         if self._use_global_sync:
-            self._sync_from_global_config()
+            sync_result = self._sync_from_global_config()
+            if sync_result and self._config_cache:
+                # Applica immediatamente la configurazione globale al nuovo worker
+                self.apply_config_to_app(self._config_cache)
+                app.logger.info("Configurazione globale applicata al nuovo worker")
         
     def _detect_huggingface_environment(self):
         """Rileva se siamo in un ambiente HuggingFace"""
@@ -1433,6 +1437,18 @@ class ConfigManager:
         """Carica la configurazione combinando proxy da file, memoria e variabili d'ambiente"""
         # Inizia con i valori di default
         config = self.default_config.copy()
+        
+        # Se usiamo sincronizzazione globale, prova prima a caricare dal file globale
+        if self._use_global_sync and os.path.exists(self.global_config_file):
+            try:
+                with open(self.global_config_file, 'r') as f:
+                    global_config = json.loads(f.read())
+                    config.update(global_config)
+                    self._config_cache = global_config.copy()
+                    app.logger.info("Configurazione caricata dal file globale")
+                    return config
+            except Exception as e:
+                app.logger.warning(f"Errore nel caricamento dal file globale: {e}")
         
         # Se abbiamo una cache in memoria (HuggingFace), usala
         if self._config_cache is not None:
@@ -2075,11 +2091,23 @@ def config_backup_thread():
 # Thread per sincronizzazione automatica tra workers
 def config_sync_thread():
     """Thread per sincronizzare automaticamente la configurazione tra workers"""
+    last_global_file_mtime = 0
+    
     while True:
         try:
             if config_manager._use_global_sync:
                 current_time = time.time()
-                if current_time - config_manager._last_sync_time > config_manager._sync_interval:
+                
+                # Controlla se il file globale è stato modificato
+                global_file_modified = False
+                if os.path.exists(config_manager.global_config_file):
+                    current_mtime = os.path.getmtime(config_manager.global_config_file)
+                    if current_mtime > last_global_file_mtime:
+                        global_file_modified = True
+                        last_global_file_mtime = current_mtime
+                
+                # Sincronizza se è passato abbastanza tempo O se il file è stato modificato
+                if (current_time - config_manager._last_sync_time > config_manager._sync_interval) or global_file_modified:
                     # Sincronizza dal file globale
                     sync_result = config_manager._sync_from_global_config()
                     if sync_result and config_manager._config_cache:
@@ -2088,8 +2116,11 @@ def config_sync_thread():
                         setup_proxies()  # Ricarica i proxy
                         setup_all_caches()
                         pre_buffer_manager.update_config()
-                        app.logger.debug("Configurazione sincronizzata e applicata automaticamente")
-            time.sleep(15)  # Controlla ogni 15 secondi invece di 30
+                        if global_file_modified:
+                            app.logger.info("Configurazione sincronizzata e applicata (file modificato)")
+                        else:
+                            app.logger.debug("Configurazione sincronizzata e applicata automaticamente")
+            time.sleep(5)  # Controlla ogni 5 secondi per essere più reattivo
         except Exception as e:
             app.logger.warning(f"Errore nel thread di sincronizzazione configurazione: {e}")
             time.sleep(30)
@@ -3569,10 +3600,18 @@ def import_config():
             if config_manager._use_global_sync:
                 # Salva nel file globale per sincronizzare tutti i workers
                 global_save_result = config_manager._save_to_global_config(imported_config)
+                
+                # Attiva il ricaricamento proxy su tutti i workers
+                proxy_reload_result = trigger_proxy_reload()
+                
+                # Aspetta un po' per permettere agli altri workers di ricaricare
+                time.sleep(2)
+                
                 sync_info = {
                     'global_sync': True,
                     'global_save_result': global_save_result,
-                    'sync_message': f"Configurazione sincronizzata su tutti i workers: {'OK' if global_save_result else 'FALLITO'}"
+                    'proxy_reload_result': proxy_reload_result,
+                    'sync_message': f"Configurazione importata e sincronizzata su tutti i workers: {'OK' if global_save_result else 'FALLITO'}. Ricaricamento proxy: {'OK' if proxy_reload_result else 'FALLITO'}"
                 }
                 app.logger.info(f"Configurazione importata e sincronizzata su tutti i workers da {file.filename}")
             else:
@@ -3588,13 +3627,27 @@ def import_config():
             
             app.logger.info(f"Configurazione attuale: {len(current_config)} impostazioni caricate")
             
+            # Se usiamo sincronizzazione globale, forziamo anche il ricaricamento proxy
+            if config_manager._use_global_sync:
+                # Aspetta un po' per permettere agli altri workers di sincronizzare
+                time.sleep(1)
+                # Forza una sincronizzazione finale per essere sicuri
+                final_sync_result = config_manager._sync_from_global_config()
+                if final_sync_result and config_manager._config_cache:
+                    config_manager.apply_config_to_app(config_manager._config_cache)
+                    setup_proxies()
+                    setup_all_caches()
+                    pre_buffer_manager.update_config()
+                    app.logger.info("Configurazione finale applicata dopo import")
+            
             return jsonify({
                 "status": "success", 
                 "message": f"Configurazione importata con successo da {file.filename}",
                 "config_status": config_status,
                 "imported_keys": list(imported_config.keys()),
                 "current_keys": list(current_config.keys()),
-                "sync_info": sync_info
+                "sync_info": sync_info,
+                "final_sync_result": final_sync_result if config_manager._use_global_sync else None
             })
         else:
             return jsonify({"status": "error", "message": "Errore nel salvataggio della configurazione importata"}), 500
