@@ -99,27 +99,7 @@ CACHE_ENABLED=false
 
 🎉 **Fatto!** Il server è già ottimizzato per HuggingFace Spaces con configurazioni predefinite perfette.
 
-#### **Configurazione Avanzata (Opzionale)**
-
-Se vuoi personalizzare ulteriormente, puoi aggiungere queste variabili nei **Secrets**:
-
-```dotenv
-# Proxy (obbligatorio se necessario)
-PROXY=socks5://user:pass@proxy.com:1080
-DADDY_PROXY=socks5://user:pass@daddy-proxy.com:1080
-
-# Configurazioni avanzate (già ottimizzate di default)
-CACHE_TTL_M3U8=5
-CACHE_MAXSIZE_M3U8=500
-CACHE_TTL_TS=600
-CACHE_MAXSIZE_TS=8000
-POOL_CONNECTIONS=50
-POOL_MAXSIZE=300
-REQUEST_TIMEOUT=45
-NO_PROXY_DOMAINS=github.com
-```
-
-**Nota**: Le configurazioni di default sono già ottimizzate per HuggingFace Spaces. Devi configurare solo i proxy se necessario!
+**Nota**: usa `PROXY` per proxy globale, usa `DADDY_PROXY` solo per proxare daddy
 
 ---
 
