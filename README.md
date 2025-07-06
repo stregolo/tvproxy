@@ -346,15 +346,6 @@ POOL_MAXSIZE=50
 
 ---
 
-## 📝 Logs
-
-I log vengono mostrati solo su console (stdout/stderr):
-- ❌ Nessun file di log salvato
-- 📊 Log level INFO
-- 👀 Output visibile nei log del container/processo
-
----
-
 ## 🤝 Supporto
 
 Per problemi o domande, apri una issue su GitHub.
@@ -369,4 +360,4 @@ Per problemi o domande, apri una issue su GitHub.
 > Goditi i tuoi flussi preferiti ovunque, senza restrizioni, con controllo completo e monitoraggio avanzato.
 
 </div>
-****
+
