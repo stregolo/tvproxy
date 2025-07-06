@@ -1,3 +1,4 @@
+
 from flask import Flask, request, Response, jsonify
 import requests
 from urllib.parse import urlparse, urljoin, quote, unquote
@@ -1296,8 +1297,217 @@ def resolve_m3u8_link(url, headers=None):
     
 @app.route('/')
 def index():
-    """Pagina principale - solo informazioni proxy"""
-    return "TV Proxy Server - Solo funzionalità proxy disponibili"
+    """Pagina principale con interfaccia web"""
+    html_content = """
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TV Proxy Server</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            max-width: 800px;
+            width: 100%;
+            text-align: center;
+        }
+        
+        .logo {
+            font-size: 3rem;
+            font-weight: bold;
+            color: #4a5568;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        .subtitle {
+            font-size: 1.2rem;
+            color: #718096;
+            margin-bottom: 30px;
+        }
+        
+        .status {
+            background: #f7fafc;
+            border: 2px solid #e2e8f0;
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .status h3 {
+            color: #2d3748;
+            margin-bottom: 15px;
+        }
+        
+        .endpoints {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
+        }
+        
+        .endpoint {
+            background: #edf2f7;
+            border-radius: 10px;
+            padding: 20px;
+            border-left: 4px solid #4299e1;
+        }
+        
+        .endpoint h4 {
+            color: #2b6cb0;
+            margin-bottom: 10px;
+        }
+        
+        .endpoint p {
+            color: #4a5568;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+        
+        .example {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            margin: 10px 0;
+            overflow-x: auto;
+        }
+        
+        .features {
+            background: #f0fff4;
+            border: 2px solid #9ae6b4;
+            border-radius: 15px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .features h3 {
+            color: #22543d;
+            margin-bottom: 15px;
+        }
+        
+        .feature-list {
+            list-style: none;
+            text-align: left;
+        }
+        
+        .feature-list li {
+            padding: 8px 0;
+            color: #2f855a;
+            position: relative;
+            padding-left: 25px;
+        }
+        
+        .feature-list li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #38a169;
+            font-weight: bold;
+        }
+        
+        .footer {
+            margin-top: 30px;
+            color: #718096;
+            font-size: 0.9rem;
+        }
+        
+        @media (max-width: 600px) {
+            .container {
+                padding: 20px;
+            }
+            
+            .logo {
+                font-size: 2rem;
+            }
+            
+            .endpoints {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">📺 TV Proxy Server</div>
+        <div class="subtitle">Server proxy intelligente per streaming TV e IPTV</div>
+        
+        <div class="status">
+            <h3>🟢 Server Online</h3>
+            <p>Il server è attivo e pronto a gestire le richieste proxy</p>
+        </div>
+        
+        <div class="endpoints">
+            <div class="endpoint">
+                <h4>📋 Proxy M3U/M3U8</h4>
+                <p>Gestisce playlist M3U e stream M3U8 con supporto per DaddyLive e Vavoo</p>
+                <div class="example">/proxy/m3u?url=URL_PLAYLIST</div>
+            </div>
+            
+            <div class="endpoint">
+                <h4>🔗 Proxy TS</h4>
+                <p>Gestisce segmenti video .ts con caching e pre-buffering</p>
+                <div class="example">/proxy/ts?url=URL_SEGMENTO</div>
+            </div>
+            
+            <div class="endpoint">
+                <h4>🔑 Proxy Key</h4>
+                <p>Gestisce chiavi di crittografia AES-128 per stream protetti</p>
+                <div class="example">/proxy/key?url=URL_CHIAVE</div>
+            </div>
+            
+            <div class="endpoint">
+                <h4>🎯 Risoluzione URL</h4>
+                <p>Risolve URL PHP di DADDY</p>
+                <div class="example">/proxy/resolve?url=URL_COMPLESSO</div>
+            </div>
+        </div>
+        
+        <div class="features">
+            <h3>✨ Funzionalità Avanzate</h3>
+            <ul class="feature-list">
+                <li>Supporto per proxy SOCKS5 e HTTP/HTTPS</li>
+                <li>Caching intelligente per M3U8, TS e chiavi</li>
+                <li>Pre-buffering automatico per ridurre il buffering</li>
+                <li>Risoluzione automatica DaddyLive 2025</li>
+                <li>Supporto per link Vavoo con risoluzione</li>
+                <li>Gestione headers personalizzati</li>
+                <li>Connessioni persistenti con Keep-Alive</li>
+                <li>Retry automatico in caso di errori</li>
+            </ul>
+        </div>
+        
+        <div class="footer">
+            <p>Server configurato per Huggingface Spaces e deployment cloud</p>
+            <p>© 2024 TV Proxy Server - Tutti i diritti riservati</p>
+        </div>
+    </div>
+</body>
+</html>
+    """
+    return html_content
 
 
 @app.route('/proxy/vavoo')
