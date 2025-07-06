@@ -799,6 +799,7 @@ class ConfigManager:
         }
         self._config_cache = None  # Cache in memoria per HuggingFace
         self._is_huggingface = self._detect_huggingface_environment()
+        self._use_global_sync = self._should_use_global_sync()
         self._last_backup_time = 0
         self._backup_interval = 300  # Backup ogni 5 minuti
         self._last_sync_time = 0
@@ -807,7 +808,10 @@ class ConfigManager:
         # Ripristina configurazione dal backup se siamo su HuggingFace
         if self._is_huggingface:
             self._restore_from_backup()
-            self._sync_from_global_config()  # Sincronizza con la configurazione globale
+        
+        # Sincronizza con la configurazione globale se necessario
+        if self._use_global_sync:
+            self._sync_from_global_config()
         
     def _detect_huggingface_environment(self):
         """Rileva se siamo in un ambiente HuggingFace"""
@@ -818,6 +822,33 @@ class ConfigManager:
             '/tmp' in os.getcwd() or
             'huggingface' in os.getcwd().lower()
         )
+    
+    def _should_use_global_sync(self):
+        """Determina se usare la sincronizzazione globale (HuggingFace o Gunicorn con workers multipli)"""
+        # Su HuggingFace sempre attiva
+        if self._is_huggingface:
+            return True
+        
+        # In locale, controlla se stiamo usando Gunicorn con workers multipli
+        # Gunicorn imposta la variabile d'ambiente GUNICORN_CMD_ARGS
+        if os.environ.get('GUNICORN_CMD_ARGS'):
+            return True
+        
+        # Controlla se siamo in un processo worker di Gunicorn
+        if os.environ.get('GUNICORN_WORKER_ID'):
+            return True
+        
+        # Controlla se il processo padre è Gunicorn
+        try:
+            import psutil
+            current_process = psutil.Process()
+            parent = current_process.parent()
+            if parent and 'gunicorn' in parent.name().lower():
+                return True
+        except:
+            pass
+        
+        return False
     
     def _acquire_global_lock(self, timeout=10):
         """Acquisisce il lock globale per la sincronizzazione"""
@@ -1050,17 +1081,19 @@ class ConfigManager:
     def save_config(self, config):
         """Salva la configurazione nel file JSON o in memoria per HuggingFace"""
         try:
-            # Se siamo su HuggingFace o non riusciamo a scrivere, usa la cache in memoria
-            if self._is_huggingface:
+            # Se usiamo sincronizzazione globale (HuggingFace o Gunicorn con workers)
+            if self._use_global_sync:
                 self._config_cache = config.copy()
-                # Salva anche un backup su file per persistenza
-                self._save_backup(config)
+                # Salva anche un backup su file per persistenza (solo HuggingFace)
+                if self._is_huggingface:
+                    self._save_backup(config)
                 # Sincronizza con tutti i workers tramite file globale
                 self._save_to_global_config(config)
-                app.logger.info("Configurazione salvata in memoria, backup e file globale (ambiente HuggingFace)")
+                env_name = "HuggingFace" if self._is_huggingface else "Gunicorn con workers multipli"
+                app.logger.info(f"Configurazione salvata in memoria e file globale ({env_name})")
                 return True
             
-            # Prova a salvare nel file
+            # Prova a salvare nel file (ambiente standard)
             with open(self.config_file, 'w') as f:
                 json.dump(config, f, indent=4)
             app.logger.info(f"Configurazione salvata nel file: {self.config_file}")
@@ -1072,8 +1105,9 @@ class ConfigManager:
             app.logger.info("Configurazione salvata in memoria come fallback")
             self._config_cache = config.copy()
             # Prova comunque a salvare il backup e la sincronizzazione globale
-            if self._is_huggingface:
-                self._save_backup(config)
+            if self._use_global_sync:
+                if self._is_huggingface:
+                    self._save_backup(config)
                 self._save_to_global_config(config)
             return True
             
@@ -1108,6 +1142,7 @@ class ConfigManager:
         
         return {
             'is_huggingface': self._is_huggingface,
+            'use_global_sync': self._use_global_sync,
             'config_file': self.config_file,
             'backup_file': self.backup_file,
             'global_config_file': self.global_config_file,
@@ -1586,12 +1621,12 @@ def config_backup_thread():
             app.logger.warning(f"Errore nel thread di backup configurazione: {e}")
             time.sleep(60)
 
-# Thread per sincronizzazione automatica tra workers su HuggingFace
+# Thread per sincronizzazione automatica tra workers
 def config_sync_thread():
     """Thread per sincronizzare automaticamente la configurazione tra workers"""
     while True:
         try:
-            if config_manager._is_huggingface:
+            if config_manager._use_global_sync:
                 current_time = time.time()
                 if current_time - config_manager._last_sync_time > config_manager._sync_interval:
                     # Sincronizza dal file globale
@@ -1601,14 +1636,18 @@ def config_sync_thread():
             app.logger.warning(f"Errore nel thread di sincronizzazione configurazione: {e}")
             time.sleep(30)
 
+# Avvia thread di backup solo per HuggingFace
 if config_manager._is_huggingface:
     backup_thread = Thread(target=config_backup_thread, daemon=True)
     backup_thread.start()
     app.logger.info("Thread di backup configurazione avviato per HuggingFace")
-    
+
+# Avvia thread di sincronizzazione per tutti gli ambienti con workers multipli
+if config_manager._use_global_sync:
     sync_thread = Thread(target=config_sync_thread, daemon=True)
     sync_thread.start()
-    app.logger.info("Thread di sincronizzazione configurazione avviato per HuggingFace")
+    env_name = "HuggingFace" if config_manager._is_huggingface else "Gunicorn con workers multipli"
+    app.logger.info(f"Thread di sincronizzazione configurazione avviato per {env_name}")
 
 # --- Configurazione Proxy ---
 PROXY_LIST = []
@@ -4009,8 +4048,11 @@ if config_status['is_huggingface']:
     app.logger.info("⚠️  AMBIENTE HUGGINGFACE: Configurazione salvata in memoria")
     app.logger.info("🔄 Sincronizzazione globale tra workers attiva")
     app.logger.info("💡 Per configurazione permanente, usa i Secrets di HuggingFace")
+elif config_status['use_global_sync']:
+    app.logger.info("🔄 AMBIENTE GUNICORN: Sincronizzazione globale tra workers attiva")
+    app.logger.info("📁 Configurazione salvata in memoria e file globale")
 else:
-    app.logger.info("✅ Configurazione salvata su file")
+    app.logger.info("✅ Configurazione salvata su file (ambiente standard)")
 
 app.logger.info("="*50)
 
@@ -4796,10 +4838,10 @@ def debug_backup_status():
 def force_sync_config():
     """Forza la sincronizzazione della configurazione tra workers"""
     try:
-        if not config_manager._is_huggingface:
+        if not config_manager._use_global_sync:
             return jsonify({
                 'status': 'error',
-                'message': 'Sincronizzazione disponibile solo su HuggingFace'
+                'message': 'Sincronizzazione disponibile solo con workers multipli (HuggingFace o Gunicorn)'
             }), 400
         
         # Forza la sincronizzazione dal file globale
@@ -4810,11 +4852,13 @@ def force_sync_config():
         if config_manager._config_cache:
             global_save_result = config_manager._save_to_global_config(config_manager._config_cache)
         
+        env_name = "HuggingFace" if config_manager._is_huggingface else "Gunicorn con workers multipli"
+        
         return jsonify({
             'status': 'success',
             'sync_result': sync_result,
             'global_save_result': global_save_result,
-            'message': f'Sincronizzazione forzata: Lettura {"OK" if sync_result else "FALLITA"}, Scrittura {"OK" if global_save_result else "FALLITA"}',
+            'message': f'Sincronizzazione forzata ({env_name}): Lettura {"OK" if sync_result else "FALLITA"}, Scrittura {"OK" if global_save_result else "FALLITA"}',
             'config_status': config_manager.get_config_status()
         })
         
