@@ -525,6 +525,12 @@
                 <i class="fas fa-trash"></i> Pulisci Statistiche
             </button>
         </div>
+        
+        <!-- Alert per sincronizzazione -->
+        <div class="alert alert-info" id="syncAlert" style="display: none; margin-bottom: 2rem;">
+            <i class="fas fa-sync-alt"></i> <strong>Sincronizzazione Statistiche Client</strong><br>
+            Le statistiche vengono sincronizzate automaticamente tra tutti i workers per mostrare i dati completi del sistema.
+        </div>
 
         <div class="clients-table">
             <div class="table-header">
@@ -622,6 +628,16 @@
             if (data.m3u_requests !== undefined) {
                 document.getElementById('m3uRequests').textContent = data.m3u_requests;
             }
+            
+            // Mostra informazioni di sincronizzazione se disponibili
+            if (data.sync_info) {
+                const syncInfo = data.sync_info;
+                if (syncInfo.enabled) {
+                    console.log(`🔄 ${syncInfo.message}`);
+                } else {
+                    console.log(`ℹ️ ${syncInfo.message}`);
+                }
+            }
         }
 
         function refreshData() {
@@ -630,6 +646,13 @@
                 .then(data => {
                     updateClientsTable(data);
                     updateStats(data);
+                    
+                    // Mostra alert di sincronizzazione se abilitata
+                    if (data.sync_info && data.sync_info.enabled) {
+                        document.getElementById('syncAlert').style.display = 'block';
+                    } else {
+                        document.getElementById('syncAlert').style.display = 'none';
+                    }
                 })
                 .catch(error => {
                     console.error('Errore nel caricamento dati:', error);
