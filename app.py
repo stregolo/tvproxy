@@ -3670,6 +3670,7 @@ def get_dashboard_data():
                 'ram_total_gb': 0,
                 'network_sent': 0,
                 'network_recv': 0,
+                'bandwidth_usage': 0,
                 'prebuffer_streams': 0,
                 'prebuffer_segments': 0,
                 'prebuffer_size_mb': 0,
@@ -3777,6 +3778,7 @@ def get_dashboard_data():
             'ram_total_gb': system_stats.get('ram_total_gb', 0),
             'network_sent': system_stats.get('network_sent', 0),
             'network_recv': system_stats.get('network_recv', 0),
+            'bandwidth_usage': system_stats.get('bandwidth_usage', 0),
             'prebuffer_streams': system_stats.get('prebuffer_streams', 0),
             'prebuffer_segments': system_stats.get('prebuffer_segments', 0),
             'prebuffer_size_mb': system_stats.get('prebuffer_size_mb', 0),
@@ -3822,7 +3824,8 @@ def get_dashboard_data():
             # Timestamp
             'timestamp': current_time,
             'daddy_base_url': daddy_base_url,
-            'session_count': session_count
+            'session_count': session_count,
+            'proxy_count': len(available_proxies) if 'available_proxies' in locals() else 0
         }
         
         # Aggiorna la cache
@@ -3842,6 +3845,7 @@ def get_dashboard_data():
             'ram_total_gb': 0,
             'network_sent': 0,
             'network_recv': 0,
+            'bandwidth_usage': 0,
             'prebuffer_streams': 0,
             'prebuffer_segments': 0,
             'prebuffer_size_mb': 0,
@@ -3873,7 +3877,8 @@ def get_dashboard_data():
             },
             'timestamp': current_time,
             'daddy_base_url': None,
-            'session_count': 0
+            'session_count': 0,
+            'proxy_count': 0
         }
 
 @app.route('/dashboard')
@@ -3916,6 +3921,7 @@ def dashboard():
             'ram_total_gb': 0,
             'network_sent': 0,
             'network_recv': 0,
+            'bandwidth_usage': 0,
             'prebuffer_streams': 0,
             'prebuffer_segments': 0,
             'prebuffer_size_mb': 0,
@@ -3947,6 +3953,7 @@ def dashboard():
             'timestamp': time.time(),
             'daddy_base_url': None,
             'session_count': 0,
+            'proxy_count': 0,
             'prebuffer_info': {
                 'active_streams': 0,
                 'buffered_segments': 0,
