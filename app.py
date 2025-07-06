@@ -46,12 +46,17 @@ system_stats = {}
 # Cache per statistiche aggregate (evita salti)
 AGGREGATED_STATS_CACHE = {}
 AGGREGATED_STATS_CACHE_TIMESTAMP = 0
-AGGREGATED_STATS_CACHE_TTL = 5  # Cache per 5 secondi
+AGGREGATED_STATS_CACHE_TTL = 10  # Cache per 10 secondi (aumentato per stabilità)
 
 # Cache per statistiche client aggregate
 AGGREGATED_CLIENT_STATS_CACHE = {}
 AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP = 0
-AGGREGATED_CLIENT_STATS_CACHE_TTL = 5  # Cache per 5 secondi
+AGGREGATED_CLIENT_STATS_CACHE_TTL = 10  # Cache per 10 secondi (aumentato per stabilità)
+
+# Cache per dashboard (stabilizza i dati visualizzati)
+DASHBOARD_CACHE = {}
+DASHBOARD_CACHE_TIMESTAMP = 0
+DASHBOARD_CACHE_TTL = 15  # Cache per 15 secondi per la dashboard
 
 DADDYLIVE_BASE_URL = None
 LAST_FETCH_TIME = 0
@@ -662,6 +667,90 @@ def get_available_daddy_proxies():
     
     return available_proxies
 
+def repair_json_file(file_path):
+    """Ripara un file JSON corrotto creandone uno nuovo vuoto"""
+    try:
+        # Backup del file corrotto
+        backup_path = f"{file_path}.corrupted.{int(time.time())}"
+        if os.path.exists(file_path):
+            os.rename(file_path, backup_path)
+            app.logger.warning(f"File JSON corrotto rinominato in: {backup_path}")
+        
+        # Crea un nuovo file JSON vuoto ma valido
+        if 'system_stats' in file_path:
+            default_data = {
+                'last_update': time.time(),
+                'active_workers_count': 0,
+                'workers': {}
+            }
+        elif 'client_stats' in file_path:
+            default_data = {
+                'last_update': time.time(),
+                'active_workers_count': 0,
+                'workers': {}
+            }
+        elif 'sessions' in file_path:
+            default_data = {
+                'last_update': time.time(),
+                'active_sessions': 0,
+                'sessions': {}
+            }
+        else:
+            default_data = {}
+        
+        with open(file_path, 'w') as f:
+            json.dump(default_data, f, indent=2)
+        
+        app.logger.info(f"File JSON riparato: {file_path}")
+        return True
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella riparazione file JSON {file_path}: {e}")
+        return False
+
+def cleanup_and_repair_json_files():
+    """Pulisce e ripara tutti i file JSON di sincronizzazione all'avvio"""
+    try:
+        json_files = [
+            SYSTEM_STATS_FILE,
+            CLIENT_STATS_FILE,
+            SESSION_SYNC_FILE,
+            PROXY_SYNC_FILE
+        ]
+        
+        repaired_count = 0
+        for file_path in json_files:
+            try:
+                if os.path.exists(file_path):
+                    # Prova a leggere il file
+                    with open(file_path, 'r') as f:
+                        content = f.read().strip()
+                    
+                    if not content:
+                        app.logger.info(f"File vuoto rilevato: {os.path.basename(file_path)}")
+                        repair_json_file(file_path)
+                        repaired_count += 1
+                    else:
+                        try:
+                            json.loads(content)
+                            # File valido, non fare nulla
+                        except json.JSONDecodeError as e:
+                            app.logger.warning(f"File JSON corrotto rilevato: {os.path.basename(file_path)} - {e}")
+                            repair_json_file(file_path)
+                            repaired_count += 1
+                else:
+                    app.logger.info(f"File non esistente, verrà creato quando necessario: {os.path.basename(file_path)}")
+            except Exception as e:
+                app.logger.error(f"Errore nel controllo file {os.path.basename(file_path)}: {e}")
+        
+        if repaired_count > 0:
+            app.logger.info(f"Riparati {repaired_count} file JSON corrotti all'avvio")
+        else:
+            app.logger.info("Tutti i file JSON di sincronizzazione sono validi")
+            
+    except Exception as e:
+        app.logger.error(f"Errore nella pulizia file JSON all'avvio: {e}")
+
 def cleanup_expired_blacklist():
     """Pulisce la blacklist dai proxy scaduti"""
     global PROXY_BLACKLIST, DADDY_PROXY_BLACKLIST
@@ -706,10 +795,29 @@ def save_client_stats_to_global():
             if os.path.exists(CLIENT_STATS_FILE):
                 try:
                     with open(CLIENT_STATS_FILE, 'r') as f:
-                        existing_data = json.load(f)
-                        all_workers_stats = existing_data.get('workers', {})
+                        content = f.read().strip()
+                    
+                    if content:
+                        try:
+                            existing_data = json.loads(content)
+                            all_workers_stats = existing_data.get('workers', {})
+                        except json.JSONDecodeError as e:
+                            app.logger.warning(f"File statistiche client JSON corrotto durante salvataggio: {e}")
+                            # Forza la riparazione immediata
+                            if repair_json_file(CLIENT_STATS_FILE):
+                                app.logger.info("File statistiche client riparato automaticamente")
+                            all_workers_stats = {}
+                    else:
+                        app.logger.warning("File statistiche client vuoto durante salvataggio")
+                        all_workers_stats = {}
                 except Exception as e:
                     app.logger.warning(f"Errore nel caricamento statistiche client esistenti: {e}")
+                    # Prova a riparare il file in caso di errore generico
+                    try:
+                        repair_json_file(CLIENT_STATS_FILE)
+                        app.logger.info("File statistiche client riparato dopo errore generico")
+                    except:
+                        pass
                     all_workers_stats = {}
             
             # Aggiungi/aggiorna le statistiche del worker corrente
@@ -749,7 +857,21 @@ def load_client_stats_from_global():
         
         with CLIENT_STATS_LOCK:
             with open(CLIENT_STATS_FILE, 'r') as f:
-                global_stats = json.load(f)
+                content = f.read().strip()
+                
+            # Verifica se il file è vuoto
+            if not content:
+                app.logger.warning("File statistiche client globali vuoto, ignorato")
+                return None
+            
+            # Prova a parsare il JSON
+            try:
+                global_stats = json.loads(content)
+            except json.JSONDecodeError as e:
+                app.logger.error(f"File statistiche client globali JSON corrotto: {e}")
+                # Prova a riparare il file
+                repair_json_file(CLIENT_STATS_FILE)
+                return None
             
             # Verifica che il file non sia troppo vecchio (più di 2 minuti)
             if time.time() - global_stats.get('last_update', 0) > 120:
@@ -933,10 +1055,29 @@ def save_system_stats_to_global():
             if os.path.exists(SYSTEM_STATS_FILE):
                 try:
                     with open(SYSTEM_STATS_FILE, 'r') as f:
-                        existing_data = json.load(f)
-                        all_workers_stats = existing_data.get('workers', {})
+                        content = f.read().strip()
+                    
+                    if content:
+                        try:
+                            existing_data = json.loads(content)
+                            all_workers_stats = existing_data.get('workers', {})
+                        except json.JSONDecodeError as e:
+                            app.logger.warning(f"File statistiche sistema JSON corrotto durante salvataggio: {e}")
+                            # Forza la riparazione immediata
+                            if repair_json_file(SYSTEM_STATS_FILE):
+                                app.logger.info("File statistiche sistema riparato automaticamente")
+                            all_workers_stats = {}
+                    else:
+                        app.logger.warning("File statistiche sistema vuoto durante salvataggio")
+                        all_workers_stats = {}
                 except Exception as e:
                     app.logger.warning(f"Errore nel caricamento statistiche esistenti: {e}")
+                    # Prova a riparare il file in caso di errore generico
+                    try:
+                        repair_json_file(SYSTEM_STATS_FILE)
+                        app.logger.info("File statistiche sistema riparato dopo errore generico")
+                    except:
+                        pass
                     all_workers_stats = {}
             
             # Aggiungi/aggiorna le statistiche del worker corrente
@@ -976,7 +1117,21 @@ def load_system_stats_from_global():
         
         with SYSTEM_STATS_LOCK:
             with open(SYSTEM_STATS_FILE, 'r') as f:
-                global_stats = json.load(f)
+                content = f.read().strip()
+                
+            # Verifica se il file è vuoto
+            if not content:
+                app.logger.warning("File statistiche sistema globali vuoto, ignorato")
+                return None
+            
+            # Prova a parsare il JSON
+            try:
+                global_stats = json.loads(content)
+            except json.JSONDecodeError as e:
+                app.logger.error(f"File statistiche sistema globali JSON corrotto: {e}")
+                # Prova a riparare il file
+                repair_json_file(SYSTEM_STATS_FILE)
+                return None
             
             # Verifica che il file non sia troppo vecchio (più di 30 secondi per statistiche real-time)
             if time.time() - global_stats.get('last_update', 0) > 30:
@@ -3486,6 +3641,171 @@ def login():
     
     return render_template('login.html')
     
+def get_dashboard_data():
+    """Ottiene i dati per la dashboard con cache stabile"""
+    global DASHBOARD_CACHE, DASHBOARD_CACHE_TIMESTAMP
+    
+    current_time = time.time()
+    
+    # Controlla se abbiamo dati in cache validi
+    if (DASHBOARD_CACHE and 
+        current_time - DASHBOARD_CACHE_TIMESTAMP < DASHBOARD_CACHE_TTL):
+        app.logger.debug("Usando dati dashboard dalla cache")
+        return DASHBOARD_CACHE
+    
+    try:
+        # Ottieni statistiche di sistema aggregate
+        system_stats = get_system_stats()
+        
+        # Ottieni statistiche client aggregate
+        client_stats = merge_client_stats_from_all_workers()
+        if not client_stats:
+            client_stats = {
+                'total_clients': 0,
+                'total_sessions': 0,
+                'active_clients': 0,
+                'active_sessions': 0,
+                'total_requests': 0,
+                'm3u_clients': 0,
+                'm3u_requests': 0
+            }
+        
+        # Calcola statistiche proxy
+        available_proxies = get_available_proxies()
+        available_daddy_proxies = get_available_daddy_proxies()
+        
+        # Calcola statistiche IP
+        ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+        for proxy in PROXY_LIST:
+            ip_version = get_proxy_ip_version(proxy)
+            if ip_version in ip_stats:
+                ip_stats[ip_version] += 1
+        
+        available_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+        for proxy in available_proxies:
+            ip_version = get_proxy_ip_version(proxy)
+            if ip_version in available_ip_stats:
+                available_ip_stats[ip_version] += 1
+        
+        # Calcola statistiche proxy DaddyLive
+        daddy_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+        for proxy in DADDY_PROXY_LIST:
+            ip_version = get_proxy_ip_version(proxy)
+            if ip_version in daddy_ip_stats:
+                daddy_ip_stats[ip_version] += 1
+        
+        available_daddy_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+        for proxy in available_daddy_proxies:
+            ip_version = get_proxy_ip_version(proxy)
+            if ip_version in available_daddy_ip_stats:
+                available_daddy_ip_stats[ip_version] += 1
+        
+        # Prepara i dati della dashboard
+        dashboard_data = {
+            # Statistiche di sistema
+            'ram_usage': system_stats.get('ram_usage', 0),
+            'ram_used_gb': system_stats.get('ram_used_gb', 0),
+            'ram_total_gb': system_stats.get('ram_total_gb', 0),
+            'network_sent': system_stats.get('network_sent', 0),
+            'network_recv': system_stats.get('network_recv', 0),
+            'prebuffer_streams': system_stats.get('prebuffer_streams', 0),
+            'prebuffer_segments': system_stats.get('prebuffer_segments', 0),
+            'prebuffer_size_mb': system_stats.get('prebuffer_size_mb', 0),
+            'prebuffer_threads': system_stats.get('prebuffer_threads', 0),
+            'cache_size': system_stats.get('cache_size', '0 items'),
+            'uptime': system_stats.get('uptime', '0h'),
+            'requests_per_min': system_stats.get('requests_per_min', 0),
+            
+            # Statistiche client
+            'total_clients': client_stats.get('total_clients', 0),
+            'total_sessions': client_stats.get('total_sessions', 0),
+            'active_clients': client_stats.get('active_clients', 0),
+            'active_sessions': client_stats.get('active_sessions', 0),
+            'total_requests': client_stats.get('total_requests', 0),
+            'm3u_clients': client_stats.get('m3u_clients', 0),
+            'm3u_requests': client_stats.get('m3u_requests', 0),
+            
+            # Statistiche proxy
+            'proxy_status': {
+                'available_proxies': len(available_proxies),
+                'blacklisted_proxies': len(PROXY_BLACKLIST),
+                'total_proxies': len(PROXY_LIST),
+                'available_daddy_proxies': len(available_daddy_proxies),
+                'blacklisted_daddy_proxies': len(DADDY_PROXY_BLACKLIST),
+                'total_daddy_proxies': len(DADDY_PROXY_LIST),
+                'ip_statistics': {
+                    'total': ip_stats,
+                    'available': available_ip_stats
+                },
+                'daddy_ip_statistics': {
+                    'total': daddy_ip_stats,
+                    'available': available_daddy_ip_stats
+                }
+            },
+            
+            # Informazioni di sincronizzazione
+            'sync_info': {
+                'enabled': config_manager._use_global_sync,
+                'worker_id': os.getpid(),
+                'cache_age': current_time - DASHBOARD_CACHE_TIMESTAMP if DASHBOARD_CACHE_TIMESTAMP > 0 else 0
+            },
+            
+            # Timestamp
+            'timestamp': current_time,
+            'daddy_base_url': get_daddylive_base_url(),
+            'session_count': get_total_sessions_count()
+        }
+        
+        # Aggiorna la cache
+        DASHBOARD_CACHE = dashboard_data
+        DASHBOARD_CACHE_TIMESTAMP = current_time
+        
+        app.logger.debug(f"Dati dashboard aggiornati e messi in cache (TTL: {DASHBOARD_CACHE_TTL}s)")
+        return dashboard_data
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel calcolo dati dashboard: {e}")
+        # In caso di errore, restituisci dati di fallback
+        return {
+            'ram_usage': 0,
+            'ram_used_gb': 0,
+            'ram_total_gb': 0,
+            'network_sent': 0,
+            'network_recv': 0,
+            'prebuffer_streams': 0,
+            'prebuffer_segments': 0,
+            'prebuffer_size_mb': 0,
+            'prebuffer_threads': 0,
+            'cache_size': '0 items',
+            'uptime': '0h',
+            'requests_per_min': 0,
+            'total_clients': 0,
+            'total_sessions': 0,
+            'active_clients': 0,
+            'active_sessions': 0,
+            'total_requests': 0,
+            'm3u_clients': 0,
+            'm3u_requests': 0,
+            'proxy_status': {
+                'available_proxies': 0,
+                'blacklisted_proxies': 0,
+                'total_proxies': 0,
+                'available_daddy_proxies': 0,
+                'blacklisted_daddy_proxies': 0,
+                'total_daddy_proxies': 0,
+                'ip_statistics': {'total': {'IPv4': 0, 'IPv6': 0, 'hostname': 0}, 'available': {'IPv4': 0, 'IPv6': 0, 'hostname': 0}},
+                'daddy_ip_statistics': {'total': {'IPv4': 0, 'IPv6': 0, 'hostname': 0}, 'available': {'IPv4': 0, 'IPv6': 0, 'hostname': 0}}
+            },
+            'sync_info': {
+                'enabled': False,
+                'worker_id': os.getpid(),
+                'cache_age': 0
+            },
+            'timestamp': current_time,
+            'daddy_base_url': None,
+            'session_count': 0
+        }
+
 @app.route('/dashboard')
 @login_required
 def dashboard():
@@ -3497,8 +3817,8 @@ def dashboard():
     except Exception as e:
         app.logger.warning(f"Errore nel tracking richiesta dashboard: {e}")
     
-    stats = get_system_stats()
-    daddy_base_url = get_daddylive_base_url()
+    # Usa la funzione dedicata per ottenere dati stabili
+    stats = get_dashboard_data()
     
     # Aggiungi informazioni pre-buffer alle statistiche
     stats['prebuffer_info'] = {
@@ -3508,44 +3828,29 @@ def dashboard():
         'active_threads': stats.get('prebuffer_threads', 0)
     }
     
-    # Aggiungi statistiche client sincronizzate
-    try:
-        # Forza il salvataggio delle statistiche client locali prima del merge
-        if config_manager._use_global_sync and 'client_tracker' in globals():
-            save_client_stats_to_global()
-        
-        merged_client_stats = merge_client_stats_from_all_workers()
-        if merged_client_stats:
-            stats['active_clients'] = merged_client_stats.get('active_clients', 0)
-            stats['active_sessions'] = merged_client_stats.get('active_sessions', 0)
-            stats['total_requests'] = merged_client_stats.get('total_requests', 0)
-            stats['m3u_clients'] = merged_client_stats.get('m3u_clients', 0)
-            stats['m3u_requests'] = merged_client_stats.get('m3u_requests', 0)
-            app.logger.debug(f"Statistiche client sincronizzate: {stats['active_clients']} client attivi")
-        else:
-            stats['active_clients'] = 0
-            stats['active_sessions'] = 0
-            stats['total_requests'] = 0
-            stats['m3u_clients'] = 0
-            stats['m3u_requests'] = 0
-            app.logger.debug("Nessuna statistica client globale trovata, uso solo locali")
-    except Exception as e:
-        app.logger.warning(f"Errore nel recupero statistiche client per dashboard: {e}")
-        stats['active_clients'] = 0
-        stats['active_sessions'] = 0
-        stats['total_requests'] = 0
-        stats['m3u_clients'] = 0
-        stats['m3u_requests'] = 0
-    
-    # Forza il salvataggio delle sessioni prima di ottenere il conteggio
-    if config_manager._use_global_sync:
-        save_sessions_to_global()
-    
     return render_template('dashboard.html', 
                          stats=stats, 
-                         daddy_base_url=daddy_base_url,
-                         session_count=get_total_sessions_count(),
-                         proxy_count=len(PROXY_LIST))
+                         daddy_base_url=stats.get('daddy_base_url'),
+                         session_count=stats.get('session_count', 0),
+                         proxy_count=stats.get('proxy_status', {}).get('total_proxies', 0))
+
+@app.route('/dashboard/data')
+@login_required
+def dashboard_data():
+    """Endpoint JSON per ottenere i dati della dashboard (usato per aggiornamenti AJAX)"""
+    try:
+        stats = get_dashboard_data()
+        return jsonify({
+            'status': 'success',
+            'data': stats,
+            'timestamp': time.time()
+        })
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero dati dashboard: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Errore nel recupero dati: {str(e)}'
+        }), 500
 
 @app.route('/admin')
 @login_required
@@ -5711,6 +6016,7 @@ stats_thread.start()
 
 # Inizializzazione finale
 setup_logging()
+cleanup_and_repair_json_files()  # Ripara file JSON corrotti all'avvio
 setup_all_caches()
 setup_proxies()
 
@@ -6768,6 +7074,41 @@ def debug_sync_paths():
             "message": f"Errore: {str(e)}"
         }), 500
 
+@app.route('/admin/debug/dashboard-cache-status')
+@login_required
+def dashboard_cache_status():
+    """Mostra lo stato della cache della dashboard"""
+    global DASHBOARD_CACHE, DASHBOARD_CACHE_TIMESTAMP
+    
+    try:
+        current_time = time.time()
+        
+        cache_status = {
+            'dashboard_cache': {
+                'has_data': bool(DASHBOARD_CACHE),
+                'timestamp': DASHBOARD_CACHE_TIMESTAMP,
+                'age_seconds': current_time - DASHBOARD_CACHE_TIMESTAMP if DASHBOARD_CACHE_TIMESTAMP > 0 else 0,
+                'ttl_seconds': DASHBOARD_CACHE_TTL,
+                'is_valid': (DASHBOARD_CACHE and 
+                            current_time - DASHBOARD_CACHE_TIMESTAMP < DASHBOARD_CACHE_TTL),
+                'data_keys': list(DASHBOARD_CACHE.keys()) if DASHBOARD_CACHE else []
+            }
+        }
+        
+        return jsonify({
+            "status": "success",
+            "cache_status": cache_status,
+            "current_time": current_time,
+            "worker_id": os.getpid()
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel controllo stato cache dashboard: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore: {str(e)}"
+        }), 500
+
 @app.route('/admin/debug/stats-cache-status')
 @login_required
 def stats_cache_status():
@@ -6806,6 +7147,113 @@ def stats_cache_status():
         
     except Exception as e:
         app.logger.error(f"Errore nel controllo stato cache: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore: {str(e)}"
+        }), 500
+
+@app.route('/admin/debug/force-repair-json', methods=['POST'])
+@login_required
+def force_repair_json():
+    """Forza la riparazione immediata di tutti i file JSON corrotti"""
+    try:
+        # Pulisci anche le cache
+        global AGGREGATED_STATS_CACHE, AGGREGATED_STATS_CACHE_TIMESTAMP
+        global AGGREGATED_CLIENT_STATS_CACHE, AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP
+        
+        AGGREGATED_STATS_CACHE = {}
+        AGGREGATED_STATS_CACHE_TIMESTAMP = 0
+        AGGREGATED_CLIENT_STATS_CACHE = {}
+        AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP = 0
+        
+        # Forza la riparazione di tutti i file
+        cleanup_and_repair_json_files()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Riparazione forzata completata - cache pulita e file JSON riparati",
+            "worker_id": os.getpid(),
+            "timestamp": time.time()
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella riparazione forzata JSON: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore: {str(e)}"
+        }), 500
+
+@app.route('/admin/debug/repair-json-files', methods=['POST'])
+@login_required
+def repair_json_files():
+    """Ripara tutti i file JSON corrotti di sincronizzazione"""
+    try:
+        results = {}
+        
+        # Lista dei file da controllare
+        json_files = [
+            SYSTEM_STATS_FILE,
+            CLIENT_STATS_FILE,
+            SESSION_SYNC_FILE,
+            PROXY_SYNC_FILE
+        ]
+        
+        for file_path in json_files:
+            try:
+                if os.path.exists(file_path):
+                    # Prova a leggere il file
+                    with open(file_path, 'r') as f:
+                        content = f.read().strip()
+                    
+                    if not content:
+                        results[os.path.basename(file_path)] = "File vuoto, riparato"
+                        repair_json_file(file_path)
+                    else:
+                        try:
+                            json.loads(content)
+                            results[os.path.basename(file_path)] = "OK"
+                        except json.JSONDecodeError:
+                            results[os.path.basename(file_path)] = "JSON corrotto, riparato"
+                            repair_json_file(file_path)
+                else:
+                    results[os.path.basename(file_path)] = "File non esistente"
+            except Exception as e:
+                results[os.path.basename(file_path)] = f"Errore: {e}"
+        
+        return jsonify({
+            "status": "success",
+            "message": "Controllo e riparazione file JSON completato",
+            "results": results,
+            "worker_id": os.getpid(),
+            "timestamp": time.time()
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella riparazione file JSON: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore: {str(e)}"
+        }), 500
+
+@app.route('/admin/debug/clear-dashboard-cache', methods=['POST'])
+@login_required
+def clear_dashboard_cache():
+    """Pulisce la cache della dashboard"""
+    global DASHBOARD_CACHE, DASHBOARD_CACHE_TIMESTAMP
+    
+    try:
+        DASHBOARD_CACHE = {}
+        DASHBOARD_CACHE_TIMESTAMP = 0
+        
+        return jsonify({
+            "status": "success",
+            "message": "Cache dashboard pulita",
+            "worker_id": os.getpid(),
+            "timestamp": time.time()
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella pulizia cache dashboard: {e}")
         return jsonify({
             "status": "error",
             "message": f"Errore: {str(e)}"
