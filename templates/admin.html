@@ -368,6 +368,44 @@
                 </div>
             </div>
             
+            <div class="admin-card">
+                <h3><i class="fas fa-sync-alt"></i> Sincronizzazione Config</h3>
+                <p>Gestisci la sincronizzazione della configurazione tra workers</p>
+                <div class="btn-group">
+                    <button class="btn btn-small" onclick="forceSyncConfig()">
+                        <i class="fas fa-sync-alt"></i>
+                        Force Sync
+                    </button>
+                    <a href="/admin/debug/config-status" class="btn btn-small" target="_blank">
+                        <i class="fas fa-chart-line"></i>
+                        Stato Config
+                    </a>
+                    <a href="/admin/debug/force-sync-config" class="btn btn-small" target="_blank">
+                        <i class="fas fa-cog"></i>
+                        Debug Sync
+                    </a>
+                </div>
+            </div>
+            
+            <div class="admin-card">
+                <h3><i class="fas fa-network-wired"></i> Sincronizzazione Proxy</h3>
+                <p>Gestisci la sincronizzazione dei proxy tra workers</p>
+                <div class="btn-group">
+                    <button class="btn btn-small" onclick="forceProxySync()">
+                        <i class="fas fa-sync-alt"></i>
+                        Force Sync
+                    </button>
+                    <a href="/admin/debug/proxy-sync-status" class="btn btn-small" target="_blank">
+                        <i class="fas fa-chart-line"></i>
+                        Stato Proxy
+                    </a>
+                    <a href="/admin/debug/force-proxy-sync" class="btn btn-small" target="_blank">
+                        <i class="fas fa-network-wired"></i>
+                        Debug Sync
+                    </a>
+                </div>
+            </div>
+            
 
             
             <div class="admin-card">
@@ -933,6 +971,75 @@ Proxy DaddyLive:
                 btn.classList.remove('loading');
                 btn.innerHTML = '<i class="fas fa-network-wired"></i> Test IPv6';
                 alert('Errore nel test IPv6: ' + error.message);
+            });
+        }
+
+        // Funzioni per la sincronizzazione
+        function forceSyncConfig() {
+            const btn = event.target;
+            btn.classList.add('loading');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sincronizzando...';
+            
+            fetch('/admin/debug/force-sync-config', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.classList.remove('loading');
+                if(data.status === 'success') {
+                    btn.innerHTML = '<i class="fas fa-check"></i> Sincronizzato!';
+                    setTimeout(() => {
+                        btn.innerHTML = '<i class="fas fa-sync-alt"></i> Force Sync';
+                    }, 2000);
+                    alert('Configurazione sincronizzata: ' + data.message);
+                } else {
+                    btn.innerHTML = '<i class="fas fa-sync-alt"></i> Force Sync';
+                    alert('Errore nella sincronizzazione: ' + data.message);
+                }
+            })
+            .catch(error => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Force Sync';
+                alert('Errore nella sincronizzazione: ' + error.message);
+            });
+        }
+
+        function forceProxySync() {
+            const btn = event.target;
+            btn.classList.add('loading');
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sincronizzando...';
+            
+            fetch('/admin/debug/force-proxy-sync', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                btn.classList.remove('loading');
+                if(data.status === 'success') {
+                    btn.innerHTML = '<i class="fas fa-check"></i> Sincronizzato!';
+                    setTimeout(() => {
+                        btn.innerHTML = '<i class="fas fa-sync-alt"></i> Force Sync';
+                    }, 2000);
+                    alert('Proxy sincronizzati: ' + data.message);
+                } else {
+                    btn.innerHTML = '<i class="fas fa-sync-alt"></i> Force Sync';
+                    alert('Errore nella sincronizzazione: ' + data.message);
+                }
+            })
+            .catch(error => {
+                btn.classList.remove('loading');
+                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Force Sync';
+                alert('Errore nella sincronizzazione: ' + error.message);
             });
         }
     </script>
