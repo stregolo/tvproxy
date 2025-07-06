@@ -765,6 +765,9 @@
                             <button class="sync-btn sync-btn-warning" onclick="forceAllSync()">
                                 <i class="fas fa-bolt"></i> Forza Sync
                             </button>
+                            <button class="sync-btn sync-btn-info" onclick="checkSyncPaths()">
+                                <i class="fas fa-folder"></i> Percorsi
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -1192,6 +1195,37 @@
             .catch(error => {
                 btn.innerHTML = originalText;
                 btn.disabled = false;
+                showToast('❌ Errore di connessione: ' + error.message);
+            });
+        }
+
+        function checkSyncPaths() {
+            fetch('/admin/debug/sync-paths')
+            .then(response => response.json())
+            .then(result => {
+                if (result.status === 'success') {
+                    const paths = result.paths_info;
+                    let message = '📁 Percorsi sincronizzazione:\n';
+                    message += `Directory corrente: ${paths.current_working_directory}\n`;
+                    message += `/tmp esiste: ${paths.tmp_exists}\n`;
+                    message += `/tmp scrivibile: ${paths.tmp_writable}\n\n`;
+                    
+                    message += '📄 File di sincronizzazione:\n';
+                    Object.entries(paths.sync_files).forEach(([name, path]) => {
+                        const perms = paths.file_permissions[name];
+                        if (perms) {
+                            const status = perms.writable ? '✅' : '❌';
+                            message += `${status} ${name}: ${path}\n`;
+                        }
+                    });
+                    
+                    // Mostra in una finestra modale o alert
+                    alert(message);
+                } else {
+                    showToast('❌ Errore nel controllo percorsi: ' + result.message);
+                }
+            })
+            .catch(error => {
                 showToast('❌ Errore di connessione: ' + error.message);
             });
         }
