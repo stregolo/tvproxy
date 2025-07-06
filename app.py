@@ -2893,6 +2893,15 @@ def debug_config_status():
                             'source': 'environment'
                         }
     
+        # Contenuto del file globale se esiste
+        global_config_content = None
+        if os.path.exists(config_manager.global_config_file):
+            try:
+                with open(config_manager.global_config_file, 'r') as f:
+                    global_config_content = json.load(f)
+            except Exception as e:
+                global_config_content = {"error": f"Errore lettura: {str(e)}"}
+    
     return jsonify({
         'config_status': config_status,
         'current_config_keys': list(current_config.keys()),
@@ -2905,7 +2914,8 @@ def debug_config_status():
         },
         'saved_values': saved_values,
         'environment_overrides': env_overrides,
-        'default_config': default_config
+        'default_config': default_config,
+        'global_config_content': global_config_content
     })
 
 @app.route('/admin/debug/test-import', methods=['POST'])
