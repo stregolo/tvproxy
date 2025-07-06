@@ -145,6 +145,16 @@
             box-shadow: 0 10px 20px rgba(72, 187, 120, 0.3);
         }
 
+        .btn-info {
+            background: linear-gradient(135deg, #4299e1, #3182ce);
+            color: white;
+        }
+
+        .btn-info:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(66, 153, 225, 0.3);
+        }
+
         .clients-table {
             background: rgba(255, 255, 255, 0.95);
             backdrop-filter: blur(20px);
@@ -542,6 +552,9 @@
             <button class="btn btn-primary" onclick="showM3UStats()">
                 <i class="fas fa-play"></i> Statistiche M3U
             </button>
+            <button class="btn btn-info" onclick="testSync()">
+                <i class="fas fa-bug"></i> Test Sync
+            </button>
             <a href="/admin/clients/export" class="btn btn-success">
                 <i class="fas fa-download"></i> Esporta CSV
             </a>
@@ -621,6 +634,14 @@
 
         socket.on('stats_update', function(data) {
             lastUpdateTime = Date.now();
+            console.log('📡 Dati WebSocket ricevuti:', {
+                active_clients: data.active_clients,
+                active_sessions: data.active_sessions,
+                total_requests: data.total_requests,
+                m3u_clients: data.m3u_clients,
+                m3u_requests: data.m3u_requests,
+                sync_info: data.sync_info
+            });
             updateStats(data);
         });
 
@@ -637,6 +658,17 @@
         }
 
         function updateStats(data) {
+            // Debug: log dei dati ricevuti
+            console.log('📊 Dati statistiche ricevuti:', {
+                active_clients: data.active_clients,
+                active_sessions: data.active_sessions,
+                total_requests: data.total_requests,
+                m3u_clients: data.m3u_clients,
+                m3u_requests: data.m3u_requests,
+                avg_connection_time: data.avg_connection_time,
+                sync_info: data.sync_info
+            });
+            
             document.getElementById('totalClients').textContent = data.active_clients || 0;
             document.getElementById('activeSessions').textContent = data.active_sessions || 0;
             document.getElementById('totalRequests').textContent = data.total_requests || 0;
@@ -660,18 +692,42 @@
                     console.log(`🔄 ${syncInfo.message}`);
                     // Mostra alert di sincronizzazione
                     document.getElementById('syncAlert').style.display = 'block';
+                    // Aggiorna il testo dell'alert con informazioni dettagliate
+                    const alertElement = document.getElementById('syncAlert');
+                    alertElement.innerHTML = `
+                        <i class="fas fa-sync-alt"></i> 
+                        <div>
+                            <strong>Sincronizzazione Statistiche Client</strong><br>
+                            ${syncInfo.message}<br>
+                            <small>Worker ID: ${syncInfo.global_worker_id || 'N/A'} | Timestamp: ${new Date(syncInfo.global_timestamp * 1000).toLocaleTimeString()}</small>
+                        </div>
+                    `;
                 } else {
                     console.log(`ℹ️ ${syncInfo.message}`);
                     // Nascondi alert di sincronizzazione
                     document.getElementById('syncAlert').style.display = 'none';
                 }
+            } else {
+                console.log('⚠️ Nessuna informazione di sincronizzazione disponibile');
+                document.getElementById('syncAlert').style.display = 'none';
             }
         }
 
         function refreshData() {
+            console.log('🔄 Aggiornamento dati client...');
             fetch('/admin/clients/stats')
                 .then(response => response.json())
                 .then(data => {
+                    console.log('📊 Dati HTTP ricevuti:', {
+                        active_clients: data.active_clients,
+                        active_sessions: data.active_sessions,
+                        total_requests: data.total_requests,
+                        m3u_clients: data.m3u_clients,
+                        m3u_requests: data.m3u_requests,
+                        sync_info: data.sync_info,
+                        clients_count: data.clients ? data.clients.length : 0
+                    });
+                    
                     updateClientsTable(data);
                     updateStats(data);
                     
@@ -826,6 +882,32 @@
                     showToast('Errore nella pulizia delle statistiche');
                 });
             }
+        }
+
+        function testSync() {
+            console.log('🧪 Test sincronizzazione...');
+            
+            // Test endpoint HTTP
+            fetch('/admin/clients/stats')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('✅ Test HTTP:', data);
+                    alert(`Test HTTP completato!\n\nStatistiche:\n- Client: ${data.active_clients}\n- Sessioni: ${data.active_sessions}\n- Richieste: ${data.total_requests}\n\nSincronizzazione: ${data.sync_info ? data.sync_info.message : 'N/A'}`);
+                })
+                .catch(error => {
+                    console.error('❌ Test HTTP fallito:', error);
+                    alert('Test HTTP fallito: ' + error.message);
+                });
+            
+            // Test endpoint debug
+            fetch('/admin/debug/client-stats-status')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('✅ Test Debug:', data);
+                })
+                .catch(error => {
+                    console.error('❌ Test Debug fallito:', error);
+                });
         }
 
         function showToast(message) {
