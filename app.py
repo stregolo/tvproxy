@@ -350,10 +350,10 @@ class VavooResolver:
             if isinstance(result, list) and result and result[0].get("url"):
                 resolved_url = result[0]["url"]
                 channel_name = result[0].get("name", "Unknown")
-                app.logger.info(f"✅ Vavoo risolto: {channel_name} -> {resolved_url}")
+                app.logger.info(f"[OK] Vavoo risolto: {channel_name} -> {resolved_url}")
                 return resolved_url
             elif isinstance(result, dict) and result.get("url"):
-                app.logger.info(f"✅ Vavoo risolto: {result['url']}")
+                app.logger.info(f"[OK] Vavoo risolto: {result['url']}")
                 return result["url"]
             else:
                 app.logger.warning("Nessun link valido trovato nella risposta Vavoo")
@@ -1351,7 +1351,14 @@ def broadcast_stats():
         try:
             stats = get_system_stats()
             stats['daddy_base_url'] = get_daddylive_base_url()
-            stats['session_count'] = get_total_sessions_count()
+            try:
+                stats['session_count'] = get_total_sessions_count()
+            except NameError:
+                # La funzione non è ancora definita, usa un valore di fallback
+                stats['session_count'] = len(SESSION_POOL) if 'SESSION_POOL' in globals() else 0
+            except Exception as e:
+                app.logger.warning(f"Errore nel calcolo session count: {e}")
+                stats['session_count'] = 0
             stats['proxy_count'] = len(PROXY_LIST)
             
             # Aggiungi statistiche proxy
@@ -1602,15 +1609,29 @@ def setup_logging():
     file_handler = RotatingFileHandler(
         'logs/proxy.log', 
         maxBytes=10*1024*1024,  # 10MB
-        backupCount=5
+        backupCount=5,
+        encoding='utf-8'  # Forza encoding UTF-8 per evitare problemi su Windows
     )
     file_handler.setFormatter(formatter)
     file_handler.setLevel(logging.INFO)
     
-    # Handler per console
+    # Handler per console con gestione encoding su Windows
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     console_handler.setLevel(logging.INFO)
+    
+    # Su Windows, gestisci l'encoding della console
+    if os.name == 'nt':  # Windows
+        try:
+            # Prova a impostare l'encoding UTF-8 per la console
+            import sys
+            # Usa getattr per evitare errori di linting
+            if hasattr(sys.stdout, 'reconfigure'):
+                getattr(sys.stdout, 'reconfigure')(encoding='utf-8')
+            if hasattr(sys.stderr, 'reconfigure'):
+                getattr(sys.stderr, 'reconfigure')(encoding='utf-8')
+        except:
+            pass
     
     # Configura il logger principale
     app.logger.addHandler(file_handler)
@@ -2820,7 +2841,7 @@ def setup_proxies():
     DADDY_PROXY_LIST = daddy_proxies_found
 
     if PROXY_LIST:
-        app.logger.info(f"✅ Totale di {len(PROXY_LIST)} proxy normali configurati:")
+        app.logger.info(f"[OK] Totale di {len(PROXY_LIST)} proxy normali configurati:")
         app.logger.info(f"  - IPv4: {ipv4_count}")
         app.logger.info(f"  - IPv6: {ipv6_count}")
         app.logger.info(f"  - Hostname: {hostname_count}")
@@ -3091,7 +3112,7 @@ def resolve_m3u8_link(url, headers=None):
             try:
                 resolved_vavoo = vavoo_resolver.resolve_vavoo_link(clean_url, verbose=True)
                 if resolved_vavoo:
-                    app.logger.info(f"✅ Vavoo risolto con successo: {resolved_vavoo}")
+                    app.logger.info(f"[OK] Vavoo risolto con successo: {resolved_vavoo}")
                     return {
                         "resolved_url": resolved_vavoo,
                         "headers": final_headers
@@ -4349,7 +4370,7 @@ def test_config():
                 proxies = {proto.lower(): proxy}
                 response = requests.get(url, headers=headers, proxies=proxies, timeout=10, verify=VERIFY_SSL)
                 if response.status_code == 200:
-                    return f"✅ {url} {proto} {proxy}: OK"
+                    return f"[OK] {url} {proto} {proxy}: OK"
                 else:
                     return f"❌ {url} {proto} {proxy}: Status {response.status_code}"
             except Exception as e:
@@ -4410,7 +4431,7 @@ def test_config():
             ]
             proc = subprocess.run(cmd, capture_output=True, text=True)
             if proc.returncode == 0:
-                results.append(f"✅ DaddyLive CURL: OK")
+                results.append(f"[OK] DaddyLive CURL: OK")
             else:
                 results.append(f"❌ DaddyLive CURL: Errore (code {proc.returncode}): {proc.stderr.strip() or proc.stdout.strip()}")
         except Exception as e:
@@ -4427,7 +4448,7 @@ def test_config():
             ]
             proc2 = subprocess.run(cmd2, capture_output=True, text=True)
             if proc2.returncode == 0:
-                results.append(f"✅ Vavoo CURL: OK")
+                results.append(f"[OK] Vavoo CURL: OK")
             else:
                 results.append(f"❌ Vavoo CURL: Errore (code {proc2.returncode}): {proc2.stderr.strip() or proc2.stdout.strip()}")
         except Exception as e:
@@ -5396,7 +5417,7 @@ def proxy_vavoo():
         resolved = vavoo_resolver.resolve_vavoo_link(url, verbose=True)
         
         if resolved:
-            app.logger.info(f"✅ Vavoo risolto: {resolved}")
+            app.logger.info(f"[OK] Vavoo risolto: {resolved}")
             return jsonify({
                 "status": "success",
                 "original_url": url,
@@ -5882,7 +5903,7 @@ config_manager.apply_config_to_app(saved_config)
 # Log dello stato della configurazione
 config_status = config_manager.get_config_status()
 app.logger.info("="*50)
-app.logger.info("🔧 STATO CONFIGURAZIONE")
+app.logger.info("[TOOLS] STATO CONFIGURAZIONE")
 app.logger.info("="*50)
 
 # Determina il tipo di ambiente
@@ -5904,21 +5925,21 @@ app.logger.info(f"File scrivibile: {'Sì' if config_status['file_writable'] else
 app.logger.info(f"Fonte config: {config_status['current_config_source']}")
 
 if config_status['is_huggingface']:
-    app.logger.info("⚠️  AMBIENTE HUGGINGFACE: Configurazione salvata in memoria")
-    app.logger.info("🔄 Sincronizzazione globale tra workers attiva")
-    app.logger.info("💡 Per configurazione permanente, usa i Secrets di HuggingFace")
+    app.logger.info("[WARN] AMBIENTE HUGGINGFACE: Configurazione salvata in memoria")
+    app.logger.info("[SYNC] Sincronizzazione globale tra workers attiva")
+    app.logger.info("[TIP] Per configurazione permanente, usa i Secrets di HuggingFace")
 elif config_status['is_docker']:
-    app.logger.info("🐳 AMBIENTE DOCKER: Sincronizzazione globale tra workers attiva")
-    app.logger.info("📁 Configurazione salvata in memoria e file globale")
+    app.logger.info("[DOCKER] AMBIENTE DOCKER: Sincronizzazione globale tra workers attiva")
+    app.logger.info("[FILE] Configurazione salvata in memoria e file globale")
 elif config_status['is_cloud']:
-    app.logger.info("☁️  AMBIENTE CLOUD: Sincronizzazione globale tra workers attiva")
-    app.logger.info("📁 Configurazione salvata in memoria e file globale")
-    app.logger.info("💡 Per configurazione permanente, usa le variabili d'ambiente del cloud")
+    app.logger.info("[CLOUD] AMBIENTE CLOUD: Sincronizzazione globale tra workers attiva")
+    app.logger.info("[FILE] Configurazione salvata in memoria e file globale")
+    app.logger.info("[TIP] Per configurazione permanente, usa le variabili d'ambiente del cloud")
 elif config_status['use_global_sync']:
-    app.logger.info("🔄 AMBIENTE GUNICORN: Sincronizzazione globale tra workers attiva")
-    app.logger.info("📁 Configurazione salvata in memoria e file globale")
+    app.logger.info("[SYNC] AMBIENTE GUNICORN: Sincronizzazione globale tra workers attiva")
+    app.logger.info("[FILE] Configurazione salvata in memoria e file globale")
 else:
-    app.logger.info("✅ Configurazione salvata su file (ambiente standard)")
+    app.logger.info("[OK] Configurazione salvata su file (ambiente standard)")
 
 app.logger.info("="*50)
 
@@ -7772,7 +7793,7 @@ if __name__ == '__main__':
     
     # Log di avvio
     app.logger.info("="*50)
-    app.logger.info("🚀 PROXY SERVER AVVIATO CON WEBSOCKET")
+    app.logger.info("[ROCKET] PROXY SERVER AVVIATO CON WEBSOCKET")
     app.logger.info("="*50)
     app.logger.info(f"Porta: {port}")
     app.logger.info(f"WebSocket abilitato per aggiornamenti real-time")
@@ -7785,18 +7806,18 @@ if __name__ == '__main__':
     
     if proxy_config:
         proxy_count = len([p.strip() for p in proxy_config.split(',') if p.strip()])
-        app.logger.info(f"✅ Proxy configurati: {proxy_count} normali")
+        app.logger.info(f"[OK] Proxy configurati: {proxy_count} normali")
     else:
-        app.logger.info("ℹ️  Nessun proxy normale configurato - connessioni dirette")
+        app.logger.info("[INFO] Nessun proxy normale configurato - connessioni dirette")
     
     if daddy_proxy_config:
         daddy_proxy_count = len([p.strip() for p in daddy_proxy_config.split(',') if p.strip()])
-        app.logger.info(f"⭐ Proxy DaddyLive configurati: {daddy_proxy_count}")
+        app.logger.info(f"[STAR] Proxy DaddyLive configurati: {daddy_proxy_count}")
     else:
-        app.logger.info("ℹ️  Nessun proxy DaddyLive configurato")
+        app.logger.info("[INFO] Nessun proxy DaddyLive configurato")
     
-    app.logger.info("📖 Formati supportati: /admin/proxy/formats")
-    app.logger.info("🔧 Debug proxy: /admin/debug/proxies")
+    app.logger.info("[BOOK] Formati supportati: /admin/proxy/formats")
+    app.logger.info("[TOOLS] Debug proxy: /admin/debug/proxies")
     app.logger.info("="*50)
     
     # Usa socketio.run invece di app.run
