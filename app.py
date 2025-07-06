@@ -3654,12 +3654,46 @@ def get_dashboard_data():
         return DASHBOARD_CACHE
     
     try:
-        # Ottieni statistiche di sistema aggregate
-        system_stats = get_system_stats()
+        # Verifica che le variabili globali siano inizializzate
+        if 'config_manager' not in globals():
+            app.logger.error("Config manager non inizializzato")
+            raise Exception("Config manager non disponibile")
         
-        # Ottieni statistiche client aggregate
-        client_stats = merge_client_stats_from_all_workers()
-        if not client_stats:
+        # Ottieni statistiche di sistema aggregate con gestione errori
+        try:
+            system_stats = get_system_stats()
+        except Exception as e:
+            app.logger.warning(f"Errore nel recupero statistiche sistema: {e}")
+            system_stats = {
+                'ram_usage': 0,
+                'ram_used_gb': 0,
+                'ram_total_gb': 0,
+                'network_sent': 0,
+                'network_recv': 0,
+                'prebuffer_streams': 0,
+                'prebuffer_segments': 0,
+                'prebuffer_size_mb': 0,
+                'prebuffer_threads': 0,
+                'cache_size': '0 items',
+                'uptime': '0h',
+                'requests_per_min': 0
+            }
+        
+        # Ottieni statistiche client aggregate con gestione errori
+        try:
+            client_stats = merge_client_stats_from_all_workers()
+            if not client_stats:
+                client_stats = {
+                    'total_clients': 0,
+                    'total_sessions': 0,
+                    'active_clients': 0,
+                    'active_sessions': 0,
+                    'total_requests': 0,
+                    'm3u_clients': 0,
+                    'm3u_requests': 0
+                }
+        except Exception as e:
+            app.logger.warning(f"Errore nel recupero statistiche client: {e}")
             client_stats = {
                 'total_clients': 0,
                 'total_sessions': 0,
@@ -3670,35 +3704,70 @@ def get_dashboard_data():
                 'm3u_requests': 0
             }
         
-        # Calcola statistiche proxy
-        available_proxies = get_available_proxies()
-        available_daddy_proxies = get_available_daddy_proxies()
+        # Calcola statistiche proxy con gestione errori
+        try:
+            available_proxies = get_available_proxies()
+            available_daddy_proxies = get_available_daddy_proxies()
+            
+            # Calcola statistiche IP
+            ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+            for proxy in PROXY_LIST:
+                try:
+                    ip_version = get_proxy_ip_version(proxy)
+                    if ip_version in ip_stats:
+                        ip_stats[ip_version] += 1
+                except:
+                    pass
+            
+            available_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+            for proxy in available_proxies:
+                try:
+                    ip_version = get_proxy_ip_version(proxy)
+                    if ip_version in available_ip_stats:
+                        available_ip_stats[ip_version] += 1
+                except:
+                    pass
+            
+            # Calcola statistiche proxy DaddyLive
+            daddy_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+            for proxy in DADDY_PROXY_LIST:
+                try:
+                    ip_version = get_proxy_ip_version(proxy)
+                    if ip_version in daddy_ip_stats:
+                        daddy_ip_stats[ip_version] += 1
+                except:
+                    pass
+            
+            available_daddy_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+            for proxy in available_daddy_proxies:
+                try:
+                    ip_version = get_proxy_ip_version(proxy)
+                    if ip_version in available_daddy_ip_stats:
+                        available_daddy_ip_stats[ip_version] += 1
+                except:
+                    pass
+        except Exception as e:
+            app.logger.warning(f"Errore nel calcolo statistiche proxy: {e}")
+            available_proxies = []
+            available_daddy_proxies = []
+            ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+            available_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+            daddy_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
+            available_daddy_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
         
-        # Calcola statistiche IP
-        ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
-        for proxy in PROXY_LIST:
-            ip_version = get_proxy_ip_version(proxy)
-            if ip_version in ip_stats:
-                ip_stats[ip_version] += 1
+        # Ottieni URL DaddyLive con gestione errori
+        try:
+            daddy_base_url = get_daddylive_base_url()
+        except Exception as e:
+            app.logger.warning(f"Errore nel recupero URL DaddyLive: {e}")
+            daddy_base_url = None
         
-        available_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
-        for proxy in available_proxies:
-            ip_version = get_proxy_ip_version(proxy)
-            if ip_version in available_ip_stats:
-                available_ip_stats[ip_version] += 1
-        
-        # Calcola statistiche proxy DaddyLive
-        daddy_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
-        for proxy in DADDY_PROXY_LIST:
-            ip_version = get_proxy_ip_version(proxy)
-            if ip_version in daddy_ip_stats:
-                daddy_ip_stats[ip_version] += 1
-        
-        available_daddy_ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
-        for proxy in available_daddy_proxies:
-            ip_version = get_proxy_ip_version(proxy)
-            if ip_version in available_daddy_ip_stats:
-                available_daddy_ip_stats[ip_version] += 1
+        # Ottieni conteggio sessioni con gestione errori
+        try:
+            session_count = get_total_sessions_count()
+        except Exception as e:
+            app.logger.warning(f"Errore nel recupero conteggio sessioni: {e}")
+            session_count = 0
         
         # Prepara i dati della dashboard
         dashboard_data = {
@@ -3728,11 +3797,11 @@ def get_dashboard_data():
             # Statistiche proxy
             'proxy_status': {
                 'available_proxies': len(available_proxies),
-                'blacklisted_proxies': len(PROXY_BLACKLIST),
-                'total_proxies': len(PROXY_LIST),
+                'blacklisted_proxies': len(PROXY_BLACKLIST) if 'PROXY_BLACKLIST' in globals() else 0,
+                'total_proxies': len(PROXY_LIST) if 'PROXY_LIST' in globals() else 0,
                 'available_daddy_proxies': len(available_daddy_proxies),
-                'blacklisted_daddy_proxies': len(DADDY_PROXY_BLACKLIST),
-                'total_daddy_proxies': len(DADDY_PROXY_LIST),
+                'blacklisted_daddy_proxies': len(DADDY_PROXY_BLACKLIST) if 'DADDY_PROXY_BLACKLIST' in globals() else 0,
+                'total_daddy_proxies': len(DADDY_PROXY_LIST) if 'DADDY_PROXY_LIST' in globals() else 0,
                 'ip_statistics': {
                     'total': ip_stats,
                     'available': available_ip_stats
@@ -3745,15 +3814,15 @@ def get_dashboard_data():
             
             # Informazioni di sincronizzazione
             'sync_info': {
-                'enabled': config_manager._use_global_sync,
+                'enabled': getattr(config_manager, '_use_global_sync', False),
                 'worker_id': os.getpid(),
                 'cache_age': current_time - DASHBOARD_CACHE_TIMESTAMP if DASHBOARD_CACHE_TIMESTAMP > 0 else 0
             },
             
             # Timestamp
             'timestamp': current_time,
-            'daddy_base_url': get_daddylive_base_url(),
-            'session_count': get_total_sessions_count()
+            'daddy_base_url': daddy_base_url,
+            'session_count': session_count
         }
         
         # Aggiorna la cache
@@ -3764,7 +3833,8 @@ def get_dashboard_data():
         return dashboard_data
         
     except Exception as e:
-        app.logger.error(f"Errore nel calcolo dati dashboard: {e}")
+        app.logger.error(f"Errore critico nel calcolo dati dashboard: {e}")
+        app.logger.error(f"Traceback: {traceback.format_exc()}")
         # In caso di errore, restituisci dati di fallback
         return {
             'ram_usage': 0,
@@ -3817,22 +3887,79 @@ def dashboard():
     except Exception as e:
         app.logger.warning(f"Errore nel tracking richiesta dashboard: {e}")
     
-    # Usa la funzione dedicata per ottenere dati stabili
-    stats = get_dashboard_data()
+    try:
+        # Usa la funzione dedicata per ottenere dati stabili
+        stats = get_dashboard_data()
+        
+        # Aggiungi informazioni pre-buffer alle statistiche
+        stats['prebuffer_info'] = {
+            'active_streams': stats.get('prebuffer_streams', 0),
+            'buffered_segments': stats.get('prebuffer_segments', 0),
+            'buffer_size_mb': stats.get('prebuffer_size_mb', 0),
+            'active_threads': stats.get('prebuffer_threads', 0)
+        }
+        
+        return render_template('dashboard.html', 
+                             stats=stats, 
+                             daddy_base_url=stats.get('daddy_base_url'),
+                             session_count=stats.get('session_count', 0),
+                             proxy_count=stats.get('proxy_status', {}).get('total_proxies', 0))
     
-    # Aggiungi informazioni pre-buffer alle statistiche
-    stats['prebuffer_info'] = {
-        'active_streams': stats.get('prebuffer_streams', 0),
-        'buffered_segments': stats.get('prebuffer_segments', 0),
-        'buffer_size_mb': stats.get('prebuffer_size_mb', 0),
-        'active_threads': stats.get('prebuffer_threads', 0)
-    }
-    
-    return render_template('dashboard.html', 
-                         stats=stats, 
-                         daddy_base_url=stats.get('daddy_base_url'),
-                         session_count=stats.get('session_count', 0),
-                         proxy_count=stats.get('proxy_status', {}).get('total_proxies', 0))
+    except Exception as e:
+        app.logger.error(f"Errore critico nella dashboard: {e}")
+        app.logger.error(f"Traceback: {traceback.format_exc()}")
+        
+        # Fallback con dati minimi
+        fallback_stats = {
+            'ram_usage': 0,
+            'ram_used_gb': 0,
+            'ram_total_gb': 0,
+            'network_sent': 0,
+            'network_recv': 0,
+            'prebuffer_streams': 0,
+            'prebuffer_segments': 0,
+            'prebuffer_size_mb': 0,
+            'prebuffer_threads': 0,
+            'cache_size': '0 items',
+            'uptime': '0h',
+            'requests_per_min': 0,
+            'total_clients': 0,
+            'total_sessions': 0,
+            'active_clients': 0,
+            'active_sessions': 0,
+            'total_requests': 0,
+            'm3u_clients': 0,
+            'm3u_requests': 0,
+            'proxy_status': {
+                'available_proxies': 0,
+                'blacklisted_proxies': 0,
+                'total_proxies': 0,
+                'available_daddy_proxies': 0,
+                'blacklisted_daddy_proxies': 0,
+                'total_daddy_proxies': 0,
+                'ip_statistics': {'total': {'IPv4': 0, 'IPv6': 0, 'hostname': 0}, 'available': {'IPv4': 0, 'IPv6': 0, 'hostname': 0}},
+                'daddy_ip_statistics': {'total': {'IPv4': 0, 'IPv6': 0, 'hostname': 0}, 'available': {'IPv4': 0, 'IPv6': 0, 'hostname': 0}}
+            },
+            'sync_info': {
+                'enabled': False,
+                'worker_id': os.getpid()
+            },
+            'timestamp': time.time(),
+            'daddy_base_url': None,
+            'session_count': 0,
+            'prebuffer_info': {
+                'active_streams': 0,
+                'buffered_segments': 0,
+                'buffer_size_mb': 0,
+                'active_threads': 0
+            }
+        }
+        
+        return render_template('dashboard.html', 
+                             stats=fallback_stats, 
+                             daddy_base_url=None,
+                             session_count=0,
+                             proxy_count=0)
 
 @app.route('/dashboard/data')
 @login_required
@@ -7072,6 +7199,38 @@ def debug_sync_paths():
         return jsonify({
             "status": "error",
             "message": f"Errore: {str(e)}"
+        }), 500
+
+@app.route('/admin/debug/test-dashboard-data')
+@login_required
+def test_dashboard_data():
+    """Test della funzione get_dashboard_data() per debugging"""
+    try:
+        # Test della funzione
+        start_time = time.time()
+        data = get_dashboard_data()
+        end_time = time.time()
+        
+        return jsonify({
+            "status": "success",
+            "execution_time": round(end_time - start_time, 3),
+            "data_keys": list(data.keys()) if data else [],
+            "data_sample": {
+                'ram_usage': data.get('ram_usage', 'N/A'),
+                'total_clients': data.get('total_clients', 'N/A'),
+                'proxy_count': data.get('proxy_status', {}).get('total_proxies', 'N/A'),
+                'sync_enabled': data.get('sync_info', {}).get('enabled', 'N/A')
+            },
+            "worker_id": os.getpid(),
+            "timestamp": time.time()
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel test dashboard data: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore: {str(e)}",
+            "traceback": traceback.format_exc()
         }), 500
 
 @app.route('/admin/debug/dashboard-cache-status')
