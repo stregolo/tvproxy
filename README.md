@@ -215,28 +215,37 @@ http://<server-ip>:7860/proxy/vavoo?url=https://vavoo.to/vavoo-iptv/play/2775802
 
 ## 🔁 Configurazione Proxy (Opzionale)
 
-Se hai bisogno di escludere alcuni domini dall'utilizzo del proxy (ad esempio, per accessi diretti a servizi come `vavoo.to`), puoi usare la variabile `NO_PROXY_DOMAINS`.
+### 📋 Tipi di Proxy
 
 | Variabile          | Descrizione                                                  | Esempio                                   |
 |--------------------|--------------------------------------------------------------|-------------------------------------------|
-| `PROXY`            | Proxy generali, separati da virgola                         | `socks5://user:pass@host:port,...`        |
-| `DADDY_PROXY`      | Proxy specifici per DaddyLive, separati da virgola          | `socks5://user:pass@host:port,...`        |
+| `PROXY`            | **Proxy generali** - Usato per TUTTI i servizi (Vavoo, IPTV, ecc.) | `socks5://user:pass@host:port,...`        |
+| `DADDY_PROXY`      | **Proxy specifici** - Usato SOLO per DaddyLive              | `socks5://user:pass@host:port,...`        |
 | `NO_PROXY_DOMAINS` | Domini da escludere dal proxy, separati da virgola           | `github.com,vavoo.to`                     |
 
-**Esempio `.env**:**
+### 🎯 Come Funziona
+
+- **`PROXY`**: Proxy universale per tutti i servizi (Vavoo, IPTV, download, ecc.)
+- **`DADDY_PROXY`**: Proxy dedicato solo per i domini DaddyLive
+- **Priorità**: Se entrambi sono configurati, DaddyLive userà `DADDY_PROXY`, tutto il resto userà `PROXY`
+
+### 📝 Esempio `.env`
 
 ```dotenv
-# Proxy generali
+# Proxy generali per tutti i servizi
 PROXY=socks5://user:pass@host1:1080,http://user:pass@host2:8080
 
-# Proxy specifici per DaddyLive
+# Proxy specifici solo per DaddyLive
 DADDY_PROXY=socks5://user:pass@daddy-proxy.com:1080
 
 # Domini esclusi dal proxy
 NO_PROXY_DOMAINS=github.com,vavoo.to
 ```
 
-In questo modo, le richieste verso `github.com` e `vavoo.to` non passeranno attraverso il proxy configurato, ma verranno eseguite direttamente.
+**Risultato:**
+- ✅ **DaddyLive** → usa `DADDY_PROXY`
+- ✅ **Vavoo, IPTV, altri** → usano `PROXY`
+- ✅ **github.com, vavoo.to** → connessione diretta (no proxy)
 
 ---
 
