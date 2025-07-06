@@ -1837,22 +1837,22 @@ def setup_proxies():
     DADDY_PROXY_LIST = daddy_proxies_found
 
     if PROXY_LIST:
-        app.logger.info(f"Totale di {len(PROXY_LIST)} proxy normali configurati:")
+        app.logger.info(f"✅ Totale di {len(PROXY_LIST)} proxy normali configurati:")
         app.logger.info(f"  - IPv4: {ipv4_count}")
         app.logger.info(f"  - IPv6: {ipv6_count}")
         app.logger.info(f"  - Hostname: {hostname_count}")
         app.logger.info("Verranno usati a rotazione per ogni richiesta.")
     else:
-        app.logger.info("Nessun proxy normale (SOCKS5, HTTP, HTTPS) configurato.")
+        app.logger.info("ℹ️  Nessun proxy normale configurato - connessioni dirette")
     
     if DADDY_PROXY_LIST:
-        app.logger.info(f"Totale di {len(DADDY_PROXY_LIST)} proxy DaddyLive configurati:")
+        app.logger.info(f"⭐ Totale di {len(DADDY_PROXY_LIST)} proxy DaddyLive configurati:")
         app.logger.info(f"  - IPv4: {daddy_ipv4_count}")
         app.logger.info(f"  - IPv6: {daddy_ipv6_count}")
         app.logger.info(f"  - Hostname: {daddy_hostname_count}")
         app.logger.info("Verranno usati solo per richieste DaddyLive.")
     else:
-        app.logger.info("Nessun proxy DaddyLive configurato.")
+        app.logger.info("ℹ️  Nessun proxy DaddyLive configurato")
 
 
 
@@ -4460,12 +4460,20 @@ def get_proxy_for_url(url, original_url=None):
     
     if not available_proxies:
         if is_daddylive_request:
-            app.logger.warning("Nessun proxy DaddyLive disponibile, uso proxy normali")
+            # Distingui tra "nessun proxy DaddyLive configurato" e "tutti in blacklist"
+            if len(DADDY_PROXY_LIST) == 0:
+                app.logger.info("Nessun proxy DaddyLive configurato, uso proxy normali")
+            else:
+                app.logger.warning(f"Nessun proxy DaddyLive disponibile - {len(DADDY_PROXY_LIST)} configurati, {len(DADDY_PROXY_BLACKLIST)} in blacklist")
             available_proxies = get_available_proxies()
             proxy_type = "normale (fallback)"
         
         if not available_proxies:
-            app.logger.warning("Nessun proxy disponibile (tutti in blacklist)")
+            # Distingui tra "nessun proxy configurato" e "tutti in blacklist"
+            if len(PROXY_LIST) == 0:
+                app.logger.info("Nessun proxy configurato - connessioni dirette")
+            else:
+                app.logger.warning(f"Nessun proxy disponibile - {len(PROXY_LIST)} configurati, {len(PROXY_BLACKLIST)} in blacklist")
             return None
     
     try:
@@ -5167,12 +5175,19 @@ if __name__ == '__main__':
     
     # Informazioni sulla configurazione proxy
     proxy_env = os.environ.get('PROXY')
+    daddy_proxy_env = os.environ.get('DADDY_PROXY')
     
     if proxy_env:
-        app.logger.info("✅ Configurazione proxy unificata rilevata (PROXY)")
-        app.logger.info(f"   Proxy configurati: {len(proxy_env.split(','))}")
+        proxy_count = len([p.strip() for p in proxy_env.split(',') if p.strip()])
+        app.logger.info(f"✅ Proxy configurati: {proxy_count} normali")
     else:
-        app.logger.info("ℹ️  Nessun proxy configurato - connessioni dirette")
+        app.logger.info("ℹ️  Nessun proxy normale configurato - connessioni dirette")
+    
+    if daddy_proxy_env:
+        daddy_proxy_count = len([p.strip() for p in daddy_proxy_env.split(',') if p.strip()])
+        app.logger.info(f"⭐ Proxy DaddyLive configurati: {daddy_proxy_count}")
+    else:
+        app.logger.info("ℹ️  Nessun proxy DaddyLive configurato")
     
     app.logger.info("📖 Formati supportati: /admin/proxy/formats")
     app.logger.info("🔧 Debug proxy: /admin/debug/proxies")
