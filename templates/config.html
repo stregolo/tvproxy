@@ -630,7 +630,7 @@
             <div class="alert alert-info" id="huggingfaceAlert" style="display: none;">
                 <i class="fas fa-cloud"></i> <strong>Ambiente HuggingFace Rilevato</strong><br>
                 La configurazione viene salvata in memoria e sincronizzata automaticamente tra tutti i workers.<br>
-                Per una configurazione permanente, usa le variabili d'ambiente nei Secrets di HuggingFace.<br>
+                Per una configurazione permanente, usa solo ADMIN_PASSWORD e SECRET_KEY nei Secrets di HuggingFace.<br>
                 <i class="fas fa-sync-alt"></i> <strong>Sincronizzazione globale attiva</strong> - Tutti i workers condividono la stessa configurazione.
             </div>
             
@@ -644,7 +644,7 @@
                 <i class="fas fa-cloud"></i> <strong>Ambiente Cloud (Render/Railway/Heroku) Rilevato</strong><br>
                 La configurazione viene sincronizzata automaticamente tra tutti i workers tramite file globale.<br>
                 <i class="fas fa-sync-alt"></i> <strong>Sincronizzazione globale attiva</strong> - Tutti i workers condividono la stessa configurazione.<br>
-                <i class="fas fa-cog"></i> <strong>Configurazione permanente</strong> - Usa le variabili d'ambiente del cloud per impostazioni persistenti.
+                <i class="fas fa-cog"></i> <strong>Configurazione permanente</strong> - Usa solo ADMIN_PASSWORD e SECRET_KEY come variabili d'ambiente del cloud.
             </div>
             
             <div class="alert alert-info" id="dockerAlert" style="display: none;">
