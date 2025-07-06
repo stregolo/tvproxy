@@ -2093,8 +2093,8 @@ def setup_proxies():
     # Carica configurazione salvata
     config = config_manager.load_config()
     
-    # Configurazione proxy unificati - prima dalle env vars, poi dalla config salvata
-    proxy_list_str = os.environ.get('PROXY') or config.get('PROXY', '')
+    # Configurazione proxy unificati - solo dalla config salvata (non dalle env vars)
+    proxy_list_str = config.get('PROXY', '')
     
     if proxy_list_str:
         raw_proxy_list = [p.strip() for p in proxy_list_str.split(',') if p.strip()]
@@ -2136,8 +2136,8 @@ def setup_proxies():
             if any('socks5' in p for p in proxies_found):
                 app.logger.info("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
 
-    # Configurazione proxy DaddyLive - prima dalle env vars, poi dalla config salvata
-    daddy_proxy_list_str = os.environ.get('DADDY_PROXY') or config.get('DADDY_PROXY', '')
+    # Configurazione proxy DaddyLive - solo dalla config salvata (non dalle env vars)
+    daddy_proxy_list_str = config.get('DADDY_PROXY', '')
     if daddy_proxy_list_str:
         daddy_proxies = [p.strip() for p in daddy_proxy_list_str.split(',') if p.strip()]
         if daddy_proxies:
@@ -2641,7 +2641,7 @@ def debug_proxies():
             proxy_info[proxy_type] = {
                 'count': len(proxies),
                 'proxies': proxies,
-                'env_value': os.environ.get(proxy_type, 'NON_IMPOSTATA'),
+                'env_value': 'NON_UTILIZZATA (solo configurazione web)',
                 'combined': proxy_string,
                 'detected_types': []
             }
@@ -2659,7 +2659,7 @@ def debug_proxies():
             proxy_info[proxy_type] = {
                 'count': 0,
                 'proxies': [],
-                'env_value': os.environ.get(proxy_type, 'NON_IMPOSTATA'),
+                'env_value': 'NON_UTILIZZATA (solo configurazione web)',
                 'combined': '',
                 'detected_types': []
             }
@@ -2684,21 +2684,17 @@ def debug_env():
             'current_config': config_manager.load_config().get(key, 'NON_TROVATA')
         }
     
-    # Informazioni sui proxy
-    proxy_vars = ['PROXY', 'DADDY_PROXY']
+    # Informazioni sui proxy (solo dalla configurazione, non dalle env vars)
+    config = config_manager.load_config()
     
     proxy_info = {
-        'variables': {},
+        'config_proxy': config.get('PROXY', 'NON_CONFIGURATO'),
+        'config_daddy_proxy': config.get('DADDY_PROXY', 'NON_CONFIGURATO'),
         'status': 'not_configured'
     }
     
-    # Controlla le variabili proxy
-    for proxy_var in proxy_vars:
-        value = os.environ.get(proxy_var, 'NON_IMPOSTATA')
-        proxy_info['variables'][proxy_var] = value
-    
     # Determina lo stato
-    has_proxy = any(v != 'NON_IMPOSTATA' for v in proxy_info['variables'].values())
+    has_proxy = bool(config.get('PROXY') or config.get('DADDY_PROXY'))
     if has_proxy:
         proxy_info['status'] = 'configured'
     
@@ -5299,8 +5295,8 @@ def debug_proxy_status():
             'config_proxies': {
                 'PROXY': config.get('PROXY', ''),
                 'DADDY_PROXY': config.get('DADDY_PROXY', ''),
-                'env_PROXY': os.environ.get('PROXY', 'NON_IMPOSTATA'),
-                'env_DADDY_PROXY': os.environ.get('DADDY_PROXY', 'NON_IMPOSTATA'),
+                'env_PROXY': 'NON_UTILIZZATA (solo configurazione web)',
+                'env_DADDY_PROXY': 'NON_UTILIZZATA (solo configurazione web)',
                 'config_proxy_count': len(config_proxy_list),
                 'config_daddy_proxy_count': len(config_daddy_proxy_list)
             },
@@ -5661,17 +5657,18 @@ if __name__ == '__main__':
     app.logger.info("="*50)
     
     # Informazioni sulla configurazione proxy
-    proxy_env = os.environ.get('PROXY')
-    daddy_proxy_env = os.environ.get('DADDY_PROXY')
+    config = config_manager.load_config()
+    proxy_config = config.get('PROXY', '')
+    daddy_proxy_config = config.get('DADDY_PROXY', '')
     
-    if proxy_env:
-        proxy_count = len([p.strip() for p in proxy_env.split(',') if p.strip()])
+    if proxy_config:
+        proxy_count = len([p.strip() for p in proxy_config.split(',') if p.strip()])
         app.logger.info(f"✅ Proxy configurati: {proxy_count} normali")
     else:
         app.logger.info("ℹ️  Nessun proxy normale configurato - connessioni dirette")
     
-    if daddy_proxy_env:
-        daddy_proxy_count = len([p.strip() for p in daddy_proxy_env.split(',') if p.strip()])
+    if daddy_proxy_config:
+        daddy_proxy_count = len([p.strip() for p in daddy_proxy_config.split(',') if p.strip()])
         app.logger.info(f"⭐ Proxy DaddyLive configurati: {daddy_proxy_count}")
     else:
         app.logger.info("ℹ️  Nessun proxy DaddyLive configurato")
