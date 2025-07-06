@@ -198,6 +198,136 @@
             backdrop-filter: blur(20px);
             border: 1px solid rgba(255, 255, 255, 0.2);
             padding: 2rem;
+            
+        /* Sync Cards Styling */
+        .sync-card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            transition: all 0.3s ease;
+            animation: slideInUp 0.8s ease-out;
+        }
+        
+        .sync-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+        }
+        
+        .sync-card-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .sync-card-header i {
+            font-size: 1.5rem;
+            opacity: 0.9;
+        }
+        
+        .sync-card-header h4 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin: 0;
+        }
+        
+        .sync-card-content {
+            padding: 1.5rem;
+        }
+        
+        .sync-stat {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        }
+        
+        .sync-stat:last-of-type {
+            border-bottom: none;
+        }
+        
+        .sync-label {
+            font-weight: 500;
+            color: #4a5568;
+            font-size: 0.95rem;
+        }
+        
+        .sync-value {
+            font-weight: 600;
+            color: #2d3748;
+            font-size: 0.95rem;
+        }
+        
+        .sync-actions {
+            display: flex;
+            gap: 0.75rem;
+            margin-top: 1.5rem;
+            padding-top: 1rem;
+            border-top: 1px solid rgba(0, 0, 0, 0.05);
+        }
+        
+        .sync-btn {
+            padding: 0.75rem 1.25rem;
+            border: none;
+            border-radius: 12px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            text-decoration: none;
+            min-height: 44px;
+        }
+        
+        .sync-btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .sync-btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+        }
+        
+        .sync-btn-warning {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+        
+        .sync-btn-warning:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(240, 147, 251, 0.3);
+        }
+        
+        .sync-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+        
+        /* Responsive sync grid */
+        @media (max-width: 768px) {
+            .sync-grid {
+                grid-template-columns: 1fr !important;
+                gap: 1rem !important;
+            }
+            
+            .sync-actions {
+                flex-direction: column;
+            }
+            
+            .sync-btn {
+                justify-content: center;
+            }
+        }
             border-radius: 20px;
             box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
             transition: all 0.3s ease;
@@ -599,18 +729,29 @@
         <!-- Sezione Sincronizzazione -->
         <div class="sync-section" style="margin: 2rem 0;">
             <h3><i class="fas fa-sync-alt"></i> Sincronizzazione Workers</h3>
-            <div class="row" style="margin: 0;">
+            <div class="sync-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 1.5rem; margin-top: 1rem;">
+                
                 <!-- Card per Sincronizzazione Sessioni -->
-                <div class="col-md-6" style="padding: 0 10px;">
-                    <div class="card" style="margin-bottom: 1rem;">
-                        <div class="card-header">
-                            <h5><i class="fas fa-users"></i> Sincronizzazione Sessioni</h5>
+                <div class="sync-card">
+                    <div class="sync-card-header">
+                        <i class="fas fa-users"></i>
+                        <h4>Sincronizzazione Sessioni</h4>
+                    </div>
+                    <div class="sync-card-content">
+                        <div class="sync-stat">
+                            <span class="sync-label">Stato:</span>
+                            <span class="sync-value" id="sessionSyncStatus">Caricamento...</span>
                         </div>
-                        <div class="card-body">
-                            <p><strong>Stato:</strong> <span id="sessionSyncStatus">Caricamento...</span></p>
-                            <p><strong>Sessioni Attive:</strong> <span id="activeSessions">-</span></p>
-                            <p><strong>Ultimo Aggiornamento:</strong> <span id="sessionLastUpdate">-</span></p>
-                            <button class="btn btn-sm btn-info" onclick="checkSessionSync()">
+                        <div class="sync-stat">
+                            <span class="sync-label">Sessioni Attive:</span>
+                            <span class="sync-value" id="activeSessions">-</span>
+                        </div>
+                        <div class="sync-stat">
+                            <span class="sync-label">Ultimo Aggiornamento:</span>
+                            <span class="sync-value" id="sessionLastUpdate">-</span>
+                        </div>
+                        <div class="sync-actions">
+                            <button class="sync-btn sync-btn-primary" onclick="checkSessionSync()">
                                 <i class="fas fa-sync"></i> Verifica
                             </button>
                         </div>
@@ -618,19 +759,29 @@
                 </div>
                 
                 <!-- Card per Sincronizzazione Proxy -->
-                <div class="col-md-6" style="padding: 0 10px;">
-                    <div class="card" style="margin-bottom: 1rem;">
-                        <div class="card-header">
-                            <h5><i class="fas fa-network-wired"></i> Sincronizzazione Proxy</h5>
+                <div class="sync-card">
+                    <div class="sync-card-header">
+                        <i class="fas fa-network-wired"></i>
+                        <h4>Sincronizzazione Proxy</h4>
+                    </div>
+                    <div class="sync-card-content">
+                        <div class="sync-stat">
+                            <span class="sync-label">Stato:</span>
+                            <span class="sync-value" id="proxySyncStatus">Caricamento...</span>
                         </div>
-                        <div class="card-body">
-                            <p><strong>Stato:</strong> <span id="proxySyncStatus">Caricamento...</span></p>
-                            <p><strong>Proxy Locali:</strong> <span id="localProxies">-</span></p>
-                            <p><strong>Ultimo Ricaricamento:</strong> <span id="proxyLastReload">-</span></p>
-                            <button class="btn btn-sm btn-info" onclick="checkProxySync()">
+                        <div class="sync-stat">
+                            <span class="sync-label">Proxy Locali:</span>
+                            <span class="sync-value" id="localProxies">-</span>
+                        </div>
+                        <div class="sync-stat">
+                            <span class="sync-label">Ultimo Ricaricamento:</span>
+                            <span class="sync-value" id="proxyLastReload">-</span>
+                        </div>
+                        <div class="sync-actions">
+                            <button class="sync-btn sync-btn-primary" onclick="checkProxySync()">
                                 <i class="fas fa-sync"></i> Verifica
                             </button>
-                            <button class="btn btn-sm btn-warning" onclick="forceProxySyncNow()">
+                            <button class="sync-btn sync-btn-warning" onclick="forceProxySyncNow()">
                                 <i class="fas fa-bolt"></i> Forza Sync
                             </button>
                         </div>
