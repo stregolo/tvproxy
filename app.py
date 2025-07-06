@@ -1048,7 +1048,14 @@ def save_system_stats_to_global():
                 local_stats['uptime'] = "0h"
             
             # Richieste per minuto (stima basata su sessioni attive)
-            local_stats['requests_per_min'] = get_total_sessions_count() * 2
+            try:
+                local_stats['requests_per_min'] = get_total_sessions_count() * 2
+            except NameError:
+                # La funzione non è ancora definita, usa un valore di fallback
+                local_stats['requests_per_min'] = len(SESSION_POOL) * 2 if 'SESSION_POOL' in globals() else 0
+            except Exception as e:
+                app.logger.warning(f"Errore nel calcolo richieste per minuto: {e}")
+                local_stats['requests_per_min'] = 0
             
             # Carica statistiche esistenti o crea nuovo file
             all_workers_stats = {}
@@ -1192,7 +1199,14 @@ def merge_system_stats_from_all_workers():
             local_stats['uptime'] = "0h"
         
         # Richieste per minuto (stima basata su sessioni attive)
-        local_stats['requests_per_min'] = get_total_sessions_count() * 2
+        try:
+            local_stats['requests_per_min'] = get_total_sessions_count() * 2
+        except NameError:
+            # La funzione non è ancora definita, usa un valore di fallback
+            local_stats['requests_per_min'] = len(SESSION_POOL) * 2 if 'SESSION_POOL' in globals() else 0
+        except Exception as e:
+            app.logger.warning(f"Errore nel calcolo richieste per minuto: {e}")
+            local_stats['requests_per_min'] = 0
         
         # Se non usiamo sincronizzazione globale, restituisci solo le statistiche locali
         if not config_manager._use_global_sync:
@@ -3766,6 +3780,9 @@ def get_dashboard_data():
         # Ottieni conteggio sessioni con gestione errori
         try:
             session_count = get_total_sessions_count()
+        except NameError:
+            # La funzione non è ancora definita, usa un valore di fallback
+            session_count = len(SESSION_POOL) if 'SESSION_POOL' in globals() else 0
         except Exception as e:
             app.logger.warning(f"Errore nel recupero conteggio sessioni: {e}")
             session_count = 0
