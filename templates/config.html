@@ -709,6 +709,9 @@
                             <button type="button" class="btn btn-secondary btn-sm" onclick="reloadProxies()">
                                 <i class="fas fa-sync"></i> Ricarica Proxy
                             </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="forceProxySync()">
+                                <i class="fas fa-sync-alt"></i> Forza Sync Proxy
+                            </button>
                             <button type="button" class="btn btn-secondary btn-sm" onclick="checkProxyStatus()">
                                 <i class="fas fa-search"></i> Stato Proxy
                             </button>
@@ -1221,6 +1224,80 @@
                 reloadBtn.innerHTML = '<i class="fas fa-sync"></i> Ricarica Proxy';
                 reloadBtn.disabled = false;
                 showAlert('error', 'Errore nel ricaricamento proxy: ' + error.message);
+            });
+        }
+        
+        function forceProxySync() {
+            const syncBtn = event.target;
+            syncBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Forzando Sync...';
+            syncBtn.disabled = true;
+            
+            // Prima controlla lo stato attuale
+            fetch('/admin/debug/proxy-sync-status')
+            .then(response => response.json())
+            .then(statusResult => {
+                if (statusResult.status === 'success') {
+                    let message = `🔄 <strong>Stato Sincronizzazione Proxy</strong><br><br>`;
+                    message += `📊 <strong>Proxy Locali:</strong> ${statusResult.local_proxies.total_proxies} normali, ${statusResult.local_proxies.total_daddy_proxies} DaddyLive<br>`;
+                    message += `✅ <strong>Disponibili:</strong> ${statusResult.local_proxies.available_proxies} normali, ${statusResult.local_proxies.available_daddy_proxies} DaddyLive<br>`;
+                    message += `🔗 <strong>Sincronizzazione:</strong> ${statusResult.sync.enabled ? 'Abilitata' : 'Disabilitata'}<br>`;
+                    
+                    if (statusResult.sync.enabled) {
+                        message += `📁 <strong>File Sync:</strong> ${statusResult.sync.file_exists ? 'Presente' : 'Assente'}<br>`;
+                        if (statusResult.sync.file_exists) {
+                            message += `⏰ <strong>Età File:</strong> ${Math.round(statusResult.sync.file_age_seconds)} secondi<br>`;
+                        }
+                        
+                        if (statusResult.proxy_sync_data && !statusResult.proxy_sync_data.error) {
+                            message += `🔄 <strong>Ultima Richiesta:</strong> ${Math.round(statusResult.proxy_sync_data.request_age_seconds)} secondi fa<br>`;
+                            message += `👤 <strong>Worker Richiedente:</strong> ${statusResult.proxy_sync_data.worker_id}`;
+                        }
+                    }
+                    
+                    // Se la sincronizzazione è abilitata, forza il ricaricamento
+                    if (statusResult.sync.enabled) {
+                        return fetch('/admin/debug/force-proxy-sync', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Requested-With': 'XMLHttpRequest'
+                            }
+                        });
+                    } else {
+                        syncBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Forza Sync Proxy';
+                        syncBtn.disabled = false;
+                        showAlert('info', message + '<br><br>⚠️ <strong>Sincronizzazione non abilitata</strong>');
+                        return null;
+                    }
+                } else {
+                    syncBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Forza Sync Proxy';
+                    syncBtn.disabled = false;
+                    showAlert('error', statusResult.message || 'Errore nel controllo stato sync proxy');
+                    return null;
+                }
+            })
+            .then(response => {
+                if (response) {
+                    return response.json();
+                }
+                return null;
+            })
+            .then(result => {
+                if (result) {
+                    syncBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Forza Sync Proxy';
+                    syncBtn.disabled = false;
+                    
+                    if (result.status === 'success') {
+                        showAlert('success', `✅ <strong>Ricaricamento Proxy Forzato</strong><br><br>${result.message}<br><br>🔄 Tutti i workers ricaricheranno i proxy entro 30 secondi.`);
+                    } else {
+                        showAlert('error', result.message || 'Errore nel forzare la sincronizzazione proxy');
+                    }
+                }
+            })
+            .catch(error => {
+                syncBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Forza Sync Proxy';
+                syncBtn.disabled = false;
+                showAlert('error', 'Errore di connessione: ' + error.message);
             });
         }
         
