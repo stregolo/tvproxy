@@ -47,12 +47,23 @@ LAST_FETCH_TIME = 0
 FETCH_INTERVAL = 3600
 
 # --- Sincronizzazione Sessioni tra Workers ---
-SESSION_SYNC_FILE = os.path.join(os.getcwd(), 'tvproxy_sessions.json')
+# Usa /tmp per ambienti Docker/container, altrimenti directory corrente
+if os.path.exists('/tmp') and os.access('/tmp', os.W_OK):
+    SESSION_SYNC_FILE = '/tmp/tvproxy_sessions.json'
+    print("Sincronizzazione: usando directory /tmp per file sessioni")
+else:
+    SESSION_SYNC_FILE = os.path.join(os.getcwd(), 'tvproxy_sessions.json')
+    print(f"Sincronizzazione: usando directory corrente {os.getcwd()} per file sessioni")
 SESSION_SYNC_LOCK = Lock()
 SESSION_SYNC_INTERVAL = 30  # Sincronizzazione ogni 30 secondi
 
 # --- Sincronizzazione Proxy tra Workers ---
-PROXY_SYNC_FILE = os.path.join(os.getcwd(), 'tvproxy_proxy_sync.json')
+if os.path.exists('/tmp') and os.access('/tmp', os.W_OK):
+    PROXY_SYNC_FILE = '/tmp/tvproxy_proxy_sync.json'
+    print("Sincronizzazione: usando directory /tmp per file proxy")
+else:
+    PROXY_SYNC_FILE = os.path.join(os.getcwd(), 'tvproxy_proxy_sync.json')
+    print(f"Sincronizzazione: usando directory corrente {os.getcwd()} per file proxy")
 PROXY_SYNC_LOCK = Lock()
 
 # --- Funzioni di utilità ---
@@ -475,12 +486,24 @@ BLACKLIST_DURATION = 300  # 5 minuti di blacklist per errore 429
 MAX_ERRORS_BEFORE_PERMANENT = 5  # Dopo 5 errori, blacklist permanente per 1 ora
 
 # --- Sistema di Sincronizzazione Statistiche Client ---
-CLIENT_STATS_FILE = os.path.join(os.getcwd(), 'tvproxy_client_stats.json')  # File globale per statistiche client
+# Usa /tmp per ambienti Docker/container, altrimenti directory corrente
+if os.path.exists('/tmp') and os.access('/tmp', os.W_OK):
+    CLIENT_STATS_FILE = '/tmp/tvproxy_client_stats.json'
+    print("Statistiche: usando directory /tmp per file client stats")
+else:
+    CLIENT_STATS_FILE = os.path.join(os.getcwd(), 'tvproxy_client_stats.json')
+    print(f"Statistiche: usando directory corrente {os.getcwd()} per file client stats")
 CLIENT_STATS_LOCK = Lock()
 CLIENT_STATS_SYNC_INTERVAL = 30  # Sincronizzazione ogni 30 secondi
 
 # --- Sistema di Sincronizzazione Statistiche Sistema ---
-SYSTEM_STATS_FILE = os.path.join(os.getcwd(), 'tvproxy_system_stats.json')  # File globale per statistiche sistema
+# Usa /tmp per ambienti Docker/container, altrimenti directory corrente
+if os.path.exists('/tmp') and os.access('/tmp', os.W_OK):
+    SYSTEM_STATS_FILE = '/tmp/tvproxy_system_stats.json'
+    print("Statistiche: usando directory /tmp per file system stats")
+else:
+    SYSTEM_STATS_FILE = os.path.join(os.getcwd(), 'tvproxy_system_stats.json')
+    print(f"Statistiche: usando directory corrente {os.getcwd()} per file system stats")
 SYSTEM_STATS_LOCK = Lock()
 SYSTEM_STATS_SYNC_INTERVAL = 10  # Sincronizzazione ogni 10 secondi (più frequente per statistiche real-time)
 
@@ -1375,9 +1398,17 @@ class ConfigManager:
     def __init__(self):
         # Prova diverse directory per il file di configurazione
         self.config_file = self._get_writable_config_path()
-        self.backup_file = os.path.join(os.getcwd(), 'tvproxy_config_backup.json')  # Backup per HuggingFace
-        self.global_config_file = os.path.join(os.getcwd(), 'tvproxy_global_config.json')  # Configurazione globale per tutti i workers
-        self.global_lock_file = os.path.join(os.getcwd(), 'tvproxy_config.lock')  # Lock file per sincronizzazione
+        # Usa /tmp per ambienti Docker/container, altrimenti directory corrente
+        if os.path.exists('/tmp') and os.access('/tmp', os.W_OK):
+            self.backup_file = '/tmp/tvproxy_config_backup.json'  # Backup per HuggingFace
+            self.global_config_file = '/tmp/tvproxy_global_config.json'  # Configurazione globale per tutti i workers
+            self.global_lock_file = '/tmp/tvproxy_config.lock'  # Lock file per sincronizzazione
+            app.logger.info("ConfigManager: usando directory /tmp per file di sincronizzazione")
+        else:
+            self.backup_file = os.path.join(os.getcwd(), 'tvproxy_config_backup.json')  # Backup per HuggingFace
+            self.global_config_file = os.path.join(os.getcwd(), 'tvproxy_global_config.json')  # Configurazione globale per tutti i workers
+            self.global_lock_file = os.path.join(os.getcwd(), 'tvproxy_config.lock')  # Lock file per sincronizzazione
+            app.logger.info(f"ConfigManager: usando directory corrente {os.getcwd()} per file di sincronizzazione")
         self.default_config = {
             'PROXY': '',  # Proxy unificati con riconoscimento automatico
             'DADDY_PROXY': '',  # Proxy dedicati per DaddyLive
@@ -6634,6 +6665,50 @@ def debug_proxy_sync_status():
         return jsonify({
             "status": "error",
             "message": str(e)
+        }), 500
+
+@app.route('/admin/debug/sync-paths')
+@login_required
+def debug_sync_paths():
+    """Debug dei percorsi dei file di sincronizzazione"""
+    try:
+        paths_info = {
+            'current_working_directory': os.getcwd(),
+            'tmp_exists': os.path.exists('/tmp'),
+            'tmp_writable': os.access('/tmp', os.W_OK) if os.path.exists('/tmp') else False,
+            'sync_files': {
+                'session_sync_file': SESSION_SYNC_FILE,
+                'proxy_sync_file': PROXY_SYNC_FILE,
+                'client_stats_file': CLIENT_STATS_FILE,
+                'system_stats_file': SYSTEM_STATS_FILE,
+                'config_backup_file': config_manager.backup_file if hasattr(config_manager, 'backup_file') else 'N/A',
+                'global_config_file': config_manager.global_config_file if hasattr(config_manager, 'global_config_file') else 'N/A',
+                'global_lock_file': config_manager.global_lock_file if hasattr(config_manager, 'global_lock_file') else 'N/A'
+            },
+            'file_permissions': {}
+        }
+        
+        # Verifica permessi per ogni file
+        for name, path in paths_info['sync_files'].items():
+            if path != 'N/A':
+                paths_info['file_permissions'][name] = {
+                    'exists': os.path.exists(path),
+                    'writable': os.access(os.path.dirname(path), os.W_OK) if os.path.dirname(path) else False,
+                    'size': os.path.getsize(path) if os.path.exists(path) else 0
+                }
+        
+        return jsonify({
+            "status": "success",
+            "paths_info": paths_info,
+            "worker_id": os.getpid(),
+            "timestamp": time.time()
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel debug percorsi sincronizzazione: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore: {str(e)}"
         }), 500
 
 @app.route('/admin/debug/force-all-sync', methods=['POST'])
