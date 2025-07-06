@@ -824,13 +824,17 @@ class ConfigManager:
         )
     
     def _should_use_global_sync(self):
-        """Determina se usare la sincronizzazione globale (HuggingFace, Docker o Gunicorn con workers multipli)"""
+        """Determina se usare la sincronizzazione globale (HuggingFace, Docker, Render o Gunicorn con workers multipli)"""
         # Su HuggingFace sempre attiva
         if self._is_huggingface:
             return True
         
         # Controlla se siamo in un ambiente Docker
         if self._is_docker_environment():
+            return True
+        
+        # Controlla se siamo in un ambiente cloud (Render, Railway, Heroku, etc.)
+        if self._is_cloud_environment():
             return True
         
         # Controlla se stiamo usando Gunicorn con workers multipli
@@ -851,6 +855,47 @@ class ConfigManager:
                 return True
         except:
             pass
+        
+        return False
+    
+    def _is_cloud_environment(self):
+        """Rileva se siamo in un ambiente cloud (Render, Railway, Heroku, etc.)"""
+        # Render
+        if os.environ.get('RENDER'):
+            return True
+        
+        # Railway
+        if os.environ.get('RAILWAY_ENVIRONMENT'):
+            return True
+        
+        # Heroku
+        if os.environ.get('DYNO'):
+            return True
+        
+        # Vercel
+        if os.environ.get('VERCEL'):
+            return True
+        
+        # Netlify
+        if os.environ.get('NETLIFY'):
+            return True
+        
+        # Fly.io
+        if os.environ.get('FLY_APP_NAME'):
+            return True
+        
+        # Controlla se siamo in un ambiente con variabili d'ambiente tipiche dei cloud
+        cloud_indicators = [
+            'PORT',  # Molti cloud usano questa variabile
+            'DATABASE_URL',  # Database esterni
+            'REDIS_URL',  # Cache esterni
+            'WEB_CONCURRENCY',  # Workers multipli
+            'GUNICORN_CMD_ARGS'  # Gunicorn configurato
+        ]
+        
+        cloud_vars_found = sum(1 for var in cloud_indicators if os.environ.get(var))
+        if cloud_vars_found >= 2:  # Se troviamo almeno 2 indicatori cloud
+            return True
         
         return False
     
@@ -1177,6 +1222,7 @@ class ConfigManager:
         return {
             'is_huggingface': self._is_huggingface,
             'is_docker': self._is_docker_environment(),
+            'is_cloud': self._is_cloud_environment(),
             'use_global_sync': self._use_global_sync,
             'config_file': self.config_file,
             'backup_file': self.backup_file,
@@ -1685,6 +1731,8 @@ if config_manager._use_global_sync:
         env_name = "HuggingFace"
     elif config_manager._is_docker_environment():
         env_name = "Docker"
+    elif config_manager._is_cloud_environment():
+        env_name = "Cloud (Render/Railway/Heroku)"
     else:
         env_name = "Gunicorn con workers multipli"
     app.logger.info(f"Thread di sincronizzazione configurazione avviato per {env_name}")
@@ -4078,7 +4126,20 @@ config_status = config_manager.get_config_status()
 app.logger.info("="*50)
 app.logger.info("🔧 STATO CONFIGURAZIONE")
 app.logger.info("="*50)
-app.logger.info(f"Ambiente: {'HuggingFace' if config_status['is_huggingface'] else 'Standard'}")
+
+# Determina il tipo di ambiente
+if config_status['is_huggingface']:
+    env_type = "HuggingFace"
+elif config_status['is_docker']:
+    env_type = "Docker"
+elif config_status['is_cloud']:
+    env_type = "Cloud (Render/Railway/Heroku)"
+elif config_status['use_global_sync']:
+    env_type = "Gunicorn con workers multipli"
+else:
+    env_type = "Standard"
+
+app.logger.info(f"Ambiente: {env_type}")
 app.logger.info(f"File config: {config_status['config_file']}")
 app.logger.info(f"Cache memoria: {'Sì' if config_status['has_memory_cache'] else 'No'}")
 app.logger.info(f"File scrivibile: {'Sì' if config_status['file_writable'] else 'No'}")
@@ -4091,6 +4152,10 @@ if config_status['is_huggingface']:
 elif config_status['is_docker']:
     app.logger.info("🐳 AMBIENTE DOCKER: Sincronizzazione globale tra workers attiva")
     app.logger.info("📁 Configurazione salvata in memoria e file globale")
+elif config_status['is_cloud']:
+    app.logger.info("☁️  AMBIENTE CLOUD: Sincronizzazione globale tra workers attiva")
+    app.logger.info("📁 Configurazione salvata in memoria e file globale")
+    app.logger.info("💡 Per configurazione permanente, usa le variabili d'ambiente del cloud")
 elif config_status['use_global_sync']:
     app.logger.info("🔄 AMBIENTE GUNICORN: Sincronizzazione globale tra workers attiva")
     app.logger.info("📁 Configurazione salvata in memoria e file globale")
@@ -4895,7 +4960,14 @@ def force_sync_config():
         if config_manager._config_cache:
             global_save_result = config_manager._save_to_global_config(config_manager._config_cache)
         
-        env_name = "HuggingFace" if config_manager._is_huggingface else "Gunicorn con workers multipli"
+        if config_manager._is_huggingface:
+            env_name = "HuggingFace"
+        elif config_manager._is_docker_environment():
+            env_name = "Docker"
+        elif config_manager._is_cloud_environment():
+            env_name = "Cloud (Render/Railway/Heroku)"
+        else:
+            env_name = "Gunicorn con workers multipli"
         
         return jsonify({
             'status': 'success',
