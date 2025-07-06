@@ -18,9 +18,11 @@ WORKDIR /app
 RUN git clone https://github.com/nzo66/tvproxy .
 COPY . .
 
-# 5. Pre-crea la directory per i log e rendila scrivibile
+# 5. Pre-crea le directory necessarie e rendile scrivibili
 RUN mkdir -p logs \
-    && chmod 0777 logs
+    && mkdir -p /tmp \
+    && chmod 0777 logs \
+    && chmod 0777 /tmp
 
 # 6. Aggiorna pip e installa le dipendenze senza cache
 RUN pip install --upgrade pip
@@ -29,11 +31,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 7. Espone la porta 7860 per Flask/Gunicorn
 EXPOSE 7860
 
-# 8. Comando ottimizzato per avviare Gunicorn:
-#    - 4 worker gevent
+# Volume per persistenza dei file di sincronizzazione (opzionale)
+VOLUME ["/tmp"]
+
+# 8. Comando ottimizzato per avviare Gunicorn con sincronizzazione:
+#    - 4 worker gevent per sincronizzazione automatica
 #    - connessioni keep-alive
 #    - timeout adeguati
 #    - logging su stdout/stderr
+#    - File di sincronizzazione in /tmp/ (config, client stats, system stats)
+#    - Ottimizzato per HuggingFace Spaces
 CMD ["gunicorn", "app:app", \
      "-w", "4", \
      "--worker-class", "gevent", \
