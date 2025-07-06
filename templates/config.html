@@ -175,6 +175,13 @@
             box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
         }
 
+        .btn-sm {
+            padding: 0.5rem 1rem;
+            font-size: 0.85rem;
+            margin-right: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+
         .btn:hover {
             transform: translateY(-3px);
             box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
@@ -637,45 +644,56 @@
                     <button type="button" class="btn btn-secondary" onclick="resetConfig()">
                         <i class="fas fa-undo"></i> Ripristina Default
                     </button>
-                    <button type="button" class="btn btn-secondary" onclick="testConfig()">
-                        <i class="fas fa-vial"></i> Test Configurazione
-                    </button>
-                    <button type="button" class="btn btn-secondary" onclick="testPreBuffer()">
-                        <i class="fas fa-forward"></i> Test Pre-Buffer
-                    </button>
-                    <button type="button" class="btn btn-secondary" onclick="showConfigStatus()">
-                        <i class="fas fa-info-circle"></i> Stato Config
-                    </button>
-                    <button type="button" class="btn btn-secondary" onclick="testConfigSave()">
-                        <i class="fas fa-vial"></i> Test Salvataggio
-                    </button>
-                    <button type="button" class="btn btn-secondary" onclick="testConfigImport()">
-                        <i class="fas fa-vial"></i> Test Importazione
-                    </button>
-                    <button type="button" class="btn btn-secondary" onclick="repairConfig()">
-                        <i class="fas fa-wrench"></i> Ripara Config
-                    </button>
-                    <button type="button" class="btn btn-success" onclick="forceSaveConfig()">
-                        <i class="fas fa-save"></i> Forza Salvataggio
-                    </button>
-                    <button type="button" class="btn btn-info" onclick="reloadProxies()">
-                        <i class="fas fa-sync"></i> Ricarica Proxy
-                    </button>
-                    <button type="button" class="btn btn-warning" onclick="checkProxyStatus()">
-                        <i class="fas fa-search"></i> Stato Proxy
-                    </button>
-                    <button type="button" class="btn btn-primary" onclick="reloadCurrentConfig()">
-                        <i class="fas fa-refresh"></i> Ricarica Config
-                    </button>
-                    <button type="button" class="btn btn-dark" onclick="checkConfigChanges()">
-                        <i class="fas fa-diff"></i> Verifica Cambiamenti
-                    </button>
                     <button type="button" class="btn btn-secondary" onclick="exportConfig()">
                         <i class="fas fa-download"></i> Esporta Config
                     </button>
                     <button type="button" class="btn btn-secondary" onclick="importConfig()">
                         <i class="fas fa-upload"></i> Importa Config
                     </button>
+                </div>
+
+                <!-- Sezione Debug (collassabile) -->
+                <div class="config-section" style="margin-top: 2rem;">
+                    <h3>
+                        <i class="fas fa-bug"></i> 
+                        Debug & Diagnostica
+                        <button type="button" class="btn btn-sm btn-secondary" onclick="toggleDebugSection()" style="margin-left: 1rem; padding: 0.25rem 0.5rem; font-size: 0.8rem;">
+                            <i class="fas fa-chevron-down" id="debugToggleIcon"></i> Mostra/Nascondi
+                        </button>
+                    </h3>
+                    <div id="debugSection" style="display: none;">
+                        <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">
+                            <i class="fas fa-info-circle"></i> 
+                            Questi strumenti sono utili per il debug e la diagnostica del sistema.
+                        </p>
+                        
+                        <div class="action-buttons" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.5rem;">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="testConfig()">
+                                <i class="fas fa-vial"></i> Test Configurazione
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="testPreBuffer()">
+                                <i class="fas fa-forward"></i> Test Pre-Buffer
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="showConfigStatus()">
+                                <i class="fas fa-info-circle"></i> Stato Config
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="repairConfig()">
+                                <i class="fas fa-wrench"></i> Ripara Config
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="reloadProxies()">
+                                <i class="fas fa-sync"></i> Ricarica Proxy
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="checkProxyStatus()">
+                                <i class="fas fa-search"></i> Stato Proxy
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="reloadCurrentConfig()">
+                                <i class="fas fa-refresh"></i> Ricarica Config
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="checkConfigChanges()">
+                                <i class="fas fa-diff"></i> Verifica Cambiamenti
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </form>
@@ -923,82 +941,6 @@
                 });
         }
         
-        function testConfigSave() {
-            const testBtn = event.target;
-            testBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando...';
-            testBtn.disabled = true;
-            
-            fetch('/admin/debug/test-save', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
-            })
-            .then(response => response.json())
-            .then(result => {
-                testBtn.innerHTML = '<i class="fas fa-vial"></i> Test Salvataggio';
-                testBtn.disabled = false;
-                
-                if (result.status === 'success') {
-                    const status = result.config_status;
-                    let message = `🧪 <strong>Test Salvataggio Configurazione</strong><br><br>`;
-                    message += `✅ <strong>Risultato:</strong> ${result.message}<br>`;
-                    message += `🌐 <strong>Ambiente:</strong> ${status.is_huggingface ? 'HuggingFace' : 'Standard'}<br>`;
-                    message += `💾 <strong>Cache Memoria:</strong> ${status.has_memory_cache ? 'Sì' : 'No'}<br>`;
-                    message += `✏️ <strong>File Scrivibile:</strong> ${status.file_writable ? 'Sì' : 'No'}<br>`;
-                    message += `🔧 <strong>Fonte Config:</strong> ${status.current_config_source}`;
-                    
-                    showAlert('info', message);
-                } else {
-                    showAlert('error', 'Test salvataggio fallito: ' + result.message);
-                }
-            })
-            .catch(error => {
-                testBtn.innerHTML = '<i class="fas fa-vial"></i> Test Salvataggio';
-                testBtn.disabled = false;
-                showAlert('error', 'Errore durante il test: ' + error.message);
-            });
-        }
-        
-        function testConfigImport() {
-            const testBtn = event.target;
-            testBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando...';
-            testBtn.disabled = true;
-            
-            fetch('/admin/debug/test-import', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
-            })
-            .then(response => response.json())
-            .then(result => {
-                testBtn.innerHTML = '<i class="fas fa-vial"></i> Test Importazione';
-                testBtn.disabled = false;
-                
-                if (result.status === 'success') {
-                    const status = result.config_status;
-                    let message = `🧪 <strong>Test Importazione Configurazione</strong><br><br>`;
-                    message += `✅ <strong>Risultato:</strong> ${result.message}<br>`;
-                    message += `🌐 <strong>Ambiente:</strong> ${status.is_huggingface ? 'HuggingFace' : 'Standard'}<br>`;
-                    message += `💾 <strong>Cache Memoria:</strong> ${status.has_memory_cache ? 'Sì' : 'No'}<br>`;
-                    message += `📊 <strong>Chiavi Caricate:</strong> ${result.loaded_keys ? result.loaded_keys.length : 0}<br>`;
-                    message += `🔧 <strong>Fonte Config:</strong> ${status.current_config_source}`;
-                    
-                    showAlert('info', message);
-                } else {
-                    showAlert('error', 'Test importazione fallito: ' + result.message);
-                }
-            })
-            .catch(error => {
-                testBtn.innerHTML = '<i class="fas fa-vial"></i> Test Importazione';
-                testBtn.disabled = false;
-                showAlert('error', 'Errore durante il test: ' + error.message);
-            });
-        }
-
         function repairConfig() {
             const repairBtn = event.target;
             repairBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Riparando...';
@@ -1030,48 +972,6 @@
                 repairBtn.innerHTML = '<i class="fas fa-wrench"></i> Ripara Config';
                 repairBtn.disabled = false;
                 showAlert('error', 'Errore nella riparazione: ' + error.message);
-            });
-        }
-        
-        function forceSaveConfig() {
-            const forceBtn = event.target;
-            forceBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Forzando Salvataggio...';
-            forceBtn.disabled = true;
-            
-            fetch('/admin/debug/force-save-config', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
-            })
-            .then(response => response.json())
-            .then(result => {
-                forceBtn.innerHTML = '<i class="fas fa-save"></i> Forza Salvataggio';
-                forceBtn.disabled = false;
-                
-                if (result.status === 'success') {
-                    let message = `💾 <strong>Salvataggio Forzato Completato</strong><br><br>`;
-                    message += `✅ <strong>Risultato:</strong> ${result.message}<br>`;
-                    message += `📊 <strong>Valori Salvati:</strong> ${result.saved_values_count}/${result.total_values}<br>`;
-                    message += `🌐 <strong>Ambiente:</strong> ${result.config_status.is_huggingface ? 'HuggingFace' : 'Standard'}<br>`;
-                    message += `💾 <strong>Cache Memoria:</strong> ${result.config_status.has_memory_cache ? 'Sì' : 'No'}<br>`;
-                    message += `🔧 <strong>Fonte Config:</strong> ${result.config_status.current_config_source}`;
-                    
-                    showAlert('info', message);
-                    
-                    // Ricarica la pagina per mostrare la configurazione salvata
-                    setTimeout(() => {
-                        location.reload();
-                    }, 3000);
-                } else {
-                    showAlert('error', result.message);
-                }
-            })
-            .catch(error => {
-                forceBtn.innerHTML = '<i class="fas fa-save"></i> Forza Salvataggio';
-                forceBtn.disabled = false;
-                showAlert('error', 'Errore nel salvataggio forzato: ' + error.message);
             });
         }
         
@@ -1422,8 +1322,6 @@
             event.target.value = '';
         }
         
-
-        
         // Add focus effects
         document.querySelectorAll('input, textarea, select').forEach(element => {
             element.addEventListener('focus', function() {
@@ -1434,6 +1332,20 @@
                 this.parentElement.style.transform = 'scale(1)';
             });
         });
+
+        // Funzione per gestire il toggle della sezione debug
+        function toggleDebugSection() {
+            const debugSection = document.getElementById('debugSection');
+            const toggleIcon = document.getElementById('debugToggleIcon');
+            
+            if (debugSection.style.display === 'none') {
+                debugSection.style.display = 'block';
+                toggleIcon.className = 'fas fa-chevron-up';
+            } else {
+                debugSection.style.display = 'none';
+                toggleIcon.className = 'fas fa-chevron-down';
+            }
+        }
     </script>
 </body>
 </html>
