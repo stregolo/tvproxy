@@ -3,7 +3,6 @@
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue.svg)](https://docker.com)
 [![HuggingFace](https://img.shields.io/badge/HuggingFace-Spaces-yellow.svg)](https://huggingface.co/spaces)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 > **Un server proxy leggero e veloce per streaming TV** 🎬  
 > Ottimizzato per DaddyLive, Vavoo e altri servizi IPTV  
