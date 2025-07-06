@@ -2820,14 +2820,33 @@ def save_config():
             # Aggiorna la configurazione del pre-buffer
             pre_buffer_manager.update_config()
             
+            # Sincronizza con tutti i workers se necessario
+            sync_info = {}
+            if config_manager._use_global_sync:
+                # Salva nel file globale per sincronizzare tutti i workers
+                global_save_result = config_manager._save_to_global_config(new_config)
+                sync_info = {
+                    'global_sync': True,
+                    'global_save_result': global_save_result,
+                    'sync_message': f"Configurazione sincronizzata su tutti i workers: {'OK' if global_save_result else 'FALLITO'}"
+                }
+                app.logger.info(f"Configurazione salvata e sincronizzata su tutti i workers")
+            else:
+                sync_info = {
+                    'global_sync': False,
+                    'sync_message': "Sincronizzazione non necessaria (ambiente single-worker)"
+                }
+                app.logger.info(f"Configurazione salvata")
+            
             # Log delle statistiche proxy aggiornate
             available_proxies = get_available_proxies()
             available_daddy_proxies = get_available_daddy_proxies()
-            app.logger.info(f"Configurazione salvata - Proxy caricati: {len(PROXY_LIST)} normali ({len(available_proxies)} disponibili), {len(DADDY_PROXY_LIST)} DaddyLive ({len(available_daddy_proxies)} disponibili)")
+            app.logger.info(f"Proxy caricati: {len(PROXY_LIST)} normali ({len(available_proxies)} disponibili), {len(DADDY_PROXY_LIST)} DaddyLive ({len(available_daddy_proxies)} disponibili)")
             
             return jsonify({
                 "status": "success", 
-                "message": f"Configurazione salvata con successo. Proxy caricati: {len(PROXY_LIST)} normali, {len(DADDY_PROXY_LIST)} DaddyLive"
+                "message": f"Configurazione salvata con successo. Proxy caricati: {len(PROXY_LIST)} normali, {len(DADDY_PROXY_LIST)} DaddyLive",
+                "sync_info": sync_info
             })
         else:
             return jsonify({"status": "error", "message": "Errore nel salvataggio"})
@@ -2844,8 +2863,33 @@ def reset_config():
         default_config = config_manager.default_config.copy()
         if config_manager.save_config(default_config):
             config_manager.apply_config_to_app(default_config)
-            app.logger.info("Configurazione ripristinata ai valori di default")
-            return jsonify({"status": "success", "message": "Configurazione ripristinata ai valori di default"})
+            setup_proxies()
+            setup_all_caches()
+            pre_buffer_manager.update_config()
+            
+            # Sincronizza con tutti i workers se necessario
+            sync_info = {}
+            if config_manager._use_global_sync:
+                # Salva nel file globale per sincronizzare tutti i workers
+                global_save_result = config_manager._save_to_global_config(default_config)
+                sync_info = {
+                    'global_sync': True,
+                    'global_save_result': global_save_result,
+                    'sync_message': f"Configurazione di default sincronizzata su tutti i workers: {'OK' if global_save_result else 'FALLITO'}"
+                }
+                app.logger.info(f"Configurazione di default sincronizzata su tutti i workers")
+            else:
+                sync_info = {
+                    'global_sync': False,
+                    'sync_message': "Sincronizzazione non necessaria (ambiente single-worker)"
+                }
+                app.logger.info(f"Configurazione di default applicata")
+            
+            return jsonify({
+                "status": "success", 
+                "message": "Configurazione ripristinata ai valori di default",
+                "sync_info": sync_info
+            })
         else:
             return jsonify({"status": "error", "message": "Errore nel ripristino della configurazione"})
     except Exception as e:
@@ -3009,11 +3053,28 @@ def import_config():
             # Aggiorna la configurazione del pre-buffer
             pre_buffer_manager.update_config()
             
+            # Sincronizza con tutti i workers se necessario
+            sync_info = {}
+            if config_manager._use_global_sync:
+                # Salva nel file globale per sincronizzare tutti i workers
+                global_save_result = config_manager._save_to_global_config(imported_config)
+                sync_info = {
+                    'global_sync': True,
+                    'global_save_result': global_save_result,
+                    'sync_message': f"Configurazione sincronizzata su tutti i workers: {'OK' if global_save_result else 'FALLITO'}"
+                }
+                app.logger.info(f"Configurazione importata e sincronizzata su tutti i workers da {file.filename}")
+            else:
+                sync_info = {
+                    'global_sync': False,
+                    'sync_message': "Sincronizzazione non necessaria (ambiente single-worker)"
+                }
+                app.logger.info(f"Configurazione importata con successo da {file.filename}")
+            
             # Verifica che la configurazione sia stata applicata
             current_config = config_manager.load_config()
             config_status = config_manager.get_config_status()
             
-            app.logger.info(f"Configurazione importata con successo da {file.filename}")
             app.logger.info(f"Configurazione attuale: {len(current_config)} impostazioni caricate")
             
             return jsonify({
@@ -3022,7 +3083,7 @@ def import_config():
                 "config_status": config_status,
                 "imported_keys": list(imported_config.keys()),
                 "current_keys": list(current_config.keys()),
-                "is_huggingface": config_status.get('is_huggingface', False)
+                "sync_info": sync_info
             })
         else:
             return jsonify({"status": "error", "message": "Errore nel salvataggio della configurazione importata"}), 500
