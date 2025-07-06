@@ -4478,11 +4478,14 @@ def reload_proxies():
 def debug_proxy_status():
     """Mostra lo stato dettagliato dei proxy"""
     try:
+        # Ricarica i proxy dalla configurazione corrente
+        setup_proxies()
+        
         # Ottieni statistiche aggiornate
         available_proxies = get_available_proxies()
         available_daddy_proxies = get_available_daddy_proxies()
         
-        # Calcola statistiche IP
+        # Calcola statistiche IP per i proxy attuali
         ip_stats = {'IPv4': 0, 'IPv6': 0, 'hostname': 0}
         for proxy in PROXY_LIST:
             ip_version = get_proxy_ip_version(proxy)
@@ -4497,6 +4500,16 @@ def debug_proxy_status():
         
         # Carica configurazione per vedere i proxy configurati
         config = config_manager.load_config()
+        
+        # Analizza i proxy dalla configurazione
+        config_proxy_list = []
+        config_daddy_proxy_list = []
+        
+        if config.get('PROXY'):
+            config_proxy_list = [p.strip() for p in config.get('PROXY', '').split(',') if p.strip()]
+        
+        if config.get('DADDY_PROXY'):
+            config_daddy_proxy_list = [p.strip() for p in config.get('DADDY_PROXY', '').split(',') if p.strip()]
         
         return jsonify({
             'status': 'success',
@@ -4514,14 +4527,38 @@ def debug_proxy_status():
                 'PROXY': config.get('PROXY', ''),
                 'DADDY_PROXY': config.get('DADDY_PROXY', ''),
                 'env_PROXY': os.environ.get('PROXY', 'NON_IMPOSTATA'),
-                'env_DADDY_PROXY': os.environ.get('DADDY_PROXY', 'NON_IMPOSTATA')
+                'env_DADDY_PROXY': os.environ.get('DADDY_PROXY', 'NON_IMPOSTATA'),
+                'config_proxy_count': len(config_proxy_list),
+                'config_daddy_proxy_count': len(config_daddy_proxy_list)
             },
             'proxy_list': PROXY_LIST,
             'daddy_proxy_list': DADDY_PROXY_LIST,
+            'config_proxy_list': config_proxy_list,
+            'config_daddy_proxy_list': config_daddy_proxy_list,
             'blacklist_info': {
                 'normal_proxies': list(PROXY_BLACKLIST.keys()),
                 'daddy_proxies': list(DADDY_PROXY_BLACKLIST.keys())
-            }
+            },
+            'proxy_details': [
+                {
+                    'url': proxy,
+                    'type': detect_proxy_type(proxy),
+                    'ip_version': get_proxy_ip_version(proxy),
+                    'blacklisted': is_proxy_blacklisted(proxy),
+                    'available': proxy in available_proxies
+                }
+                for proxy in PROXY_LIST
+            ],
+            'daddy_proxy_details': [
+                {
+                    'url': proxy,
+                    'type': detect_proxy_type(proxy),
+                    'ip_version': get_proxy_ip_version(proxy),
+                    'blacklisted': is_daddy_proxy_blacklisted(proxy),
+                    'available': proxy in available_daddy_proxies
+                }
+                for proxy in DADDY_PROXY_LIST
+            ]
         })
         
     except Exception as e:
