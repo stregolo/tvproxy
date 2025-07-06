@@ -2092,7 +2092,7 @@ def sync_sessions_thread():
     """Thread per sincronizzare le sessioni tra workers"""
     while True:
         try:
-            time.sleep(SESSION_SYNC_INTERVAL)
+            time.sleep(5)  # Controlla ogni 5 secondi invece di 30
             
             if config_manager._use_global_sync:
                 # Salva le sessioni locali
@@ -2123,7 +2123,7 @@ def sync_sessions_thread():
                             app.logger.debug(f"Sessione sincronizzata da worker {session_data.get('worker_id')}")
                             break
                 
-                # Controlla se è stata richiesta una ricaricamento proxy
+                # Controlla se è stata richiesta una ricaricamento proxy (più frequente)
                 check_proxy_reload_request()
                             
         except Exception as e:
@@ -5913,13 +5913,26 @@ def force_proxy_sync():
         reload_result = trigger_proxy_reload()
         
         if reload_result:
+            # Aspetta un po' per dare tempo agli altri workers di ricaricare
+            time.sleep(2)
+            
+            # Controlla lo stato finale
+            available_proxies = get_available_proxies()
+            available_daddy_proxies = get_available_daddy_proxies()
+            
             return jsonify({
                 "status": "success",
                 "message": "Richiesta di ricaricamento proxy inviata a tutti i workers",
                 "details": {
                     "triggered": True,
                     "worker_id": os.getpid(),
-                    "timestamp": time.time()
+                    "timestamp": time.time(),
+                    "local_proxies": {
+                        "total_proxies": len(PROXY_LIST),
+                        "available_proxies": len(available_proxies),
+                        "total_daddy_proxies": len(DADDY_PROXY_LIST),
+                        "available_daddy_proxies": len(available_daddy_proxies)
+                    }
                 }
             })
         else:
@@ -6028,12 +6041,35 @@ def check_proxy_reload_request():
                 if sync_data.get('reload_requested', False):
                     app.logger.info(f"Richiesta di ricaricamento proxy rilevata, ricarico i proxy...")
                     setup_proxies()
+                    
+                    # Notifica che il ricaricamento è stato completato
+                    notify_proxy_reload_completed()
                     return True
             
             return False
     except Exception as e:
         app.logger.error(f"Errore nella verifica richiesta ricaricamento proxy: {e}")
         return False
+
+def notify_proxy_reload_completed():
+    """Notifica che il ricaricamento proxy è stato completato"""
+    try:
+        with PROXY_SYNC_LOCK:
+            sync_data = {
+                'reload_requested': False,
+                'reload_completed': True,
+                'timestamp': time.time(),
+                'worker_id': os.getpid(),
+                'proxy_count': len(PROXY_LIST),
+                'daddy_proxy_count': len(DADDY_PROXY_LIST)
+            }
+            
+            with open(PROXY_SYNC_FILE, 'w') as f:
+                json.dump(sync_data, f)
+            
+            app.logger.info(f"Ricaricamento proxy completato: {len(PROXY_LIST)} normali, {len(DADDY_PROXY_LIST)} DaddyLive")
+    except Exception as e:
+        app.logger.error(f"Errore nella notifica completamento ricaricamento proxy: {e}")
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
