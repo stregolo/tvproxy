@@ -185,7 +185,7 @@ def setup_all_caches():
         TS_CACHE = {}
         KEY_CACHE = {}
         app.logger.warning("TUTTE LE CACHE DISABILITATE: stream diretto attivo.")
-    
+
 # Sistema di statistiche (senza WebSocket) - spostato dopo la definizione di pre_buffer_manager
 
 # --- Configurazione Generale ---
@@ -768,7 +768,7 @@ def setup_proxies():
         # Avviso per SOCKS5
         if any('socks5' in proxy for proxy in proxies_found):
             app.logger.info("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
-    
+
     PROXY_LIST = proxies_found
 
     if PROXY_LIST:
