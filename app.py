@@ -1032,6 +1032,7 @@ def create_robust_session():
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     
+    return session
 
 
 def get_persistent_session(proxy_url=None):
