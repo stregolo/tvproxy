@@ -1149,27 +1149,45 @@
                     message += `🌐 <strong>Statistiche IP DaddyLive:</strong> IPv4: ${proxyStatus.daddy_ip_statistics.IPv4}, IPv6: ${proxyStatus.daddy_ip_statistics.IPv6}, Hostname: ${proxyStatus.daddy_ip_statistics.hostname}`;
                     
                     message += `<br><br><strong>⚙️ Configurazione Proxy:</strong><br>`;
-                    message += `• Config PROXY: ${configProxies.PROXY || 'NON_CONFIGURATO'}<br>`;
-                    message += `• Config DADDY_PROXY: ${configProxies.DADDY_PROXY || 'NON_CONFIGURATO'}<br>`;
+                    message += `• Config PROXY: ${configProxies.config_proxy_count} proxy configurati<br>`;
+                    message += `• Config DADDY_PROXY: ${configProxies.config_daddy_proxy_count} proxy configurati<br>`;
                     message += `• Env PROXY: ${configProxies.env_PROXY}<br>`;
                     message += `• Env DADDY_PROXY: ${configProxies.env_DADDY_PROXY}`;
                     
-                    if (result.proxy_list && result.proxy_list.length > 0) {
-                        message += `<br><br><strong>🔍 Proxy Normali Caricati:</strong><br>`;
-                        result.proxy_list.forEach((proxy, index) => {
+                    // Mostra i proxy dalla configurazione
+                    if (result.config_proxy_list && result.config_proxy_list.length > 0) {
+                        message += `<br><br><strong>📝 Proxy dalla Configurazione:</strong><br>`;
+                        result.config_proxy_list.forEach((proxy, index) => {
                             message += `${index + 1}. ${proxy}<br>`;
                         });
-                    } else {
-                        message += `<br><br><strong>⚠️ Nessun proxy normale caricato</strong>`;
                     }
                     
-                    if (result.daddy_proxy_list && result.daddy_proxy_list.length > 0) {
-                        message += `<br><strong>🔍 Proxy DaddyLive Caricati:</strong><br>`;
-                        result.daddy_proxy_list.forEach((proxy, index) => {
+                    if (result.config_daddy_proxy_list && result.config_daddy_proxy_list.length > 0) {
+                        message += `<br><strong>📝 Proxy DaddyLive dalla Configurazione:</strong><br>`;
+                        result.config_daddy_proxy_list.forEach((proxy, index) => {
                             message += `${index + 1}. ${proxy}<br>`;
                         });
+                    }
+                    
+                    // Mostra i proxy attivi con dettagli
+                    if (result.proxy_details && result.proxy_details.length > 0) {
+                        message += `<br><br><strong>✅ Proxy Normali Attivi:</strong><br>`;
+                        result.proxy_details.forEach((proxy, index) => {
+                            const status = proxy.blacklisted ? '🚫 BLACKLIST' : (proxy.available ? '✅ ATTIVO' : '⚠️ NON_DISPONIBILE');
+                            message += `${index + 1}. ${proxy.url} (${proxy.type.toUpperCase()}, ${proxy.ip_version}) - ${status}<br>`;
+                        });
                     } else {
-                        message += `<br><strong>⚠️ Nessun proxy DaddyLive caricato</strong>`;
+                        message += `<br><br><strong>⚠️ Nessun proxy normale attivo</strong>`;
+                    }
+                    
+                    if (result.daddy_proxy_details && result.daddy_proxy_details.length > 0) {
+                        message += `<br><strong>✅ Proxy DaddyLive Attivi:</strong><br>`;
+                        result.daddy_proxy_details.forEach((proxy, index) => {
+                            const status = proxy.blacklisted ? '🚫 BLACKLIST' : (proxy.available ? '✅ ATTIVO' : '⚠️ NON_DISPONIBILE');
+                            message += `${index + 1}. ${proxy.url} (${proxy.type.toUpperCase()}, ${proxy.ip_version}) - ${status}<br>`;
+                        });
+                    } else {
+                        message += `<br><strong>⚠️ Nessun proxy DaddyLive attivo</strong>`;
                     }
                     
                     if (result.blacklist_info.normal_proxies.length > 0) {
