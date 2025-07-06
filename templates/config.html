@@ -634,6 +634,12 @@
                 <i class="fas fa-sync-alt"></i> <strong>Sincronizzazione globale attiva</strong> - Tutti i workers condividono la stessa configurazione.
             </div>
             
+            <div class="alert alert-info" id="gunicornAlert" style="display: none;">
+                <i class="fas fa-server"></i> <strong>Ambiente Gunicorn con Workers Multipli Rilevato</strong><br>
+                La configurazione viene sincronizzata automaticamente tra tutti i workers tramite file globale.<br>
+                <i class="fas fa-sync-alt"></i> <strong>Sincronizzazione globale attiva</strong> - Tutti i workers condividono la stessa configurazione.
+            </div>
+            
             <div class="action-box">
                 <h3><i class="fas fa-exclamation-triangle"></i> Azioni di Sistema</h3>
                 <p>Queste azioni possono influenzare il funzionamento del sistema. Utilizzare con cautela.</p>
@@ -710,21 +716,31 @@
     </div>
 
     <script>
-        // Controlla se siamo in ambiente HuggingFace
+        // Controlla se siamo in ambiente con workers multipli
         function checkHuggingFaceEnvironment() {
             fetch('/admin/debug/config-status')
                 .then(response => response.json())
                 .then(data => {
-                    if (data.config_status && data.config_status.is_huggingface) {
-                        document.getElementById('huggingfaceAlert').style.display = 'block';
-                        
-                        // Log silenzioso delle informazioni di sincronizzazione
-                        console.log('Ambiente HuggingFace rilevato:', {
-                            global_exists: data.config_status.global_exists,
-                            global_age: data.config_status.global_age_human,
-                            backup_exists: data.config_status.backup_exists,
-                            backup_age: data.config_status.backup_age_human
-                        });
+                    if (data.config_status) {
+                        if (data.config_status.is_huggingface) {
+                            document.getElementById('huggingfaceAlert').style.display = 'block';
+                            
+                            // Log silenzioso delle informazioni di sincronizzazione
+                            console.log('Ambiente HuggingFace rilevato:', {
+                                global_exists: data.config_status.global_exists,
+                                global_age: data.config_status.global_age_human,
+                                backup_exists: data.config_status.backup_exists,
+                                backup_age: data.config_status.backup_age_human
+                            });
+                        } else if (data.config_status.use_global_sync) {
+                            document.getElementById('gunicornAlert').style.display = 'block';
+                            
+                            // Log silenzioso delle informazioni di sincronizzazione
+                            console.log('Ambiente Gunicorn con workers multipli rilevato:', {
+                                global_exists: data.config_status.global_exists,
+                                global_age: data.config_status.global_age_human
+                            });
+                        }
                     }
                 })
                 .catch(error => {
@@ -936,15 +952,24 @@
                     const summary = data.config_summary;
                     
                     let message = `📊 <strong>Stato Configurazione</strong><br><br>`;
-                    message += `🌐 <strong>Ambiente:</strong> ${status.is_huggingface ? 'HuggingFace' : 'Standard'}<br>`;
+                    
+                    // Determina il tipo di ambiente
+                    let env_type = 'Standard';
+                    if (status.is_huggingface) {
+                        env_type = 'HuggingFace';
+                    } else if (status.use_global_sync) {
+                        env_type = 'Gunicorn con workers multipli';
+                    }
+                    
+                    message += `🌐 <strong>Ambiente:</strong> ${env_type}<br>`;
                     message += `📁 <strong>File Config:</strong> ${status.config_file}<br>`;
                     message += `💾 <strong>Cache Memoria:</strong> ${status.has_memory_cache ? 'Sì' : 'No'}<br>`;
                     message += `📄 <strong>File Esiste:</strong> ${status.file_exists ? 'Sì' : 'No'}<br>`;
                     message += `✏️ <strong>File Scrivibile:</strong> ${status.file_writable ? 'Sì' : 'No'}<br>`;
                     message += `🔧 <strong>Fonte Config:</strong> ${status.current_config_source}<br>`;
                     
-                    // Aggiungi informazioni sulla sincronizzazione globale se siamo su HuggingFace
-                    if (status.is_huggingface) {
+                    // Aggiungi informazioni sulla sincronizzazione globale se attiva
+                    if (status.use_global_sync) {
                         message += `🔄 <strong>File Globale:</strong> ${status.global_config_file}<br>`;
                         message += `🌍 <strong>File Globale Esiste:</strong> ${status.global_exists ? 'Sì' : 'No'}<br>`;
                         if (status.global_exists) {
