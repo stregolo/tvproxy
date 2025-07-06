@@ -44,6 +44,7 @@ Un server proxy avanzato e dockerizzato basato su **Flask** e **Requests**, prog
 
 > ⚠️  **IMPORTANTE**: Solo `ADMIN_PASSWORD` e `SECRET_KEY` devono essere impostati come variabili d'ambiente.  
 > 🔧 **Tutte le altre configurazioni** (proxy, cache, pre-buffering, timeout, ecc.) devono essere gestite dal **pannello web** di amministrazione.  
+> 🚫 **Le variabili d'ambiente `PROXY` e `DADDY_PROXY` non sono più utilizzate** - i proxy vengono configurati solo tramite il pannello web.  
 > 🔑 Usa un valore univoco per `SECRET_KEY`, ad esempio generato con:  
 > `openssl rand -hex 32`  
 > oppure:  
@@ -122,7 +123,6 @@ La cache verrà disabilitata immediatamente senza bisogno di riavviare il server
 2. Repository: `https://github.com/nzo66/tvproxy` → **Connect**.
 3. Scegli un nome, **Instance Type** `Free` (o superiore).
 4. Aggiungi le variabili `ADMIN_PASSWORD` e `SECRET_KEY` nell'area **Environment**.
-5. (Opzionale) Aggiungi `PROXY`, `DADDY_PROXY`.
 6. **Create Web Service**.
 
 ### 🤖 HuggingFace Spaces
@@ -130,13 +130,13 @@ La cache verrà disabilitata immediatamente senza bisogno di riavviare il server
 1. Crea un nuovo **Space** (SDK: *Docker*).
 2. Carica `DockerfileHF` come `Dockerfile`.
 3. Vai in **Settings → Secrets** e aggiungi `ADMIN_PASSWORD` e `SECRET_KEY`.
-4. **OBBLIGATORIO**: Aggiungi `DADDY_PROXY` per servizi DaddyLive (SOCKS5 non supportato su HF).
-5. (Opzionale) Aggiungi `PROXY` per proxy generali.
+4. **OBBLIGATORIO**: Configura `DADDY PROXY` dal pannello web per servizi DaddyLive (SOCKS5 non supportato su HF).
 6. Dopo ogni modifica alle variabili fai **Factory Rebuild**.
 
 **⚠️ IMPORTANTE: Configurazione HuggingFace**
 - La configurazione viene salvata **in memoria** e non persiste dopo il riavvio
-- Per configurazione permanente, usa i **Secrets di HuggingFace**
+- Per configurazione permanente, usa i **Secrets di HuggingFace** (solo `ADMIN_PASSWORD` e `SECRET_KEY`)
+- **Tutte le altre configurazioni** (proxy, cache, timeout, ecc.) vengono gestite solo dal pannello web
 - Il pannello web mostra un avviso quando rileva l'ambiente HuggingFace
 - Usa il pulsante **"Stato Config"** per verificare lo stato della configurazione
 
@@ -156,6 +156,8 @@ Dopo il deploy, accedi alla dashboard e configura le seguenti impostazioni ottim
 **Proxy DaddyLive (OBBLIGATORIO per HuggingFace)**
 - Usa solo proxy HTTP/HTTPS (SOCKS5 non supportato su HF)
 - Configura dal pannello web: **Config** → **Configurazione** → **Proxy DaddyLive**
+
+**⚠️ IMPORTANTE**: Tutte le configurazioni tecniche (proxy, cache, timeout, pool, pre-buffering) vengono gestite **solo tramite il pannello web**.
 
 **Cache Ottimizzata**
 - **CACHE_TTL_M3U8**: 5
@@ -190,22 +192,11 @@ Dopo il deploy, accedi alla dashboard e configura le seguenti impostazioni ottim
 
 > ⚠️ **IMPORTANTE**: Su HuggingFace Spaces, i proxy SOCKS5 non sono supportati. Usa solo proxy HTTP/HTTPS per `DADDY_PROXY`.
 
-### 🔧 Risoluzione Problemi HuggingFace
-
-**Problema: "La configurazione non si salva"**
-- **Causa**: Su HuggingFace il filesystem è read-only
-- **Soluzione**: La configurazione viene salvata automaticamente in memoria
-- **Verifica**: Usa il pulsante **"Stato Config"** nel pannello web
+### 🔧 Risoluzione Problemi
 
 **Problema: "Configurazione persa dopo riavvio"**
 - **Causa**: La cache in memoria viene cancellata al riavvio
-- **Soluzione**: Usa i **Secrets di HuggingFace** per configurazione permanente
-- **Configurazione**: Imposta `PROXY` e `DADDY_PROXY` nei Secrets
-
-**Problema: "Errore di permessi"**
-- **Causa**: Filesystem HuggingFace non scrivibile
-- **Soluzione**: Il sistema rileva automaticamente l'ambiente e usa la cache in memoria
-- **Verifica**: Controlla i log per il messaggio "Ambiente HuggingFace rilevato"
+- **Soluzione**: Esporta la configurazione e importala dopo il riavvio
 
 ---
 
@@ -222,6 +213,37 @@ docker run -d -p 7860:7860 \
   -e ADMIN_PASSWORD=tua_password_sicura \
   -e SECRET_KEY=chiave_segreta_generata \
   --name tvproxy tvproxy
+```
+
+**🐳 Docker con Sincronizzazione (Raccomandato)**
+```bash
+# Usa il volume per persistenza dei file di sincronizzazione
+docker run -d -p 7860:7860 \
+  -e ADMIN_PASSWORD=tua_password_sicura \
+  -e SECRET_KEY=chiave_segreta_generata \
+  -v tvproxy_sync:/tmp \
+  --name tvproxy tvproxy
+```
+
+**🐳 Docker per HuggingFace**
+```bash
+# Usa DockerfileHF per HuggingFace Spaces
+docker build -f DockerfileHF -t tvproxy-hf .
+```
+
+**🐳 Docker Compose (Raccomandato)**
+```bash
+# Modifica le credenziali in docker-compose.yml
+nano docker-compose.yml
+
+# Avvia con docker-compose
+docker-compose up -d
+
+# Visualizza i log
+docker-compose logs -f
+
+# Ferma il servizio
+docker-compose down
 ```
 
 ### 🐧 Termux (Android)
@@ -277,6 +299,7 @@ gunicorn app:app -w 4 --worker-class gevent --worker-connections 100 \
 - **💾 Gestione Memoria**: Monitoraggio RAM e pulizia automatica
 - **👥 Tracking Client**: Statistiche sui client connessi e loro utilizzo
 - **🔧 Configurazione Dinamica**: Modifica impostazioni senza riavvio
+- **🔑 Debug Sessioni**: Monitoraggio sincronizzazione sessioni tra workers
 
 ---
 
@@ -287,13 +310,13 @@ Sostituisci `<server-ip>` con l'indirizzo del tuo server.
 ### 💡 Liste M3U
 
 ```
-http://<server-ip>:7860/proxy?url=<URL_LISTA_M3U>
+http://<server-ip>/proxy?url=<URL_LISTA_M3U>
 ```
 
 ### 📺 Flussi M3U8 con headers
 
 ```
-http://<server-ip>:7860/proxy/m3u?url=<URL_FLUSSO_M3U8>&h_<HEADER>=<VALORE>
+http://<server-ip>/proxy/m3u?url=<URL_FLUSSO_M3U8>&h_<HEADER>=<VALORE>
 ```
 
 Esempio:
@@ -304,13 +327,13 @@ Esempio:
 ### 🔍 Risoluzione DaddyLive 2025
 
 ```
-http://<server-ip>:7860/proxy/resolve?url=<URL_DADDYLIVE>
+http://<server-ip>/proxy/resolve?url=<URL_DADDYLIVE>
 ```
 
 ### 🌟 Risoluzione Vavoo
 
 ```
-http://<server-ip>:7860/proxy/vavoo?url=<URL_VAVOO>
+http://<server-ip>/proxy/vavoo?url=<URL_VAVOO>
 ```
 
 Esempio:
@@ -321,13 +344,13 @@ Esempio:
 ### ⚡ Pre-buffering Manuale
 
 ```
-http://<server-ip>:7860/proxy/prebuffer?m3u8_url=<URL_M3U8>&stream_id=<ID_STREAM>
+http://<server-ip>/proxy/prebuffer?m3u8_url=<URL_M3U8>&stream_id=<ID_STREAM>
 ```
 
 ### 🔑 Chiavi AES-128
 
 ```
-http://<server-ip>:7860/proxy/key?url=<URL_CHIAVE>&h_<HEADER>=<VALORE>
+http://<server-ip>/proxy/key?url=<URL_CHIAVE>&h_<HEADER>=<VALORE>
 ```
 
 ---
@@ -437,7 +460,7 @@ Il sistema include risoluzione automatica per link Vavoo:
 ### Esempio
 
 ```
-http://<server-ip>:7860/proxy/vavoo?url=https://vavoo.to/vavoo-iptv/play/277580225585f503fbfc87
+http://<server-ip>/proxy/vavoo?url=https://vavoo.to/vavoo-iptv/play/277580225585f503fbfc87
 ```
 
 ### Caratteristiche
