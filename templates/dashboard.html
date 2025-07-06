@@ -596,6 +596,46 @@
             </div>
         </div>
 
+        <!-- Sezione Sincronizzazione -->
+        <div class="sync-section" style="margin: 2rem 0;">
+            <h3><i class="fas fa-sync-alt"></i> Sincronizzazione Workers</h3>
+            <div class="row" style="margin: 0;">
+                <!-- Card per Sincronizzazione Sessioni -->
+                <div class="col-md-6" style="padding: 0 10px;">
+                    <div class="card" style="margin-bottom: 1rem;">
+                        <div class="card-header">
+                            <h5><i class="fas fa-users"></i> Sincronizzazione Sessioni</h5>
+                        </div>
+                        <div class="card-body">
+                            <p><strong>Stato:</strong> <span id="sessionSyncStatus">Caricamento...</span></p>
+                            <p><strong>Sessioni Attive:</strong> <span id="activeSessions">-</span></p>
+                            <p><strong>Ultimo Aggiornamento:</strong> <span id="sessionLastUpdate">-</span></p>
+                            <button class="btn btn-sm btn-info" onclick="checkSessionSync()">
+                                <i class="fas fa-sync"></i> Verifica
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Card per Sincronizzazione Proxy -->
+                <div class="col-md-6" style="padding: 0 10px;">
+                    <div class="card" style="margin-bottom: 1rem;">
+                        <div class="card-header">
+                            <h5><i class="fas fa-network-wired"></i> Sincronizzazione Proxy</h5>
+                        </div>
+                        <div class="card-body">
+                            <p><strong>Stato:</strong> <span id="proxySyncStatus">Caricamento...</span></p>
+                            <p><strong>Proxy Locali:</strong> <span id="localProxies">-</span></p>
+                            <p><strong>Ultimo Ricaricamento:</strong> <span id="proxyLastReload">-</span></p>
+                            <button class="btn btn-sm btn-info" onclick="checkProxySync()">
+                                <i class="fas fa-sync"></i> Verifica
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="endpoints-section">
             <h3><i class="fas fa-link"></i> Endpoints Disponibili</h3>
             <div class="endpoints-grid">
@@ -868,12 +908,60 @@
             e.preventDefault();
         });
 
+        // Funzioni per la sincronizzazione
+        function checkSessionSync() {
+            fetch('/admin/debug/session-sync-status')
+            .then(response => response.json())
+            .then(result => {
+                if (result.status === 'success') {
+                    const status = result.sync.enabled ? 'Abilitata' : 'Disabilitata';
+                    const sessions = result.global_sessions ? result.global_sessions.active_sessions : 0;
+                    const lastUpdate = result.sync.file_exists ? `${Math.round(result.sync.file_age_seconds)}s fa` : 'Mai';
+                    
+                    document.getElementById('sessionSyncStatus').textContent = status;
+                    document.getElementById('activeSessions').textContent = sessions;
+                    document.getElementById('sessionLastUpdate').textContent = lastUpdate;
+                }
+            })
+            .catch(error => {
+                console.error('Errore nel controllo sessioni:', error);
+                document.getElementById('sessionSyncStatus').textContent = 'Errore';
+            });
+        }
+
+        function checkProxySync() {
+            fetch('/admin/debug/proxy-sync-status')
+            .then(response => response.json())
+            .then(result => {
+                if (result.status === 'success') {
+                    const status = result.sync.enabled ? 'Abilitata' : 'Disabilitata';
+                    const proxies = `${result.local_proxies.total_proxies} normali, ${result.local_proxies.total_daddy_proxies} DaddyLive`;
+                    const lastReload = result.proxy_sync_data && !result.proxy_sync_data.error ? 
+                        `${Math.round(result.proxy_sync_data.request_age_seconds)}s fa` : 'Mai';
+                    
+                    document.getElementById('proxySyncStatus').textContent = status;
+                    document.getElementById('localProxies').textContent = proxies;
+                    document.getElementById('proxyLastReload').textContent = lastReload;
+                }
+            })
+            .catch(error => {
+                console.error('Errore nel controllo proxy:', error);
+                document.getElementById('proxySyncStatus').textContent = 'Errore';
+            });
+        }
+
         // Inizializzazione
         document.addEventListener('DOMContentLoaded', function() {
             console.log('Dashboard moderna inizializzata');
             // Set initial RAM progress bar width
             const ramProgress = document.getElementById('ramProgress');
             ramProgress.style.width = '{{ stats.ram_usage }}%';
+            
+            // Controlla la sincronizzazione dopo 2 secondi
+            setTimeout(() => {
+                checkSessionSync();
+                checkProxySync();
+            }, 2000);
         });
     </script>
     <script>
