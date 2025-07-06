@@ -108,9 +108,22 @@ class VavooResolver:
         try:
             resp = self.session.post("https://www.vavoo.tv/api/app/ping", json=data, headers=headers, timeout=10)
             resp.raise_for_status()
-            return resp.json().get("addonSig")
+            result = resp.json()
+            addon_sig = result.get("addonSig")
+            if addon_sig:
+                app.logger.info("Signature Vavoo ottenuta con successo")
+                return addon_sig
+            else:
+                app.logger.warning("Signature Vavoo non trovata nella risposta")
+                return None
+        except requests.RequestException as e:
+            app.logger.error(f"Errore di rete nel recupero della signature Vavoo: {e}")
+            return None
+        except json.JSONDecodeError as e:
+            app.logger.error(f"Errore nel parsing JSON della risposta Vavoo: {e}")
+            return None
         except Exception as e:
-            app.logger.error(f"Errore nel recupero della signature Vavoo: {e}")
+            app.logger.error(f"Errore generico nel recupero della signature Vavoo: {e}")
             return None
 
     def resolve_vavoo_link(self, link, verbose=False):
@@ -174,19 +187,24 @@ vavoo_resolver = VavooResolver()
 # --- Configurazione Cache ---
 def setup_all_caches():
     global M3U8_CACHE, TS_CACHE, KEY_CACHE
-    config = config_manager.load_config()
-    if config.get('CACHE_ENABLED', True):
-        M3U8_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_M3U8'], ttl=config['CACHE_TTL_M3U8'])
-        TS_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_TS'], ttl=config['CACHE_TTL_TS'])
-        KEY_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_KEY'], ttl=config['CACHE_TTL_KEY'])
-        app.logger.info("Cache ABILITATA su tutte le risorse.")
-    else:
-        M3U8_CACHE = {}
-        TS_CACHE = {}
-        KEY_CACHE = {}
-        app.logger.warning("TUTTE LE CACHE DISABILITATE: stream diretto attivo.")
-
-# Sistema di statistiche (senza WebSocket) - spostato dopo la definizione di pre_buffer_manager
+    try:
+        config = config_manager.load_config()
+        if config.get('CACHE_ENABLED', True):
+            M3U8_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_M3U8'], ttl=config['CACHE_TTL_M3U8'])
+            TS_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_TS'], ttl=config['CACHE_TTL_TS'])
+            KEY_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_KEY'], ttl=config['CACHE_TTL_KEY'])
+            app.logger.info("Cache ABILITATA su tutte le risorse.")
+        else:
+            M3U8_CACHE = {}
+            TS_CACHE = {}
+            KEY_CACHE = {}
+            app.logger.warning("TUTTE LE CACHE DISABILITATE: stream diretto attivo.")
+    except NameError:
+        # Fallback se config_manager non è ancora disponibile
+        M3U8_CACHE = TTLCache(maxsize=100, ttl=300)
+        TS_CACHE = TTLCache(maxsize=1000, ttl=60)
+        KEY_CACHE = TTLCache(maxsize=50, ttl=3600)
+        app.logger.info("Cache inizializzata con valori di fallback.")
 
 # --- Configurazione Generale ---
 VERIFY_SSL = os.environ.get('VERIFY_SSL', 'false').lower() not in ('false', '0', 'no')
@@ -198,6 +216,8 @@ if not VERIFY_SSL:
 # Timeout aumentato per gestire meglio i segmenti TS di grandi dimensioni
 REQUEST_TIMEOUT = int(os.environ.get('REQUEST_TIMEOUT', 30))
 print(f"Timeout per le richieste impostato a {REQUEST_TIMEOUT} secondi.")
+
+# Sistema di statistiche (senza WebSocket) - spostato dopo la definizione di pre_buffer_manager
 
 # Configurazioni Keep-Alive
 KEEP_ALIVE_TIMEOUT = int(os.environ.get('KEEP_ALIVE_TIMEOUT', 300))  # 5 minuti
@@ -262,7 +282,7 @@ class ConfigManager:
         # Carica dal file se esiste (seconda priorità)
         if os.path.exists(self.config_file):
             try:
-                with open(self.config_file, 'r') as f:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
                     file_config = json.load(f)
                     config.update(file_config)
             except Exception as e:
@@ -309,7 +329,7 @@ class ConfigManager:
     def save_config(self, config):
         """Salva la configurazione nel file JSON"""
         try:
-            with open(self.config_file, 'w') as f:
+            with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4)
             return True
         except Exception as e:
@@ -1002,26 +1022,17 @@ def create_robust_session():
         'Keep-Alive': f'timeout={KEEP_ALIVE_TIMEOUT}, max={MAX_KEEP_ALIVE_REQUESTS}'
     })
     
+    # Configurazione retry automatico
     retry_strategy = Retry(
         total=3,
-        read=2,
-        connect=2,
         backoff_factor=1,
         status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["HEAD", "GET", "OPTIONS"]
     )
-    
-    adapter = HTTPAdapter(
-        max_retries=retry_strategy,
-        pool_connections=POOL_CONNECTIONS,
-        pool_maxsize=POOL_MAXSIZE,
-        pool_block=False
-    )
-    
+    adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=POOL_CONNECTIONS, pool_maxsize=POOL_MAXSIZE)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     
-    return session
+
 
 def get_persistent_session(proxy_url=None):
     """Ottiene una sessione persistente dal pool o ne crea una nuova"""
@@ -1033,6 +1044,10 @@ def get_persistent_session(proxy_url=None):
     with SESSION_LOCK:
         if pool_key not in SESSION_POOL:
             session = create_robust_session()
+            
+            if session is None:
+                app.logger.error(f"Impossibile creare sessione per: {pool_key}")
+                return None
             
             # Configura proxy se fornito
             if proxy_url:
@@ -1046,6 +1061,10 @@ def get_persistent_session(proxy_url=None):
 def make_persistent_request(url, headers=None, timeout=None, proxy_url=None, **kwargs):
     """Effettua una richiesta usando connessioni persistenti"""
     session = get_persistent_session(proxy_url)
+    
+    if session is None:
+        app.logger.error("Impossibile ottenere sessione persistente")
+        raise Exception("Impossibile ottenere sessione persistente")
     
     # Headers per keep-alive
     request_headers = {
@@ -1081,9 +1100,6 @@ def get_dynamic_timeout(url, base_timeout=REQUEST_TIMEOUT):
         return base_timeout * 1.5  # Timeout aumentato per playlist
     else:
         return base_timeout
-
-setup_proxies()
-setup_all_caches()
 
 # --- Dynamic DaddyLive URL Fetcher ---
 DADDYLIVE_BASE_URL = None
@@ -2363,7 +2379,7 @@ config_manager.apply_config_to_app(saved_config)
 pre_buffer_manager.update_config()
 app.logger.info("Configurazione pre-buffer inizializzata con successo")
 
-# Inizializza le cache
+# Inizializza le cache e i proxy
 setup_all_caches()
 setup_proxies()
 
