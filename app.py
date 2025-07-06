@@ -377,31 +377,9 @@ def login_required(f):
         if not check_ip_allowed():
             return "Accesso negato: IP non autorizzato", 403
         
-        # Controlla prima la sessione locale
+        # Controlla solo la sessione locale
         if 'logged_in' in session and session['logged_in']:
             return f(*args, **kwargs)
-        
-        # Se non c'è sessione locale e la sincronizzazione è attiva, controlla le sessioni globali
-        if config_manager._use_global_sync:
-            try:
-                global_sessions = load_sessions_from_global()
-                current_time = time.time()
-                
-                # Cerca una sessione valida (non scaduta)
-                for session_id, session_data in global_sessions.items():
-                    if (session_data.get('logged_in') and 
-                        session_data.get('worker_id') != os.getpid() and
-                        current_time - session_data.get('last_activity', 0) <= 300):  # 5 minuti
-                        
-                        # Applica la sessione globale alla sessione locale
-                        session['logged_in'] = True
-                        session['username'] = session_data.get('username', 'unknown')
-                        session['_id'] = session_id
-                        app.logger.debug(f"Sessione sincronizzata da worker {session_data.get('worker_id')} per endpoint {request.endpoint}")
-                        return f(*args, **kwargs)
-                        
-            except Exception as e:
-                app.logger.warning(f"Errore nel controllo sessioni globali: {e}")
         
         # Se non c'è sessione valida, redirect al login
         return redirect(url_for('login'))
@@ -2191,7 +2169,7 @@ def sync_sessions_thread():
             time.sleep(5)  # Controlla ogni 5 secondi invece di 30
             
             if config_manager._use_global_sync:
-                # Salva le sessioni locali
+                # Salva le sessioni locali (senza accesso diretto alla sessione Flask)
                 save_sessions_to_global()
                 
                 # Carica e applica le sessioni globali
@@ -2207,17 +2185,18 @@ def sync_sessions_thread():
                 for session_id in expired_sessions:
                     del global_sessions[session_id]
                 
-                # Se ci sono sessioni globali valide, aggiorna la sessione locale
-                if global_sessions and 'logged_in' not in session:
-                    # Prendi la prima sessione valida
-                    for session_id, session_data in global_sessions.items():
-                        if session_data.get('logged_in') and session_data.get('worker_id') != os.getpid():
-                            # Applica la sessione globale alla sessione locale
-                            session['logged_in'] = True
-                            session['username'] = session_data.get('username', 'unknown')
-                            session['_id'] = session_id
-                            app.logger.debug(f"Sessione sincronizzata da worker {session_data.get('worker_id')}")
-                            break
+                # Salva le sessioni pulite
+                if expired_sessions:
+                    try:
+                        with SESSION_SYNC_LOCK:
+                            with open(SESSION_SYNC_FILE, 'w') as f:
+                                json.dump({
+                                    'sessions': global_sessions,
+                                    'worker_id': os.getpid(),
+                                    'timestamp': current_time
+                                }, f, indent=4)
+                    except Exception as e:
+                        app.logger.warning(f"Errore nel salvataggio sessioni pulite: {e}")
                 
                 # Controlla se è stata richiesta una ricaricamento proxy (più frequente)
                 check_proxy_reload_request()
@@ -3163,12 +3142,7 @@ def login():
             session['username'] = username
             session['_id'] = str(id(session))  # ID univoco per la sessione
             
-            # Sincronizza la sessione con tutti i workers
-            if config_manager._use_global_sync:
-                save_sessions_to_global()
-                app.logger.info(f"Login riuscito per utente: {username} - Sessione sincronizzata su tutti i workers")
-            else:
-                app.logger.info(f"Login riuscito per utente: {username}")
+            app.logger.info(f"Login riuscito per utente: {username}")
             
             # Traccia la sessione se client_tracker è disponibile
             try:
@@ -3366,27 +3340,7 @@ def logout():
     session.pop('username', None)
     session.pop('_id', None)
     
-    # Rimuovi la sessione dal file globale se la sincronizzazione è attiva
-    if config_manager._use_global_sync and session_id:
-        try:
-            global_sessions = load_sessions_from_global()
-            if session_id in global_sessions:
-                del global_sessions[session_id]
-                with SESSION_SYNC_LOCK:
-                    with open(SESSION_SYNC_FILE, 'w') as f:
-                        json.dump({
-                            'sessions': global_sessions,
-                            'worker_id': os.getpid(),
-                            'timestamp': time.time()
-                        }, f, indent=4)
-                app.logger.info(f"Logout per utente: {username} - Sessione rimossa da tutti i workers")
-            else:
-                app.logger.info(f"Logout per utente: {username}")
-        except Exception as e:
-            app.logger.warning(f"Errore nella rimozione sessione globale: {e}")
-            app.logger.info(f"Logout per utente: {username}")
-    else:
-        app.logger.info(f"Logout per utente: {username}")
+    app.logger.info(f"Logout per utente: {username}")
     
     return redirect(url_for('index'))
 
@@ -6236,17 +6190,16 @@ def save_sessions_to_global():
         active_sessions = {}
         current_time = time.time()
         
-        # Per ora, salviamo solo le sessioni di login (logged_in=True)
-        # In futuro potremmo estendere per altre informazioni di sessione
-        if 'logged_in' in session and session['logged_in']:
-            session_id = session.get('_id', str(id(session)))
-            active_sessions[session_id] = {
-                'username': session.get('username', 'unknown'),
-                'logged_in': True,
-                'created_at': current_time,
-                'last_activity': current_time,
-                'worker_id': os.getpid()
-            }
+        # Per ora, salviamo solo un heartbeat del worker
+        # Le sessioni reali verranno gestite tramite login/logout espliciti
+        worker_session_id = f"worker_{os.getpid()}"
+        active_sessions[worker_session_id] = {
+            'type': 'worker_heartbeat',
+            'worker_id': os.getpid(),
+            'created_at': current_time,
+            'last_activity': current_time,
+            'status': 'active'
+        }
         
         # Salva nel file globale
         with SESSION_SYNC_LOCK:
