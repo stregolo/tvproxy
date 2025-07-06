@@ -332,6 +332,14 @@
                 <h3>{{ stats.prebuffer_info.buffered_segments }}</h3>
                 <p><i class="fas fa-film"></i> Segmenti Buffati</p>
             </div>
+            <div class="stat-mini">
+                <h3>{{ stats.active_clients or 0 }}</h3>
+                <p><i class="fas fa-users"></i> Client Attivi</p>
+            </div>
+            <div class="stat-mini">
+                <h3>{{ stats.total_requests or 0 }}</h3>
+                <p><i class="fas fa-exchange-alt"></i> Richieste Totali</p>
+            </div>
         </div>
         
         <div class="cta-buttons">
