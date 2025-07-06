@@ -630,6 +630,9 @@
                             <button class="btn btn-sm btn-info" onclick="checkProxySync()">
                                 <i class="fas fa-sync"></i> Verifica
                             </button>
+                            <button class="btn btn-sm btn-warning" onclick="forceProxySyncNow()">
+                                <i class="fas fa-bolt"></i> Forza Sync
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -950,6 +953,45 @@
             });
         }
 
+        function forceProxySyncNow() {
+            const btn = event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Forzando...';
+            btn.disabled = true;
+            
+            fetch('/admin/debug/force-proxy-sync', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                
+                if (result.status === 'success') {
+                    // Aggiorna immediatamente i dati del card
+                    if (result.details && result.details.local_proxies) {
+                        const proxies = `${result.details.local_proxies.total_proxies} normali, ${result.details.local_proxies.total_daddy_proxies} DaddyLive`;
+                        document.getElementById('localProxies').textContent = proxies;
+                        document.getElementById('proxyLastReload').textContent = 'Ora';
+                    }
+                    
+                    // Mostra notifica di successo
+                    showToast('✅ Sincronizzazione proxy forzata con successo!');
+                } else {
+                    showToast('❌ Errore nella sincronizzazione proxy: ' + result.message);
+                }
+            })
+            .catch(error => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                showToast('❌ Errore di connessione: ' + error.message);
+            });
+        }
+
         // Inizializzazione
         document.addEventListener('DOMContentLoaded', function() {
             console.log('Dashboard moderna inizializzata');
@@ -962,6 +1004,12 @@
                 checkSessionSync();
                 checkProxySync();
             }, 2000);
+            
+            // Aggiorna la sincronizzazione ogni 10 secondi
+            setInterval(() => {
+                checkSessionSync();
+                checkProxySync();
+            }, 10000);
         });
     </script>
     <script>
