@@ -209,8 +209,6 @@ if not VERIFY_SSL:
 REQUEST_TIMEOUT = int(os.environ.get('REQUEST_TIMEOUT', 30))
 print(f"Timeout per le richieste impostato a {REQUEST_TIMEOUT} secondi.")
 
-# Sistema di statistiche (senza WebSocket) - spostato dopo la definizione di pre_buffer_manager
-
 # Configurazioni Keep-Alive
 KEEP_ALIVE_TIMEOUT = int(os.environ.get('KEEP_ALIVE_TIMEOUT', 300))  # 5 minuti
 MAX_KEEP_ALIVE_REQUESTS = int(os.environ.get('MAX_KEEP_ALIVE_REQUESTS', 1000))
@@ -812,10 +810,6 @@ def setup_proxies():
             proxies_found.append(final_proxy_url)
         
         app.logger.info(f"Trovati {len(proxies_found)} proxy generali. Verranno usati a rotazione per ogni richiesta.")
-        
-        # Avviso per SOCKS5
-        if any('socks5' in proxy for proxy in proxies_found):
-            app.logger.info("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
 
     PROXY_LIST = proxies_found
 
@@ -858,10 +852,6 @@ def get_daddy_proxy_list():
             daddy_proxies.append(final_proxy_url)
         
         app.logger.info(f"Trovati {len(daddy_proxies)} proxy DaddyLive. Verranno usati a rotazione per contenuti DaddyLive.")
-        
-        # Avviso per SOCKS5
-        if any('socks5' in proxy for proxy in daddy_proxies):
-            app.logger.info("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
     
     return daddy_proxies
 
@@ -1049,7 +1039,6 @@ def get_daddylive_base_url():
 
 get_daddylive_base_url()
 
-# [Mantieni tutte le funzioni esistenti per il processing DaddyLive...]
 def detect_m3u_type(content):
     """Rileva se è un M3U (lista IPTV) o un M3U8 (flusso HLS)"""
     if "#EXTM3U" in content and "#EXTINF" in content:
