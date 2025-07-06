@@ -42,6 +42,17 @@ SESSION_POOL = {}
 PROXY_BLACKLIST = {}
 DADDY_PROXY_BLACKLIST = {}  # Blacklist separata per proxy DaddyLive
 system_stats = {}
+
+# Cache per statistiche aggregate (evita salti)
+AGGREGATED_STATS_CACHE = {}
+AGGREGATED_STATS_CACHE_TIMESTAMP = 0
+AGGREGATED_STATS_CACHE_TTL = 5  # Cache per 5 secondi
+
+# Cache per statistiche client aggregate
+AGGREGATED_CLIENT_STATS_CACHE = {}
+AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP = 0
+AGGREGATED_CLIENT_STATS_CACHE_TTL = 5  # Cache per 5 secondi
+
 DADDYLIVE_BASE_URL = None
 LAST_FETCH_TIME = 0
 FETCH_INTERVAL = 3600
@@ -69,7 +80,14 @@ PROXY_SYNC_LOCK = Lock()
 # --- Funzioni di utilità ---
 def get_system_stats():
     """Ottiene le statistiche di sistema in tempo reale (sincronizzate tra workers)"""
-    global system_stats
+    global system_stats, AGGREGATED_STATS_CACHE, AGGREGATED_STATS_CACHE_TIMESTAMP
+    
+    # Controlla se abbiamo statistiche in cache valide
+    current_time = time.time()
+    if (AGGREGATED_STATS_CACHE and 
+        current_time - AGGREGATED_STATS_CACHE_TIMESTAMP < AGGREGATED_STATS_CACHE_TTL):
+        app.logger.debug("Usando statistiche sistema dalla cache")
+        return AGGREGATED_STATS_CACHE
     
     # Ottieni statistiche locali
     local_stats = {}
@@ -117,11 +135,24 @@ def get_system_stats():
             if merged_stats:
                 system_stats.update(merged_stats)
                 app.logger.debug(f"Statistiche sistema sincronizzate: {len(merged_stats)} campi")
+                
+                # Aggiorna la cache
+                AGGREGATED_STATS_CACHE = system_stats.copy()
+                AGGREGATED_STATS_CACHE_TIMESTAMP = current_time
             else:
                 app.logger.debug("Nessuna statistica sistema globale trovata, uso solo locali")
+                # Aggiorna la cache con statistiche locali
+                AGGREGATED_STATS_CACHE = system_stats.copy()
+                AGGREGATED_STATS_CACHE_TIMESTAMP = current_time
         except Exception as e:
             app.logger.error(f"Errore nella sincronizzazione statistiche sistema: {e}")
             # In caso di errore, usa solo le statistiche locali
+            AGGREGATED_STATS_CACHE = system_stats.copy()
+            AGGREGATED_STATS_CACHE_TIMESTAMP = current_time
+    else:
+        # Sincronizzazione non abilitata, usa solo statistiche locali
+        AGGREGATED_STATS_CACHE = system_stats.copy()
+        AGGREGATED_STATS_CACHE_TIMESTAMP = current_time
     
     return system_stats
 
@@ -732,7 +763,16 @@ def load_client_stats_from_global():
 
 def merge_client_stats_from_all_workers():
     """Combina le statistiche client da tutti i workers"""
+    global AGGREGATED_CLIENT_STATS_CACHE, AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP
+    
     try:
+        # Controlla se abbiamo statistiche in cache valide
+        current_time = time.time()
+        if (AGGREGATED_CLIENT_STATS_CACHE and 
+            current_time - AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP < AGGREGATED_CLIENT_STATS_CACHE_TTL):
+            app.logger.debug("Usando statistiche client dalla cache")
+            return AGGREGATED_CLIENT_STATS_CACHE
+        
         # Verifica che client_tracker sia disponibile
         if 'client_tracker' not in globals():
             app.logger.warning("Client tracker non disponibile per merge statistiche")
@@ -743,16 +783,22 @@ def merge_client_stats_from_all_workers():
         
         # Se non usiamo sincronizzazione globale, restituisci solo le statistiche locali
         if not config_manager._use_global_sync:
+            AGGREGATED_CLIENT_STATS_CACHE = local_stats
+            AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP = current_time
             return local_stats
         
         # Carica statistiche globali
         global_data = load_client_stats_from_global()
         if not global_data:
+            AGGREGATED_CLIENT_STATS_CACHE = local_stats
+            AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP = current_time
             return local_stats
         
         # Ottieni statistiche di tutti i workers
         all_workers_stats = global_data.get('workers', {})
         if not all_workers_stats:
+            AGGREGATED_CLIENT_STATS_CACHE = local_stats
+            AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP = current_time
             return local_stats
         
         # Combina le statistiche di tutti i workers
@@ -802,11 +848,22 @@ def merge_client_stats_from_all_workers():
             'sync_enabled': True
         }
         
+        # Aggiorna la cache
+        AGGREGATED_CLIENT_STATS_CACHE = merged_stats
+        AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP = current_time
+        
+        app.logger.debug(f"Statistiche client aggregate: {len(all_clients)} client da {len(all_workers_stats)} workers")
         return merged_stats
         
     except Exception as e:
         app.logger.error(f"Errore nella fusione statistiche client: {e}")
-        return local_stats if 'client_tracker' in globals() else None
+        # In caso di errore, usa statistiche locali e aggiorna cache
+        if 'client_tracker' in globals():
+            local_stats = client_tracker.get_client_stats()
+            AGGREGATED_CLIENT_STATS_CACHE = local_stats
+            AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP = current_time
+            return local_stats
+        return None
 
 def client_stats_sync_thread():
     """Thread per sincronizzare le statistiche client tra workers"""
@@ -6706,6 +6763,79 @@ def debug_sync_paths():
         
     except Exception as e:
         app.logger.error(f"Errore nel debug percorsi sincronizzazione: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore: {str(e)}"
+        }), 500
+
+@app.route('/admin/debug/stats-cache-status')
+@login_required
+def stats_cache_status():
+    """Mostra lo stato della cache delle statistiche"""
+    global AGGREGATED_STATS_CACHE, AGGREGATED_STATS_CACHE_TIMESTAMP
+    global AGGREGATED_CLIENT_STATS_CACHE, AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP
+    
+    try:
+        current_time = time.time()
+        
+        cache_status = {
+            'system_stats_cache': {
+                'has_data': bool(AGGREGATED_STATS_CACHE),
+                'age_seconds': current_time - AGGREGATED_STATS_CACHE_TIMESTAMP if AGGREGATED_STATS_CACHE_TIMESTAMP > 0 else None,
+                'is_valid': (current_time - AGGREGATED_STATS_CACHE_TIMESTAMP < AGGREGATED_STATS_CACHE_TTL) if AGGREGATED_STATS_CACHE_TIMESTAMP > 0 else False,
+                'data_keys': list(AGGREGATED_STATS_CACHE.keys()) if AGGREGATED_STATS_CACHE else []
+            },
+            'client_stats_cache': {
+                'has_data': bool(AGGREGATED_CLIENT_STATS_CACHE),
+                'age_seconds': current_time - AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP if AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP > 0 else None,
+                'is_valid': (current_time - AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP < AGGREGATED_CLIENT_STATS_CACHE_TTL) if AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP > 0 else False,
+                'data_keys': list(AGGREGATED_CLIENT_STATS_CACHE.keys()) if AGGREGATED_CLIENT_STATS_CACHE else []
+            },
+            'cache_ttl': {
+                'system_stats': AGGREGATED_STATS_CACHE_TTL,
+                'client_stats': AGGREGATED_CLIENT_STATS_CACHE_TTL
+            },
+            'current_time': current_time,
+            'worker_id': os.getpid()
+        }
+        
+        return jsonify({
+            "status": "success",
+            "cache_status": cache_status
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel controllo stato cache: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore: {str(e)}"
+        }), 500
+
+@app.route('/admin/debug/clear-stats-cache', methods=['POST'])
+@login_required
+def clear_stats_cache():
+    """Pulisce la cache delle statistiche per forzare un refresh"""
+    global AGGREGATED_STATS_CACHE, AGGREGATED_STATS_CACHE_TIMESTAMP
+    global AGGREGATED_CLIENT_STATS_CACHE, AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP
+    
+    try:
+        # Pulisci le cache
+        AGGREGATED_STATS_CACHE = {}
+        AGGREGATED_STATS_CACHE_TIMESTAMP = 0
+        AGGREGATED_CLIENT_STATS_CACHE = {}
+        AGGREGATED_CLIENT_STATS_CACHE_TIMESTAMP = 0
+        
+        app.logger.info("Cache statistiche pulita")
+        
+        return jsonify({
+            "status": "success",
+            "message": "Cache statistiche pulita con successo",
+            "worker_id": os.getpid(),
+            "timestamp": time.time()
+        })
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella pulizia cache statistiche: {e}")
         return jsonify({
             "status": "error",
             "message": f"Errore: {str(e)}"
