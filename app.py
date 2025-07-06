@@ -51,6 +51,10 @@ SESSION_SYNC_FILE = '/tmp/tvproxy_sessions.json'
 SESSION_SYNC_LOCK = Lock()
 SESSION_SYNC_INTERVAL = 30  # Sincronizzazione ogni 30 secondi
 
+# --- Sincronizzazione Proxy tra Workers ---
+PROXY_SYNC_FILE = '/tmp/tvproxy_proxy_sync.json'
+PROXY_SYNC_LOCK = Lock()
+
 # --- Funzioni di utilità ---
 def get_system_stats():
     """Ottiene le statistiche di sistema in tempo reale (sincronizzate tra workers)"""
@@ -2118,6 +2122,9 @@ def sync_sessions_thread():
                             session['_id'] = session_id
                             app.logger.debug(f"Sessione sincronizzata da worker {session_data.get('worker_id')}")
                             break
+                
+                # Controlla se è stata richiesta una ricaricamento proxy
+                check_proxy_reload_request()
                             
         except Exception as e:
             app.logger.error(f"Errore nel thread sincronizzazione sessioni: {e}")
@@ -3308,6 +3315,20 @@ def save_config():
                     'sync_message': "Sincronizzazione non necessaria (ambiente single-worker)"
                 }
                 app.logger.info(f"Configurazione salvata")
+            
+            # Attiva il ricaricamento proxy su tutti i workers
+            if config_manager._use_global_sync:
+                proxy_reload_result = trigger_proxy_reload()
+                sync_info['proxy_reload'] = {
+                    'triggered': proxy_reload_result,
+                    'message': f"Ricaricamento proxy su tutti i workers: {'OK' if proxy_reload_result else 'FALLITO'}"
+                }
+                app.logger.info(f"Ricaricamento proxy attivato su tutti i workers: {'OK' if proxy_reload_result else 'FALLITO'}")
+            else:
+                sync_info['proxy_reload'] = {
+                    'triggered': False,
+                    'message': "Ricaricamento proxy non necessario (ambiente single-worker)"
+                }
             
             # Log delle statistiche proxy aggiornate
             available_proxies = get_available_proxies()
@@ -5827,6 +5848,93 @@ def debug_session_sync_status():
             "message": str(e)
         }), 500
 
+@app.route('/admin/debug/proxy-sync-status')
+@login_required
+def debug_proxy_sync_status():
+    """Debug dello stato della sincronizzazione proxy"""
+    try:
+        # Informazioni sulla sincronizzazione
+        sync_info = {
+            "enabled": config_manager._use_global_sync,
+            "file_exists": os.path.exists(PROXY_SYNC_FILE),
+            "file_size": os.path.getsize(PROXY_SYNC_FILE) if os.path.exists(PROXY_SYNC_FILE) else 0,
+            "file_age_seconds": time.time() - os.path.getmtime(PROXY_SYNC_FILE) if os.path.exists(PROXY_SYNC_FILE) else 0
+        }
+        
+        # Proxy locali
+        local_proxies = {
+            "total_proxies": len(PROXY_LIST),
+            "available_proxies": len(get_available_proxies()),
+            "total_daddy_proxies": len(DADDY_PROXY_LIST),
+            "available_daddy_proxies": len(get_available_daddy_proxies())
+        }
+        
+        # Informazioni di sincronizzazione proxy se disponibili
+        proxy_sync_data = None
+        if sync_info["enabled"] and sync_info["file_exists"]:
+            try:
+                with open(PROXY_SYNC_FILE, 'r') as f:
+                    sync_data = json.load(f)
+                proxy_sync_data = {
+                    "reload_requested": sync_data.get('reload_requested', False),
+                    "request_timestamp": sync_data.get('timestamp', 0),
+                    "request_age_seconds": time.time() - sync_data.get('timestamp', 0),
+                    "worker_id": sync_data.get('worker_id', 'unknown')
+                }
+            except Exception as e:
+                proxy_sync_data = {"error": str(e)}
+        
+        return jsonify({
+            "status": "success",
+            "local_proxies": local_proxies,
+            "sync": sync_info,
+            "proxy_sync_data": proxy_sync_data,
+            "current_worker_id": os.getpid(),
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/admin/debug/force-proxy-sync', methods=['POST'])
+@login_required
+def force_proxy_sync():
+    """Forza il ricaricamento proxy su tutti i workers"""
+    try:
+        if not config_manager._use_global_sync:
+            return jsonify({
+                "status": "error",
+                "message": "Sincronizzazione non abilitata (ambiente single-worker)"
+            }), 400
+        
+        # Attiva il ricaricamento proxy
+        reload_result = trigger_proxy_reload()
+        
+        if reload_result:
+            return jsonify({
+                "status": "success",
+                "message": "Richiesta di ricaricamento proxy inviata a tutti i workers",
+                "details": {
+                    "triggered": True,
+                    "worker_id": os.getpid(),
+                    "timestamp": time.time()
+                }
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Errore nell'invio della richiesta di ricaricamento proxy"
+            }), 500
+            
+    except Exception as e:
+        app.logger.error(f"Errore nel forzare la sincronizzazione proxy: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"Errore: {str(e)}"
+        }), 500
+
 def save_sessions_to_global():
     """Salva le sessioni attive nel file globale per sincronizzazione tra workers"""
     try:
@@ -5885,6 +5993,47 @@ def load_sessions_from_global():
     except Exception as e:
         app.logger.error(f"Errore nel caricamento sessioni: {e}")
         return {}
+
+def trigger_proxy_reload():
+    """Attiva il ricaricamento proxy su tutti i workers"""
+    try:
+        with PROXY_SYNC_LOCK:
+            sync_data = {
+                'reload_requested': True,
+                'timestamp': time.time(),
+                'worker_id': os.getpid()
+            }
+            
+            with open(PROXY_SYNC_FILE, 'w') as f:
+                json.dump(sync_data, f)
+            
+            app.logger.info(f"Richiesta di ricaricamento proxy inviata a tutti i workers")
+            return True
+    except Exception as e:
+        app.logger.error(f"Errore nell'invio richiesta ricaricamento proxy: {e}")
+        return False
+
+def check_proxy_reload_request():
+    """Verifica se è stata richiesta una ricaricamento proxy"""
+    try:
+        if not os.path.exists(PROXY_SYNC_FILE):
+            return False
+        
+        with PROXY_SYNC_LOCK:
+            with open(PROXY_SYNC_FILE, 'r') as f:
+                sync_data = json.load(f)
+            
+            # Verifica se la richiesta è recente (ultimi 30 secondi)
+            if time.time() - sync_data.get('timestamp', 0) < 30:
+                if sync_data.get('reload_requested', False):
+                    app.logger.info(f"Richiesta di ricaricamento proxy rilevata, ricarico i proxy...")
+                    setup_proxies()
+                    return True
+            
+            return False
+    except Exception as e:
+        app.logger.error(f"Errore nella verifica richiesta ricaricamento proxy: {e}")
+        return False
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 7860))
