@@ -640,6 +640,12 @@
                 <i class="fas fa-sync-alt"></i> <strong>Sincronizzazione globale attiva</strong> - Tutti i workers condividono la stessa configurazione.
             </div>
             
+            <div class="alert alert-info" id="dockerAlert" style="display: none;">
+                <i class="fas fa-docker"></i> <strong>Ambiente Docker con Workers Multipli Rilevato</strong><br>
+                La configurazione viene sincronizzata automaticamente tra tutti i workers tramite file globale.<br>
+                <i class="fas fa-sync-alt"></i> <strong>Sincronizzazione globale attiva</strong> - Tutti i workers condividono la stessa configurazione.
+            </div>
+            
             <div class="action-box">
                 <h3><i class="fas fa-exclamation-triangle"></i> Azioni di Sistema</h3>
                 <p>Queste azioni possono influenzare il funzionamento del sistema. Utilizzare con cautela.</p>
@@ -731,6 +737,14 @@
                                 global_age: data.config_status.global_age_human,
                                 backup_exists: data.config_status.backup_exists,
                                 backup_age: data.config_status.backup_age_human
+                            });
+                        } else if (data.config_status.is_docker) {
+                            document.getElementById('dockerAlert').style.display = 'block';
+                            
+                            // Log silenzioso delle informazioni di sincronizzazione
+                            console.log('Ambiente Docker rilevato:', {
+                                global_exists: data.config_status.global_exists,
+                                global_age: data.config_status.global_age_human
                             });
                         } else if (data.config_status.use_global_sync) {
                             document.getElementById('gunicornAlert').style.display = 'block';
@@ -957,6 +971,8 @@
                     let env_type = 'Standard';
                     if (status.is_huggingface) {
                         env_type = 'HuggingFace';
+                    } else if (status.is_docker) {
+                        env_type = 'Docker';
                     } else if (status.use_global_sync) {
                         env_type = 'Gunicorn con workers multipli';
                     }
