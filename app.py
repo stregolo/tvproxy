@@ -378,7 +378,7 @@ def setup_all_caches():
         M3U8_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_M3U8'], ttl=config['CACHE_TTL_M3U8'])
         TS_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_TS'], ttl=config['CACHE_TTL_TS'])
         KEY_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_KEY'], ttl=config['CACHE_TTL_KEY'])
-        app.logger.info("Cache ABILITATA su tutte le risorse.")
+        app.logger.debug("Cache ABILITATA su tutte le risorse.")
     else:
         M3U8_CACHE = {}
         TS_CACHE = {}
@@ -1482,7 +1482,7 @@ def broadcast_stats():
 @socketio.on('connect')
 def handle_connect():
     """Gestisce nuove connessioni WebSocket"""
-    app.logger.info("Client connesso")
+    app.logger.debug("Client connesso")
     # Invia immediatamente le statistiche correnti
     stats = get_system_stats()
     
@@ -1551,7 +1551,7 @@ def handle_connect():
 @socketio.on('disconnect')
 def handle_disconnect():
     """Gestisce disconnessioni WebSocket"""
-    app.logger.info("Client disconnesso")
+    app.logger.debug("Client disconnesso")
 
 # --- Configurazione Generale ---
 # Tutte le configurazioni tecniche vengono caricate dinamicamente dalla configurazione web
@@ -1701,7 +1701,7 @@ class ConfigManager:
             if sync_result and self._config_cache:
                 # Applica immediatamente la configurazione globale al nuovo worker
                 self.apply_config_to_app(self._config_cache)
-                app.logger.info("Configurazione globale applicata al nuovo worker")
+                app.logger.debug("Configurazione globale applicata al nuovo worker")
         
     def _detect_huggingface_environment(self):
         """Rileva se siamo in un ambiente HuggingFace"""
@@ -1943,14 +1943,14 @@ class ConfigManager:
                     global_config = json.loads(f.read())
                     config.update(global_config)
                     self._config_cache = global_config.copy()
-                    app.logger.info("Configurazione caricata dal file globale")
+                    app.logger.debug("Configurazione caricata dal file globale")
                     return config
             except Exception as e:
                 app.logger.warning(f"Errore nel caricamento dal file globale: {e}")
         
         # Se abbiamo una cache in memoria (HuggingFace), usala
         if self._config_cache is not None:
-            app.logger.info("Caricamento configurazione dalla cache in memoria")
+            app.logger.debug("Caricamento configurazione dalla cache in memoria")
             config.update(self._config_cache)
         
         # Carica dal file se esiste e non abbiamo cache in memoria
@@ -1962,11 +1962,11 @@ class ConfigManager:
                         app.logger.warning(f"File di configurazione vuoto: {self.config_file}")
                         # Ricrea il file con configurazione di default
                         self.save_config(self.default_config)
-                        app.logger.info(f"File di configurazione ricreato con valori di default")
+                        app.logger.debug(f"File di configurazione ricreato con valori di default")
                     else:
                         file_config = json.loads(content)
                         config.update(file_config)
-                        app.logger.info(f"Configurazione caricata dal file: {self.config_file}")
+                        app.logger.debug(f"Configurazione caricata dal file: {self.config_file}")
             except json.JSONDecodeError as e:
                 app.logger.error(f"Errore JSON nel file di configurazione: {e}")
                 app.logger.info("Ricreo il file di configurazione con valori di default")
@@ -2021,7 +2021,7 @@ class ConfigManager:
                 # Aggiorna la configurazione con i proxy combinati
                 config[key] = ','.join(unique_proxies)
                 
-                app.logger.info(f"Proxy combinati per {key}: {len(unique_proxies)} totali")
+                app.logger.debug(f"Proxy combinati per {key}: {len(unique_proxies)} totali")
         
         # Per le altre variabili, mantieni la priorità alle env vars SOLO per ADMIN_PASSWORD e SECRET_KEY
         for key in config.keys():
@@ -2053,19 +2053,19 @@ class ConfigManager:
                 # Sincronizza con tutti i workers tramite file globale
                 self._save_to_global_config(config)
                 env_name = "HuggingFace" if self._is_huggingface else "Gunicorn con workers multipli"
-                app.logger.info(f"Configurazione salvata in memoria e file globale ({env_name})")
+                app.logger.debug(f"Configurazione salvata in memoria e file globale ({env_name})")
                 return True
             
             # Prova a salvare nel file (ambiente standard)
             with open(self.config_file, 'w') as f:
                 json.dump(config, f, indent=4)
-            app.logger.info(f"Configurazione salvata nel file: {self.config_file}")
+            app.logger.debug(f"Configurazione salvata nel file: {self.config_file}")
             return True
             
         except (IOError, OSError, PermissionError) as e:
             # Se non riusciamo a scrivere il file, usa la cache in memoria
             app.logger.warning(f"Impossibile scrivere il file di configurazione: {e}")
-            app.logger.info("Configurazione salvata in memoria come fallback")
+            app.logger.debug("Configurazione salvata in memoria come fallback")
             self._config_cache = config.copy()
             # Prova comunque a salvare il backup e la sincronizzazione globale
             if self._use_global_sync:
@@ -2177,7 +2177,7 @@ class PreBufferManager:
                 'max_memory_percent': max_memory_percent,  # Max RAM percent
                 'emergency_cleanup_threshold': emergency_threshold  # Cleanup se RAM > threshold%
             }
-            app.logger.info(f"Configurazione pre-buffer aggiornata: {self.pre_buffer_config}")
+            app.logger.debug(f"Configurazione pre-buffer aggiornata: {self.pre_buffer_config}")
         except Exception as e:
             app.logger.error(f"Errore nell'aggiornamento configurazione pre-buffer: {e}")
             # Configurazione di fallback
@@ -2797,7 +2797,7 @@ def setup_proxies():
                     hostname_count += 1
                 
                 proxies_found.append(final_proxy_url)
-                app.logger.info(f"Proxy configurato ({proxy_type}): {final_proxy_url}")
+                app.logger.debug(f"Proxy configurato ({proxy_type}): {final_proxy_url}")
             
             if any('socks5' in p for p in proxies_found):
                 app.logger.info("Assicurati di aver installato la dipendenza per SOCKS: 'pip install PySocks'")
@@ -2835,7 +2835,7 @@ def setup_proxies():
                     daddy_hostname_count += 1
                 
                 daddy_proxies_found.append(final_proxy_url)
-                app.logger.info(f"Proxy DaddyLive configurato: {final_proxy_url} (tipo: {proxy_type})")
+                app.logger.debug(f"Proxy DaddyLive configurato: {final_proxy_url} (tipo: {proxy_type})")
 
     PROXY_LIST = proxies_found
     DADDY_PROXY_LIST = daddy_proxies_found
@@ -2926,7 +2926,7 @@ def get_persistent_session(proxy_url=None):
                 session.proxies.update({'http': proxy_url, 'https': proxy_url})
             
             SESSION_POOL[pool_key] = session
-            app.logger.info(f"Nuova sessione persistente creata per: {pool_key}")
+            app.logger.debug(f"Nuova sessione persistente creata per: {pool_key}")
         
         return SESSION_POOL[pool_key]
 
@@ -3659,7 +3659,7 @@ def login():
             session['username'] = username
             session['_id'] = str(id(session))  # ID univoco per la sessione
             
-            app.logger.info(f"Login riuscito per utente: {username}")
+            app.logger.debug(f"Login riuscito per utente: {username}")
             
             # Traccia la sessione se client_tracker è disponibile
             try:
@@ -4538,13 +4538,13 @@ def import_config():
                     'global_sync': False,
                     'sync_message': "Sincronizzazione non necessaria (ambiente single-worker)"
                 }
-                app.logger.info(f"Configurazione importata con successo da {file.filename}")
+                app.logger.debug(f"Configurazione importata con successo da {file.filename}")
             
             # Verifica che la configurazione sia stata applicata
             current_config = config_manager.load_config()
             config_status = config_manager.get_config_status()
             
-            app.logger.info(f"Configurazione attuale: {len(current_config)} impostazioni caricate")
+            app.logger.debug(f"Configurazione attuale: {len(current_config)} impostazioni caricate")
             
             # Se usiamo sincronizzazione globale, forziamo anche il ricaricamento proxy
             if config_manager._use_global_sync:
@@ -5945,7 +5945,7 @@ app.logger.info("="*50)
 
 # Valida e aggiorna la configurazione del pre-buffer
 pre_buffer_manager.update_config()
-app.logger.info("Configurazione pre-buffer inizializzata con successo")
+app.logger.debug("Configurazione pre-buffer inizializzata con successo")
 
 # Inizializza le cache
 setup_all_caches()
@@ -6010,7 +6010,7 @@ class ClientTracker:
                     'additional_info': {}
                 }
                 self.client_counter += 1
-                app.logger.info(f"Nuovo client connesso: {ip} (ID: {client_id})")
+                app.logger.debug(f"Nuovo client connesso: {ip} (ID: {client_id})")
             
             # Aggiorna statistiche
             client = self.active_clients[client_id]
@@ -6057,7 +6057,7 @@ class ClientTracker:
             
             for client_id in inactive_clients:
                 client_data = self.active_clients[client_id]
-                app.logger.info(f"Client disconnesso: {client_data['ip']} (ID: {client_id}) - Inattivo per {timeout}s")
+                app.logger.debug(f"Client disconnesso: {client_data['ip']} (ID: {client_id}) - Inattivo per {timeout}s")
                 del self.active_clients[client_id]
                 self.client_counter -= 1
     
