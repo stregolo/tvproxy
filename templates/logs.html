@@ -523,6 +523,9 @@
                 <button class="btn" onclick="downloadLog()">
                     <i class="fas fa-download"></i> <span>Download</span>
                 </button>
+                <button class="btn" onclick="debugLogsStatus()">
+                    <i class="fas fa-bug"></i> <span>Debug</span>
+                </button>
                 <div class="stats">
                     <span><i class="fas fa-list"></i> Righe: <span id="lineCount">0</span></span>
                     <span><i class="fas fa-clock"></i> Ultimo: <span id="lastUpdate">-</span></span>
@@ -584,22 +587,50 @@
                 eventSource.close();
             }
             
-            eventSource = new EventSource(`/admin/logs/stream/${selectedFile}`);
-            
-            eventSource.onmessage = function(event) {
-                if (!isPaused) {
-                    const data = JSON.parse(event.data);
-                    if (data.line) {
-                        addLogLine(data.line, data.timestamp);
+            try {
+                eventSource = new EventSource(`/admin/logs/stream/${selectedFile}`);
+                
+                eventSource.onmessage = function(event) {
+                    if (!isPaused) {
+                        try {
+                            const data = JSON.parse(event.data);
+                            if (data.error) {
+                                // Gestisci errori dal server
+                                document.getElementById('logInfo').innerHTML = `<i class="fas fa-exclamation-triangle"></i> Errore: ${data.error}`;
+                                addLogLine(`[ERRORE] ${data.error}`, Date.now());
+                                return;
+                            }
+                            if (data.line) {
+                                addLogLine(data.line, data.timestamp);
+                            }
+                        } catch (parseError) {
+                            console.error('Errore nel parsing del messaggio:', parseError);
+                            document.getElementById('logInfo').innerHTML = '<i class="fas fa-exclamation-triangle"></i> Errore nel parsing del messaggio';
+                        }
                     }
-                }
-            };
-            
-            eventSource.onerror = function(event) {
-                document.getElementById('logInfo').innerHTML = '<i class="fas fa-exclamation-triangle"></i> Errore di connessione al log stream';
-            };
-            
-            document.getElementById('logInfo').innerHTML = `<i class="fas fa-stream"></i> Streaming log: ${selectedFile}`;
+                };
+                
+                eventSource.onerror = function(event) {
+                    console.error('Errore EventSource:', event);
+                    document.getElementById('logInfo').innerHTML = '<i class="fas fa-exclamation-triangle"></i> Errore di connessione al log stream';
+                    
+                    // Riconnessione automatica dopo 5 secondi
+                    setTimeout(() => {
+                        if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+                            document.getElementById('logInfo').innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Riconnessione in corso...';
+                            initLogStream();
+                        }
+                    }, 5000);
+                };
+                
+                eventSource.onopen = function(event) {
+                    document.getElementById('logInfo').innerHTML = `<i class="fas fa-stream"></i> Streaming log: ${selectedFile}`;
+                };
+                
+            } catch (error) {
+                console.error('Errore nella creazione EventSource:', error);
+                document.getElementById('logInfo').innerHTML = '<i class="fas fa-exclamation-triangle"></i> Errore nella creazione della connessione';
+            }
         }
         
         function addLogLine(line, timestamp) {
@@ -713,9 +744,48 @@
             window.open(`/admin/logs/download/${selectedFile}`, '_blank');
         }
         
+        function debugLogsStatus() {
+            fetch('/admin/debug/logs-status')
+                .then(response => response.json())
+                .then(data => {
+                    let message = '=== DEBUG LOGS STATUS ===\n';
+                    message += `Directory logs esiste: ${data.logs_dir_exists}\n`;
+                    message += `Percorso: ${data.logs_dir_path}\n`;
+                    message += `Scrivibile: ${data.logs_dir_writable}\n`;
+                    message += `File di log: ${data.log_files.length}\n`;
+                    
+                    if (data.log_files.length > 0) {
+                        message += '\nFile di log:\n';
+                        data.log_files.forEach(file => {
+                            message += `- ${file.name} (${file.size} bytes, ${file.modified})\n`;
+                            message += `  Leggibile: ${file.readable}, Scrivibile: ${file.writable}\n`;
+                        });
+                    }
+                    
+                    if (data.errors.length > 0) {
+                        message += '\nErrori:\n';
+                        data.errors.forEach(error => {
+                            message += `- ${error}\n`;
+                        });
+                    }
+                    
+                    alert(message);
+                })
+                .catch(error => {
+                    alert('Errore nel debug: ' + error.message);
+                });
+        }
+        
         // Inizializza al caricamento della pagina
         document.addEventListener('DOMContentLoaded', function() {
-            initLogStream();
+            // Verifica che ci siano file di log disponibili
+            const logSelect = document.getElementById('logFile');
+            if (logSelect && logSelect.options.length > 0) {
+                initLogStream();
+            } else {
+                document.getElementById('logInfo').innerHTML = '<i class="fas fa-exclamation-triangle"></i> Nessun file di log disponibile';
+                document.getElementById('logContainer').innerHTML = '<div class="log-line error">Nessun file di log trovato. Verifica che la directory "logs" esista e contenga file .log</div>';
+            }
         });
         
         // Pulisci la connessione quando si chiude la pagina
