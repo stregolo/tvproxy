@@ -1942,16 +1942,48 @@ class LogManager:
         log_files = []
         logs_dir = 'logs'
         
-        if os.path.exists(logs_dir):
-            for filename in os.listdir(logs_dir):
-                if filename.endswith('.log'):
-                    filepath = os.path.join(logs_dir, filename)
-                    stat = os.stat(filepath)
+        try:
+            if os.path.exists(logs_dir):
+                for filename in os.listdir(logs_dir):
+                    if filename.endswith('.log'):
+                        try:
+                            filepath = os.path.join(logs_dir, filename)
+                            stat = os.stat(filepath)
+                            log_files.append({
+                                'name': filename,
+                                'size': stat.st_size,
+                                'modified': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                            })
+                        except Exception as e:
+                            app.logger.warning(f"Errore nell'accesso al file di log {filename}: {e}")
+                            continue
+            else:
+                # Se la directory non esiste, creala
+                try:
+                    os.makedirs(logs_dir, exist_ok=True)
+                    app.logger.info(f"Directory logs creata: {logs_dir}")
+                except Exception as e:
+                    app.logger.error(f"Errore nella creazione directory logs: {e}")
+        except Exception as e:
+            app.logger.error(f"Errore nel recupero file di log: {e}")
+        
+        # Se non ci sono file di log, crea un file di default
+        if not log_files:
+            try:
+                default_log_file = os.path.join(logs_dir, 'proxy.log')
+                if not os.path.exists(default_log_file):
+                    with open(default_log_file, 'w', encoding='utf-8') as f:
+                        f.write(f"# File di log creato automaticamente - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                        f.write("# I log del proxy appariranno qui\n")
+                    
                     log_files.append({
-                        'name': filename,
-                        'size': stat.st_size,
-                        'modified': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                        'name': 'proxy.log',
+                        'size': os.path.getsize(default_log_file),
+                        'modified': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     })
+                    app.logger.info("File di log di default creato")
+            except Exception as e:
+                app.logger.error(f"Errore nella creazione file di log di default: {e}")
         
         return sorted(log_files, key=lambda x: x['modified'], reverse=True)
     
@@ -1974,26 +2006,52 @@ class LogManager:
         filepath = os.path.join('logs', filename)
         
         def generate():
-            if not os.path.exists(filepath):
-                yield f"data: {json.dumps({'error': 'File non trovato'})}\n\n"
-                return
-            
-            # Leggi le ultime 50 righe per iniziare
-            with open(filepath, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-                for line in lines[-50:]:
-                    yield f"data: {json.dumps({'line': line.strip(), 'timestamp': time.time()})}\n\n"
-            
-            # Monitora il file per nuove righe
-            f = open(filepath, 'r', encoding='utf-8')
-            f.seek(0, 2)  # Vai alla fine del file
-            
-            while True:
-                line = f.readline()
-                if line:
-                    yield f"data: {json.dumps({'line': line.strip(), 'timestamp': time.time()})}\n\n"
-                else:
-                    time.sleep(0.1)
+            try:
+                if not os.path.exists(filepath):
+                    yield f"data: {json.dumps({'error': 'File non trovato'})}\n\n"
+                    return
+                
+                # Leggi le ultime 50 righe per iniziare
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                        for line in lines[-50:]:
+                            yield f"data: {json.dumps({'line': line.strip(), 'timestamp': time.time()})}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'error': f'Errore nella lettura del file: {str(e)}'})}\n\n"
+                    return
+                
+                # Monitora il file per nuove righe
+                try:
+                    f = open(filepath, 'r', encoding='utf-8')
+                    f.seek(0, 2)  # Vai alla fine del file
+                    
+                    # Contatore per evitare loop infiniti
+                    empty_reads = 0
+                    max_empty_reads = 1000  # Massimo 100 secondi di attesa
+                    
+                    while empty_reads < max_empty_reads:
+                        line = f.readline()
+                        if line:
+                            empty_reads = 0  # Reset contatore
+                            yield f"data: {json.dumps({'line': line.strip(), 'timestamp': time.time()})}\n\n"
+                        else:
+                            empty_reads += 1
+                            time.sleep(0.1)
+                    
+                    # Se arriviamo qui, il file non è stato modificato per troppo tempo
+                    yield f"data: {json.dumps({'error': 'Timeout: file non modificato per troppo tempo'})}\n\n"
+                    
+                except Exception as e:
+                    yield f"data: {json.dumps({'error': f'Errore nel monitoraggio del file: {str(e)}'})}\n\n"
+                finally:
+                    try:
+                        f.close()
+                    except:
+                        pass
+                        
+            except Exception as e:
+                yield f"data: {json.dumps({'error': f'Errore generale: {str(e)}'})}\n\n"
         
         return generate()
 
@@ -3700,15 +3758,98 @@ def import_config():
 @login_required
 def stream_logs(filename):
     """Stream in tempo reale dei log"""
-    return Response(
-        log_manager.stream_log_file(filename),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'Access-Control-Allow-Origin': '*'
+    try:
+        # Verifica che il file esista
+        filepath = os.path.join('logs', filename)
+        if not os.path.exists(filepath):
+            def error_response():
+                yield f"data: {json.dumps({'error': f'File {filename} non trovato'})}\n\n"
+            return Response(
+                error_response(),
+                mimetype='text/event-stream',
+                headers={
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                    'Access-Control-Allow-Origin': '*'
+                }
+            )
+        
+        return Response(
+            log_manager.stream_log_file(filename),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Access-Control-Allow-Origin': '*'
+            }
+        )
+    except Exception as e:
+        app.logger.error(f"Errore nello streaming del log {filename}: {e}")
+        def error_response():
+            yield f"data: {json.dumps({'error': f'Errore nello streaming: {str(e)}'})}\n\n"
+        return Response(
+            error_response(),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Access-Control-Allow-Origin': '*'
+            }
+        )
+
+@app.route('/admin/debug/logs-status')
+@login_required
+def debug_logs_status():
+    """Debug dello stato dei log"""
+    try:
+        logs_dir = 'logs'
+        status = {
+            'logs_dir_exists': os.path.exists(logs_dir),
+            'logs_dir_path': os.path.abspath(logs_dir),
+            'logs_dir_writable': False,
+            'log_files': [],
+            'errors': []
         }
-    )
+        
+        if status['logs_dir_exists']:
+            try:
+                # Testa se la directory è scrivibile
+                test_file = os.path.join(logs_dir, '.test_write')
+                with open(test_file, 'w') as f:
+                    f.write('test')
+                os.remove(test_file)
+                status['logs_dir_writable'] = True
+            except Exception as e:
+                status['errors'].append(f"Directory non scrivibile: {e}")
+            
+            # Lista file di log
+            try:
+                for filename in os.listdir(logs_dir):
+                    if filename.endswith('.log'):
+                        filepath = os.path.join(logs_dir, filename)
+                        try:
+                            stat = os.stat(filepath)
+                            status['log_files'].append({
+                                'name': filename,
+                                'size': stat.st_size,
+                                'modified': datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
+                                'readable': os.access(filepath, os.R_OK),
+                                'writable': os.access(filepath, os.W_OK)
+                            })
+                        except Exception as e:
+                            status['errors'].append(f"Errore accesso file {filename}: {e}")
+            except Exception as e:
+                status['errors'].append(f"Errore lettura directory: {e}")
+        else:
+            status['errors'].append("Directory logs non esiste")
+        
+        return jsonify(status)
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 @app.route('/admin/logs/download/<filename>')
 @login_required
