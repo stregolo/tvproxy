@@ -2081,8 +2081,15 @@ def config_sync_thread():
                 current_time = time.time()
                 if current_time - config_manager._last_sync_time > config_manager._sync_interval:
                     # Sincronizza dal file globale
-                    config_manager._sync_from_global_config()
-            time.sleep(30)  # Controlla ogni 30 secondi
+                    sync_result = config_manager._sync_from_global_config()
+                    if sync_result and config_manager._config_cache:
+                        # Applica la configurazione sincronizzata
+                        config_manager.apply_config_to_app(config_manager._config_cache)
+                        setup_proxies()  # Ricarica i proxy
+                        setup_all_caches()
+                        pre_buffer_manager.update_config()
+                        app.logger.debug("Configurazione sincronizzata e applicata automaticamente")
+            time.sleep(15)  # Controlla ogni 15 secondi invece di 30
         except Exception as e:
             app.logger.warning(f"Errore nel thread di sincronizzazione configurazione: {e}")
             time.sleep(30)
@@ -2125,6 +2132,18 @@ def sync_sessions_thread():
                 
                 # Controlla se è stata richiesta una ricaricamento proxy (più frequente)
                 check_proxy_reload_request()
+                
+                # Controlla anche se ci sono stati cambiamenti nella configurazione
+                if config_manager._use_global_sync:
+                    current_time = time.time()
+                    if current_time - config_manager._last_sync_time > 60:  # Ogni minuto
+                        sync_result = config_manager._sync_from_global_config()
+                        if sync_result and config_manager._config_cache:
+                            config_manager.apply_config_to_app(config_manager._config_cache)
+                            setup_proxies()
+                            setup_all_caches()
+                            pre_buffer_manager.update_config()
+                            app.logger.debug("Configurazione sincronizzata dal thread sessioni")
                             
         except Exception as e:
             app.logger.error(f"Errore nel thread sincronizzazione sessioni: {e}")
@@ -5884,11 +5903,20 @@ def debug_proxy_sync_status():
             except Exception as e:
                 proxy_sync_data = {"error": str(e)}
         
+        # Informazioni sulla configurazione
+        config_info = {
+            "has_cache": config_manager._config_cache is not None,
+            "last_sync_age_seconds": time.time() - config_manager._last_sync_time if hasattr(config_manager, '_last_sync_time') else 0,
+            "global_config_exists": os.path.exists(config_manager.global_config_file) if hasattr(config_manager, 'global_config_file') else False,
+            "global_config_age_seconds": time.time() - os.path.getmtime(config_manager.global_config_file) if hasattr(config_manager, 'global_config_file') and os.path.exists(config_manager.global_config_file) else 0
+        }
+        
         return jsonify({
             "status": "success",
             "local_proxies": local_proxies,
             "sync": sync_info,
             "proxy_sync_data": proxy_sync_data,
+            "config_info": config_info,
             "current_worker_id": os.getpid(),
             "timestamp": datetime.now().isoformat()
         })
@@ -5901,7 +5929,7 @@ def debug_proxy_sync_status():
 @app.route('/admin/debug/force-proxy-sync', methods=['POST'])
 @login_required
 def force_proxy_sync():
-    """Forza il ricaricamento proxy su tutti i workers"""
+    """Forza la sincronizzazione dei proxy e della configurazione tra workers"""
     try:
         if not config_manager._use_global_sync:
             return jsonify({
@@ -5909,12 +5937,29 @@ def force_proxy_sync():
                 "message": "Sincronizzazione non abilitata (ambiente single-worker)"
             }), 400
         
-        # Attiva il ricaricamento proxy
+        # Forza la sincronizzazione della configurazione
+        config_sync_result = config_manager._sync_from_global_config()
+        
+        # Applica la configurazione sincronizzata
+        if config_sync_result and config_manager._config_cache:
+            config_manager.apply_config_to_app(config_manager._config_cache)
+            setup_proxies()  # Ricarica i proxy
+            setup_all_caches()
+            pre_buffer_manager.update_config()
+            app.logger.info("Configurazione applicata dopo sincronizzazione forzata")
+        
+        # Attiva il ricaricamento proxy su tutti i workers
         reload_result = trigger_proxy_reload()
         
         if reload_result:
             # Aspetta un po' per dare tempo agli altri workers di ricaricare
-            time.sleep(2)
+            time.sleep(3)
+            
+            # Forza anche una sincronizzazione finale dal file globale
+            final_sync_result = config_manager._sync_from_global_config()
+            if final_sync_result:
+                config_manager.apply_config_to_app(config_manager._config_cache)
+                setup_proxies()
             
             # Controlla lo stato finale
             available_proxies = get_available_proxies()
@@ -5922,9 +5967,11 @@ def force_proxy_sync():
             
             return jsonify({
                 "status": "success",
-                "message": "Richiesta di ricaricamento proxy inviata a tutti i workers",
+                "message": f"Sincronizzazione forzata completata. Proxy disponibili: {len(available_proxies)} normali, {len(available_daddy_proxies)} DaddyLive",
                 "details": {
-                    "triggered": True,
+                    "config_sync_result": config_sync_result,
+                    "proxy_reload_result": reload_result,
+                    "final_sync_result": final_sync_result,
                     "worker_id": os.getpid(),
                     "timestamp": time.time(),
                     "local_proxies": {
