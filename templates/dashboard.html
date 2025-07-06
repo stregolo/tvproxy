@@ -762,6 +762,9 @@
                             <button class="sync-btn sync-btn-primary" onclick="checkSessionSync()">
                                 <i class="fas fa-sync"></i> Verifica
                             </button>
+                            <button class="sync-btn sync-btn-warning" onclick="forceAllSync()">
+                                <i class="fas fa-bolt"></i> Forza Sync
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -1142,6 +1145,48 @@
                     showToast('✅ Sincronizzazione proxy forzata con successo!');
                 } else {
                     showToast('❌ Errore nella sincronizzazione proxy: ' + result.message);
+                }
+            })
+            .catch(error => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                showToast('❌ Errore di connessione: ' + error.message);
+            });
+        }
+
+        function forceAllSync() {
+            const btn = event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Forzando...';
+            btn.disabled = true;
+            
+            fetch('/admin/debug/force-all-sync', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                
+                if (result.status === 'success') {
+                    // Aggiorna immediatamente tutti i dati
+                    checkSessionSync();
+                    checkProxySync();
+                    
+                    // Mostra notifica di successo con dettagli
+                    let message = '✅ Sincronizzazione completa forzata!\n';
+                    if (result.results) {
+                        Object.entries(result.results).forEach(([key, value]) => {
+                            message += `${key}: ${value}\n`;
+                        });
+                    }
+                    showToast(message);
+                } else {
+                    showToast('❌ Errore nella sincronizzazione completa: ' + result.message);
                 }
             })
             .catch(error => {
