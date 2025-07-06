@@ -839,8 +839,20 @@
                 form.classList.remove('loading');
                 saveBtn.innerHTML = '<i class="fas fa-save"></i> Salva Configurazione';
                 
-                if (result.success) {
-                    showAlert('success', result.message || 'Configurazione salvata con successo!');
+                if (result.status === 'success') {
+                    let message = result.message || 'Configurazione salvata con successo!';
+                    
+                    // Aggiungi informazioni di sincronizzazione se disponibili
+                    if (result.sync_info) {
+                        message += `<br><br><i class="fas fa-sync-alt"></i> <strong>Sincronizzazione:</strong><br>`;
+                        message += result.sync_info.sync_message;
+                        
+                        if (result.sync_info.global_sync) {
+                            message += `<br><i class="fas fa-check-circle"></i> Tutti i workers sono stati aggiornati automaticamente.`;
+                        }
+                    }
+                    
+                    showAlert('success', message);
                     saveBtn.classList.add('success-animation');
                     setTimeout(() => saveBtn.classList.remove('success-animation'), 600);
                 } else {
@@ -889,8 +901,24 @@
                 })
                 .then(response => response.json())
                 .then(result => {
-                    if (result.success) {
-                        location.reload();
+                    if (result.status === 'success') {
+                        let message = result.message || 'Configurazione ripristinata con successo!';
+                        
+                        // Aggiungi informazioni di sincronizzazione se disponibili
+                        if (result.sync_info) {
+                            message += `<br><br><i class="fas fa-sync-alt"></i> <strong>Sincronizzazione:</strong><br>`;
+                            message += result.sync_info.sync_message;
+                            
+                            if (result.sync_info.global_sync) {
+                                message += `<br><i class="fas fa-check-circle"></i> Tutti i workers sono stati aggiornati automaticamente.`;
+                            }
+                        }
+                        
+                        showAlert('success', message);
+                        // Ricarica la pagina dopo 2 secondi per mostrare il messaggio
+                        setTimeout(() => {
+                            location.reload();
+                        }, 2000);
                     } else {
                         showAlert('error', result.message || 'Errore durante il ripristino');
                     }
@@ -1455,8 +1483,18 @@
                 if (result.status === 'success') {
                     let message = result.message;
                     
+                    // Aggiungi informazioni di sincronizzazione se disponibili
+                    if (result.sync_info) {
+                        message += `<br><br><i class="fas fa-sync-alt"></i> <strong>Sincronizzazione:</strong><br>`;
+                        message += result.sync_info.sync_message;
+                        
+                        if (result.sync_info.global_sync) {
+                            message += `<br><i class="fas fa-check-circle"></i> Tutti i workers sono stati aggiornati automaticamente.`;
+                        }
+                    }
+                    
                     // Aggiungi informazioni dettagliate per HuggingFace
-                    if (result.is_huggingface) {
+                    if (result.config_status && result.config_status.is_huggingface) {
                         message += '<br><br><strong>⚠️ Ambiente HuggingFace:</strong><br>';
                         message += '• Configurazione salvata in memoria<br>';
                         message += '• Non persisterà dopo il riavvio<br>';
@@ -1471,12 +1509,12 @@
                         message += `• Fonte: ${result.config_status?.current_config_source || 'sconosciuta'}`;
                     }
                     
-                    showAlert('info', message);
+                    showAlert('success', message);
                     
                     // Ricarica la pagina per mostrare i nuovi valori
                     setTimeout(() => {
                         location.reload();
-                    }, 3000); // Aumentato il tempo per leggere le informazioni
+                    }, 4000); // Aumentato il tempo per leggere le informazioni
                 } else {
                     showAlert('error', result.message);
                 }
