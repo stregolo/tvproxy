@@ -816,6 +816,9 @@
                             <button class="sync-btn sync-btn-secondary" onclick="checkDashboardCache()">
                                 <i class="fas fa-info-circle"></i> Stato Cache
                             </button>
+                            <button class="sync-btn sync-btn-warning" onclick="testDashboardData()">
+                                <i class="fas fa-bug"></i> Test Dati
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -1457,6 +1460,41 @@
                     showToast(message);
                 } else {
                     showToast('❌ Errore nel controllo cache: ' + result.message);
+                }
+            })
+            .catch(error => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                showToast('❌ Errore di connessione: ' + error.message);
+            });
+        }
+
+        function testDashboardData() {
+            const btn = event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testando...';
+            btn.disabled = true;
+            
+            fetch('/admin/debug/test-dashboard-data')
+            .then(response => response.json())
+            .then(result => {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                
+                if (result.status === 'success') {
+                    const sample = result.data_sample;
+                    let message = `Test Dati Dashboard:\n`;
+                    message += `✅ Tempo esecuzione: ${result.execution_time}s\n`;
+                    message += `📊 RAM: ${sample.ram_usage}%\n`;
+                    message += `👥 Client: ${sample.total_clients}\n`;
+                    message += `🌐 Proxy: ${sample.proxy_count}\n`;
+                    message += `🔄 Sync: ${sample.sync_enabled ? 'ON' : 'OFF'}\n`;
+                    message += `🔑 Chiavi: ${result.data_keys.length}`;
+                    
+                    showToast(message);
+                } else {
+                    showToast('❌ Errore nel test: ' + result.message);
+                    console.error('Traceback:', result.traceback);
                 }
             })
             .catch(error => {
