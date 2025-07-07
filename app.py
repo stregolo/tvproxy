@@ -99,7 +99,7 @@ class VavooResolver:
             }
         }
         try:
-            resp = self.session.post("https://www.vavoo.tv/api/app/ping", json=data, headers=headers, timeout=10)
+            resp = self.session.post("https://www.vavoo.tv/api/app/ping", json=data, headers=headers, timeout=20)
             resp.raise_for_status()
             result = resp.json()
             addon_sig = result.get("addonSig")
@@ -138,7 +138,7 @@ class VavooResolver:
         }
         
         try:
-            resp = self.session.post("https://vavoo.to/mediahubmx-resolve.json", json=data, headers=headers, timeout=10)
+            resp = self.session.post("https://vavoo.to/mediahubmx-resolve.json", json=data, headers=headers, timeout=20)
             resp.raise_for_status()
             
             result = resp.json()
