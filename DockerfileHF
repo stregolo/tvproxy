@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # 4. Clona il repository da GitHub
-RUN git clone https://github.com/nzo66/tvproxy.git .
+RUN git clone https://github.com/stregolo/tvproxy.git .
 
 # 5. Aggiorna pip e installa le dipendenze senza cache
 RUN pip install --upgrade pip
