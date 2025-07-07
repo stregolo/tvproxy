@@ -14,6 +14,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import psutil
 from threading import Thread, Lock
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import logging
 from datetime import datetime
@@ -103,19 +104,10 @@ class VavooResolver:
             result = resp.json()
             addon_sig = result.get("addonSig")
             if addon_sig:
-                app.logger.info("Signature Vavoo ottenuta con successo")
-                return addon_sig
+                            return addon_sig
             else:
-                app.logger.warning("Signature Vavoo non trovata nella risposta")
-                return None
-        except requests.RequestException as e:
-            app.logger.error(f"Errore di rete nel recupero della signature Vavoo: {e}")
-            return None
-        except json.JSONDecodeError as e:
-            app.logger.error(f"Errore nel parsing JSON della risposta Vavoo: {e}")
-            return None
+                            return None
         except Exception as e:
-            app.logger.error(f"Errore generico nel recupero della signature Vavoo: {e}")
             return None
 
     def resolve_vavoo_link(self, link, verbose=False):
@@ -123,14 +115,11 @@ class VavooResolver:
         Risolve un link Vavoo usando solo il metodo principale (streammode=1)
         """
         if not "vavoo.to" in link:
-            if verbose:
-                app.logger.info("Il link non è un link Vavoo")
             return None
             
         # Solo metodo principale per il proxy
         signature = self.getAuthSignature()
         if not signature:
-            app.logger.error("Impossibile ottenere la signature Vavoo")
             return None
             
         headers = {
@@ -152,21 +141,13 @@ class VavooResolver:
             resp = self.session.post("https://vavoo.to/mediahubmx-resolve.json", json=data, headers=headers, timeout=10)
             resp.raise_for_status()
             
-            if verbose:
-                app.logger.info(f"Vavoo response status: {resp.status_code}")
-                app.logger.info(f"Vavoo response body: {resp.text}")
-            
             result = resp.json()
             if isinstance(result, list) and result and result[0].get("url"):
                 resolved_url = result[0]["url"]
-                channel_name = result[0].get("name", "Unknown")
-                app.logger.info(f"Vavoo risolto: {channel_name} -> {resolved_url}")
                 return resolved_url
             elif isinstance(result, dict) and result.get("url"):
-                app.logger.info(f"Vavoo risolto: {result['url']}")
                 return result["url"]
             else:
-                app.logger.warning("Nessun link valido trovato nella risposta Vavoo")
                 return None
                 
         except Exception as e:
@@ -178,24 +159,27 @@ vavoo_resolver = VavooResolver()
 
 # --- Configurazione Cache ---
 def setup_all_caches():
-    global M3U8_CACHE, TS_CACHE, KEY_CACHE
+    global M3U8_CACHE, TS_CACHE, KEY_CACHE, RESOLVED_LINKS_CACHE
     try:
         config = config_manager.load_config()
         if config.get('CACHE_ENABLED', True):
             M3U8_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_M3U8'], ttl=config['CACHE_TTL_M3U8'])
             TS_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_TS'], ttl=config['CACHE_TTL_TS'])
             KEY_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_KEY'], ttl=config['CACHE_TTL_KEY'])
+            RESOLVED_LINKS_CACHE = TTLCache(maxsize=config['CACHE_MAXSIZE_RESOLVED_LINKS'], ttl=config['CACHE_TTL_RESOLVED_LINKS'])
             app.logger.info("Cache ABILITATA su tutte le risorse.")
         else:
             M3U8_CACHE = {}
             TS_CACHE = {}
             KEY_CACHE = {}
+            RESOLVED_LINKS_CACHE = {}
             app.logger.warning("TUTTE LE CACHE DISABILITATE: stream diretto attivo.")
     except NameError:
         # Fallback se config_manager non è ancora disponibile
         M3U8_CACHE = TTLCache(maxsize=100, ttl=300)
         TS_CACHE = TTLCache(maxsize=1000, ttl=60)
         KEY_CACHE = TTLCache(maxsize=50, ttl=3600)
+        RESOLVED_LINKS_CACHE = TTLCache(maxsize=1000, ttl=3600)
         app.logger.info("Cache inizializzata con valori di fallback.")
 
 # --- Configurazione Generale ---
@@ -262,6 +246,9 @@ class ConfigManager:
             'PREBUFFER_CLEANUP_INTERVAL': 300,
             'PREBUFFER_MAX_MEMORY_PERCENT': 30.0,
             'PREBUFFER_EMERGENCY_THRESHOLD': 99.9,
+            'CACHE_TTL_RESOLVED_LINKS': 3600,
+            'CACHE_MAXSIZE_RESOLVED_LINKS': 1000,
+            'PARALLEL_WORKERS_MAX': 100,
         }
         
     def load_config(self):
@@ -300,7 +287,8 @@ class ConfigManager:
                         config[key] = env_value.lower() in ('true', '1', 'yes')
                     elif key in ['REQUEST_TIMEOUT', 'KEEP_ALIVE_TIMEOUT', 'MAX_KEEP_ALIVE_REQUESTS', 
                                 'POOL_CONNECTIONS', 'POOL_MAXSIZE', 'CACHE_TTL_M3U8', 'CACHE_TTL_TS', 
-                                'CACHE_TTL_KEY', 'CACHE_MAXSIZE_M3U8', 'CACHE_MAXSIZE_TS', 'CACHE_MAXSIZE_KEY',
+                                'CACHE_TTL_KEY', 'CACHE_TTL_RESOLVED_LINKS', 'CACHE_MAXSIZE_M3U8', 'CACHE_MAXSIZE_TS', 
+                                'CACHE_MAXSIZE_KEY', 'CACHE_MAXSIZE_RESOLVED_LINKS', 'PARALLEL_WORKERS_MAX',
                                 'PREBUFFER_MAX_SEGMENTS', 'PREBUFFER_MAX_SIZE_MB', 'PREBUFFER_CLEANUP_INTERVAL']:
                         try:
                             config[key] = int(env_value)
@@ -763,6 +751,7 @@ cleanup_thread.start()
 M3U8_CACHE = {}
 TS_CACHE = {}
 KEY_CACHE = {}
+RESOLVED_LINKS_CACHE = {}  # Cache per i link risolti
 
 # Pool globale di sessioni per connessioni persistenti
 SESSION_POOL = {}
@@ -1143,31 +1132,25 @@ def resolve_m3u8_link(url, headers=None):
         # Controlla se è un link Vavoo e prova a risolverlo
         # Supporta sia /vavoo-iptv/play/ che /play/ 
         if 'vavoo.to' in clean_url.lower() and ('/vavoo-iptv/play/' in clean_url.lower() or '/play/' in clean_url.lower()):
-            app.logger.info(f"Rilevato link Vavoo, tentativo di risoluzione: {clean_url}")
-            
             try:
                 resolved_vavoo = vavoo_resolver.resolve_vavoo_link(clean_url, verbose=True)
                 if resolved_vavoo:
-                    app.logger.info(f"Vavoo risolto con successo: {resolved_vavoo}")
                     return {
                         "resolved_url": resolved_vavoo,
                         "headers": final_headers
                     }
                 else:
-                    app.logger.warning(f"Impossibile risolvere il link Vavoo, passo l'originale: {clean_url}")
                     return {
                         "resolved_url": clean_url,
                         "headers": final_headers
                     }
             except Exception as e:
-                app.logger.error(f"Errore nella risoluzione Vavoo: {e}")
                 return {
                     "resolved_url": clean_url,
                     "headers": final_headers
                 }
         
         # Per tutti gli altri link non-DaddyLive
-        app.logger.info(f"URL non riconosciuto come DaddyLive o Vavoo, verrà passato direttamente: {clean_url}")
         return {
             "resolved_url": clean_url,
             "headers": final_headers
@@ -1175,7 +1158,6 @@ def resolve_m3u8_link(url, headers=None):
     # --- FINE DELLA NUOVA SEZIONE ---
 
     # 3. Se il controllo è superato, procede con la logica di risoluzione DaddyLive (invariata)
-    app.logger.info(f"Tentativo di risoluzione URL (DaddyLive): {clean_url}")
 
     daddy_base_url = get_daddylive_base_url()
     daddy_origin = urlparse(daddy_base_url).scheme + "://" + urlparse(daddy_base_url).netloc
@@ -1188,51 +1170,45 @@ def resolve_m3u8_link(url, headers=None):
     final_headers_for_resolving = {**final_headers, **daddylive_headers}
 
     try:
-        app.logger.info("Ottengo URL base dinamico...")
         github_url = 'https://raw.githubusercontent.com/thecrewwh/dl_url/refs/heads/main/dl.xml'
         main_url_req = requests.get(
             github_url,
-            timeout=REQUEST_TIMEOUT,
+            timeout=10,  # Timeout ridotto per GitHub
             proxies=get_proxy_for_url(github_url),
             verify=VERIFY_SSL
         )
         main_url_req.raise_for_status()
         main_url = main_url_req.text
         baseurl = re.findall('(?s)src = "([^"]*)', main_url)[0]
-        app.logger.info(f"URL base ottenuto: {baseurl}")
 
         channel_id = extract_channel_id(clean_url)
         if not channel_id:
             app.logger.error(f"Impossibile estrarre ID canale da {clean_url}")
             return {"resolved_url": clean_url, "headers": current_headers}
 
-        app.logger.info(f"ID canale estratto: {channel_id}")
-
         stream_url = f"{baseurl}stream/stream-{channel_id}.php"
-        app.logger.info(f"URL stream costruito: {stream_url}")
 
         final_headers_for_resolving['Referer'] = baseurl + '/'
         final_headers_for_resolving['Origin'] = baseurl
 
-        app.logger.info(f"Passo 1: Richiesta a {stream_url}")
-        max_retries = 3
+        max_retries = 2  # Ridotto da 3 a 2 per velocizzare
         for retry in range(max_retries):
             try:
                 proxy_config = get_proxy_with_fallback(stream_url)
-                response = requests.get(stream_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=proxy_config, verify=VERIFY_SSL)
+                response = requests.get(stream_url, headers=final_headers_for_resolving, timeout=15, proxies=proxy_config, verify=VERIFY_SSL)  # Timeout ridotto
                 response.raise_for_status()
                 break  # Success, exit retry loop
             except requests.exceptions.ProxyError as e:
                 if "429" in str(e) and retry < max_retries - 1:
                     app.logger.warning(f"Proxy rate limited (429), retry {retry + 1}/{max_retries}: {stream_url}")
-                    time.sleep(2 ** retry)  # Exponential backoff
+                    time.sleep(1)  # Ridotto il backoff
                     continue
                 else:
                     raise
             except requests.RequestException as e:
                 if retry < max_retries - 1:
                     app.logger.warning(f"Request failed, retry {retry + 1}/{max_retries}: {stream_url}")
-                    time.sleep(1)
+                    time.sleep(0.5)  # Ridotto il backoff
                     continue
                 else:
                     raise
@@ -1242,17 +1218,13 @@ def resolve_m3u8_link(url, headers=None):
             app.logger.error("Nessun link Player 2 trovato")
             return {"resolved_url": clean_url, "headers": current_headers}
 
-        app.logger.info(f"Passo 2: Trovato link Player 2: {iframes[0]}")
-
         url2 = iframes[0]
         url2 = baseurl + url2
         url2 = url2.replace('//cast', '/cast')
 
         final_headers_for_resolving['Referer'] = url2
         final_headers_for_resolving['Origin'] = url2
-
-        app.logger.info(f"Passo 3: Richiesta a Player 2: {url2}")
-        response = requests.get(url2, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(url2), verify=VERIFY_SSL)
+        response = requests.get(url2, headers=final_headers_for_resolving, timeout=15, proxies=get_proxy_for_url(url2), verify=VERIFY_SSL)
         response.raise_for_status()
 
         iframes = re.findall(r'iframe src="([^"]*)', response.text)
@@ -1261,10 +1233,7 @@ def resolve_m3u8_link(url, headers=None):
             return {"resolved_url": clean_url, "headers": current_headers}
 
         iframe_url = iframes[0]
-        app.logger.info(f"Passo 4: Trovato iframe: {iframe_url}")
-
-        app.logger.info(f"Passo 5: Richiesta iframe: {iframe_url}")
-        response = requests.get(iframe_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(iframe_url), verify=VERIFY_SSL)
+        response = requests.get(iframe_url, headers=final_headers_for_resolving, timeout=15, proxies=get_proxy_for_url(iframe_url), verify=VERIFY_SSL)
         response.raise_for_status()
 
         iframe_content = response.text
@@ -1282,31 +1251,27 @@ def resolve_m3u8_link(url, headers=None):
             auth_host = base64.b64decode(auth_host_b64).decode('utf-8')
             auth_php_b64 = re.findall(r'(?s)b = atob\("([^"]*)', iframe_content)[0]
             auth_php = base64.b64decode(auth_php_b64).decode('utf-8')
-            app.logger.info(f"Parametri estratti: channel_key={channel_key}")
+
 
         except (IndexError, Exception) as e:
             app.logger.error(f"Errore estrazione parametri: {e}")
             return {"resolved_url": clean_url, "headers": current_headers}
 
         auth_url = f'{auth_host}{auth_php}?channel_id={channel_key}&ts={auth_ts}&rnd={auth_rnd}&sig={auth_sig}'
-        app.logger.info(f"Passo 6: Autenticazione: {auth_url}")
-        auth_response = requests.get(auth_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(auth_url), verify=VERIFY_SSL)
+        auth_response = requests.get(auth_url, headers=final_headers_for_resolving, timeout=15, proxies=get_proxy_for_url(auth_url), verify=VERIFY_SSL)
         auth_response.raise_for_status()
 
         host = re.findall('(?s)m3u8 =.*?:.*?:.*?".*?".*?"([^"]*)', iframe_content)[0]
         server_lookup = re.findall(r'n fetchWithRetry\(\s*\'([^\']*)', iframe_content)[0]
         server_lookup_url = f"https://{urlparse(iframe_url).netloc}{server_lookup}{channel_key}"
-        app.logger.info(f"Passo 7: Server lookup: {server_lookup_url}")
 
-        lookup_response = requests.get(server_lookup_url, headers=final_headers_for_resolving, timeout=REQUEST_TIMEOUT, proxies=get_proxy_for_url(server_lookup_url), verify=VERIFY_SSL)
+        lookup_response = requests.get(server_lookup_url, headers=final_headers_for_resolving, timeout=15, proxies=get_proxy_for_url(server_lookup_url), verify=VERIFY_SSL)
         lookup_response.raise_for_status()
         server_data = lookup_response.json()
         server_key = server_data['server_key']
-        app.logger.info(f"Server key ottenuto: {server_key}")
 
         referer_raw = f'https://{urlparse(iframe_url).netloc}'
         clean_m3u8_url = f'https://{server_key}{host}{server_key}/{channel_key}/mono.m3u8'
-        app.logger.info(f"URL M3U8 pulito costruito: {clean_m3u8_url}")
 
         final_headers_for_fetch = {
             'User-Agent': final_headers_for_resolving.get('User-Agent'),
@@ -1320,8 +1285,6 @@ def resolve_m3u8_link(url, headers=None):
         }
 
     except Exception as e:
-        app.logger.error(f"Errore durante la risoluzione DaddyLive: {e}")
-        app.logger.error(f"Traceback: {traceback.format_exc()}")
         # In caso di errore nella risoluzione, restituisce l'URL originale
         return {"resolved_url": clean_url, "headers": final_headers}
 
@@ -1521,6 +1484,24 @@ def index():
                 <h4>🔗 Playlist Builder</h4>
                 <p>Combina multiple playlist M3U in una singola</p>
                 <div class="example">/builder</div>
+            </div>
+            
+            <div class="endpoint">
+                <h4>🎯 SIptv Resolver (Ultra-Veloce)</h4>
+                <p>Risolve tutti i link in una playlist M3U in parallelo (fino a 100 workers) con cache intelligente e timeout ottimizzati</p>
+                <div class="example">/proxy/siptv?url=URL_PLAYLIST</div>
+            </div>
+            
+            <div class="endpoint">
+                <h4>📊 Cache Stats</h4>
+                <p>Mostra le statistiche delle cache (M3U8, TS, Key, Resolved Links)</p>
+                <div class="example">/cache/stats</div>
+            </div>
+            
+            <div class="endpoint">
+                <h4>🧹 Clear Cache</h4>
+                <p>Pulisce tutte le cache (richiesta POST)</p>
+                <div class="example">POST /cache/clear</div>
             </div>
         </div>
         
@@ -2261,6 +2242,363 @@ def proxy_key():
     except requests.RequestException as e:
         app.logger.error(f"Errore durante il download della chiave AES-128: {str(e)}")
         return f"Errore durante il download della chiave AES-128: {str(e)}", 500
+
+@app.route('/cache/stats')
+def cache_stats():
+    """Mostra le statistiche delle cache"""
+    try:
+        config = config_manager.load_config()
+        cache_enabled = config.get('CACHE_ENABLED', True)
+        
+        stats = {
+            "cache_enabled": cache_enabled,
+            "m3u8_cache": {
+                "size": len(M3U8_CACHE),
+                "maxsize": config.get('CACHE_MAXSIZE_M3U8', 500),
+                "ttl": config.get('CACHE_TTL_M3U8', 5)
+            },
+            "ts_cache": {
+                "size": len(TS_CACHE),
+                "maxsize": config.get('CACHE_MAXSIZE_TS', 8000),
+                "ttl": config.get('CACHE_TTL_TS', 600)
+            },
+            "key_cache": {
+                "size": len(KEY_CACHE),
+                "maxsize": config.get('CACHE_MAXSIZE_KEY', 1000),
+                "ttl": config.get('CACHE_TTL_KEY', 600)
+            },
+            "resolved_links_cache": {
+                "size": len(RESOLVED_LINKS_CACHE),
+                "maxsize": config.get('CACHE_MAXSIZE_RESOLVED_LINKS', 1000),
+                "ttl": config.get('CACHE_TTL_RESOLVED_LINKS', 3600)
+            }
+        }
+        
+        return jsonify(stats)
+        
+    except Exception as e:
+        app.logger.error(f"Errore nel recupero statistiche cache: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/cache/clear', methods=['POST'])
+def clear_cache():
+    """Pulisce tutte le cache"""
+    try:
+        M3U8_CACHE.clear()
+        TS_CACHE.clear()
+        KEY_CACHE.clear()
+        RESOLVED_LINKS_CACHE.clear()
+        
+        app.logger.info("Tutte le cache sono state pulite")
+        return jsonify({"message": "Cache pulite con successo"})
+        
+    except Exception as e:
+        app.logger.error(f"Errore nella pulizia cache: {e}")
+        return jsonify({"error": str(e)}), 500
+
+def resolve_single_link(args):
+    """Funzione helper per risolvere un singolo link in parallelo - OTTIMIZZATA"""
+    line, line_index, headers, server_ip, current_stream_headers_params = args
+    
+    try:
+        # Ottimizzazione: Controlla rapidamente se è un link che non necessita risoluzione
+        if any(skip_domain in line.lower() for skip_domain in ['pluto.tv', 'youtube.com', 'vimeo.com', 'dailymotion.com']):
+            # Link diretti, non necessitano risoluzione
+            encoded_line = quote(line, safe='')
+            headers_query_string = ""
+            if current_stream_headers_params:
+                headers_query_string = "%26" + "%26".join(current_stream_headers_params)
+            
+            new_line = f"http://{server_ip}/proxy/m3u?url={encoded_line}{headers_query_string}"
+            return (line_index, new_line, False)  # Non risolto ma valido
+        
+        # Crea una chiave di cache che include l'URL e gli headers
+        headers_str = "&".join(sorted([f"{k}={v}" for k, v in headers.items()]))
+        cache_key = f"{line}|{headers_str}"
+        
+        # Controlla se il link è già in cache
+        config = config_manager.load_config()
+        cache_enabled = config.get('CACHE_ENABLED', True)
+        
+        if cache_enabled and cache_key in RESOLVED_LINKS_CACHE:
+            result = RESOLVED_LINKS_CACHE[cache_key]
+        else:
+            # Risolve il link usando la logica esistente con timeout ridotto
+            processed_url = process_daddylive_url(line)
+            result = resolve_m3u8_link(processed_url, headers)
+            
+            # Salva in cache se abilitata
+            if cache_enabled and result["resolved_url"]:
+                RESOLVED_LINKS_CACHE[cache_key] = result
+        
+        if result["resolved_url"]:
+            resolved_url = result["resolved_url"]
+            
+            # Aggiungi gli headers risolti se presenti
+            resolved_headers_params = []
+            if result["headers"]:
+                for key, value in result["headers"].items():
+                    encoded_key = quote(quote(key))
+                    encoded_value = quote(quote(str(value)))
+                    resolved_headers_params.append(f"h_{encoded_key}={encoded_value}")
+            
+            # Costruisci il nuovo link con il proxy
+            encoded_resolved_url = quote(resolved_url, safe='')
+            headers_query_string = ""
+            if resolved_headers_params:
+                headers_query_string = "%26" + "%26".join(resolved_headers_params)
+            
+            new_line = f"http://{server_ip}/proxy/m3u?url={encoded_resolved_url}{headers_query_string}"
+            return (line_index, new_line, True)  # (index, new_line, resolved)
+        else:
+            # Se non riesce a risolvere, usa il link originale con il proxy
+            encoded_line = quote(line, safe='')
+            headers_query_string = ""
+            if current_stream_headers_params:
+                headers_query_string = "%26" + "%26".join(current_stream_headers_params)
+            
+            new_line = f"http://{server_ip}/proxy/m3u?url={encoded_line}{headers_query_string}"
+            return (line_index, new_line, False)  # (index, new_line, not_resolved)
+            
+    except Exception as e:
+        # In caso di errore, usa il link originale con il proxy
+        encoded_line = quote(line, safe='')
+        headers_query_string = ""
+        if current_stream_headers_params:
+            headers_query_string = "%26" + "%26".join(current_stream_headers_params)
+        
+        new_line = f"http://{server_ip}/proxy/m3u?url={encoded_line}{headers_query_string}"
+        return (line_index, new_line, False)  # (index, new_line, not_resolved)
+
+@app.route('/proxy/siptv')
+def proxy_siptv():
+    """Proxy per playlist M3U che risolve tutti i link in parallelo e li riscrive con i link risolti"""
+    m3u_url = request.args.get('url', '').strip()
+    if not m3u_url:
+        return "Errore: Parametro 'url' mancante", 400
+
+    try:
+        app.logger.info(f"Richiesta SIptv per playlist: {m3u_url}")
+        
+        # Scarica la playlist originale
+        proxy_config = get_proxy_for_url(m3u_url)
+        proxy_key = proxy_config['http'] if proxy_config else None
+        
+        response = make_persistent_request(
+            m3u_url,
+            timeout=REQUEST_TIMEOUT,
+            proxy_url=proxy_key
+        )
+        response.raise_for_status()
+        m3u_content = response.text
+        
+        # Prima passata: raccogli tutti i link e prepara gli headers
+        links_to_resolve = []
+        line_mapping = {}  # {line_index: (line_type, content, headers)}
+        current_stream_headers_params = []
+        line_index = 0
+        
+        for line in m3u_content.splitlines():
+            line = line.strip()
+            line_index += 1
+            
+            # Gestione headers dalle direttive
+            if line.startswith('#EXTHTTP:'):
+                try:
+                    json_str = line.split(':', 1)[1].strip()
+                    headers_dict = json.loads(json_str)
+                    for key, value in headers_dict.items():
+                        encoded_key = quote(quote(key))
+                        encoded_value = quote(quote(str(value)))
+                        current_stream_headers_params.append(f"h_{encoded_key}={encoded_value}")
+                except Exception as e:
+                    pass
+                line_mapping[line_index] = ('header', line, current_stream_headers_params.copy())
+            
+            elif line.startswith('#EXTVLCOPT:'):
+                try:
+                    options_str = line.split(':', 1)[1].strip()
+                    for opt_pair in options_str.split(','):
+                        opt_pair = opt_pair.strip()
+                        if '=' in opt_pair:
+                            key, value = opt_pair.split('=', 1)
+                            key = key.strip()
+                            value = value.strip().strip('"')
+                            
+                            header_key = None
+                            if key.lower() == 'http-user-agent':
+                                header_key = 'User-Agent'
+                            elif key.lower() == 'http-referer':
+                                header_key = 'Referer'
+                            elif key.lower() == 'http-cookie':
+                                header_key = 'Cookie'
+                            elif key.lower() == 'http-header':
+                                full_header_value = value
+                                if ':' in full_header_value:
+                                    header_name, header_val = full_header_value.split(':', 1)
+                                    header_key = header_name.strip()
+                                    value = header_val.strip()
+                                else:
+                                    app.logger.warning(f"Malformed http-header option in EXTVLCOPT: {opt_pair}")
+                                    continue
+                            
+                            if header_key:
+                                encoded_key = quote(quote(header_key))
+                                encoded_value = quote(quote(value))
+                                current_stream_headers_params.append(f"h_{encoded_key}={encoded_value}")
+                            
+                except Exception as e:
+                    pass
+                line_mapping[line_index] = ('header', line, current_stream_headers_params.copy())
+            
+            elif line and not line.startswith('#'):
+                # Prepara gli headers per la risoluzione
+                headers = {}
+                if current_stream_headers_params:
+                    for param in current_stream_headers_params:
+                        if param.startswith('h_'):
+                            try:
+                                key_value = param[2:].split('=', 1)
+                                if len(key_value) == 2:
+                                    key = unquote(key_value[0]).replace('_', '-')
+                                    value = unquote(key_value[1])
+                                    headers[key] = value
+                            except Exception as e:
+                                pass
+                
+                # Aggiungi il link alla lista per la risoluzione parallela
+                links_to_resolve.append((line, line_index, headers, request.host, current_stream_headers_params.copy()))
+                line_mapping[line_index] = ('link', line, current_stream_headers_params.copy())
+                current_stream_headers_params = []  # Reset per il prossimo link
+            else:
+                line_mapping[line_index] = ('other', line, current_stream_headers_params.copy())
+        
+        app.logger.info(f"Analizzati {len(links_to_resolve)} link totali")
+        
+        # Risoluzione parallela dei link
+        resolved_links = {}
+        resolved_count = 0
+        
+        # Ottimizzazione: Pre-filtra i link che sono già in cache
+        config = config_manager.load_config()
+        cache_enabled = config.get('CACHE_ENABLED', True)
+        max_workers_config = config.get('PARALLEL_WORKERS_MAX', 50)
+        
+        # Pre-controlla cache per evitare di processare link già risolti
+        cached_links = {}
+        links_to_resolve_final = []
+        
+        if cache_enabled:
+            for link_data in links_to_resolve:
+                line, line_index, headers, server_ip, current_stream_headers_params = link_data
+                headers_str = "&".join(sorted([f"{k}={v}" for k, v in headers.items()]))
+                cache_key = f"{line}|{headers_str}"
+                
+                if cache_key in RESOLVED_LINKS_CACHE:
+                    result = RESOLVED_LINKS_CACHE[cache_key]
+                    if result["resolved_url"]:
+                        resolved_url = result["resolved_url"]
+                        resolved_headers_params = []
+                        if result["headers"]:
+                            for key, value in result["headers"].items():
+                                encoded_key = quote(quote(key))
+                                encoded_value = quote(quote(str(value)))
+                                resolved_headers_params.append(f"h_{encoded_key}={encoded_value}")
+                        
+                        encoded_resolved_url = quote(resolved_url, safe='')
+                        headers_query_string = ""
+                        if resolved_headers_params:
+                            headers_query_string = "%26" + "%26".join(resolved_headers_params)
+                        
+                        new_line = f"http://{server_ip}/proxy/m3u?url={encoded_resolved_url}{headers_query_string}"
+                        cached_links[line_index] = new_line
+                        resolved_count += 1
+                        continue
+                
+                links_to_resolve_final.append(link_data)
+        else:
+            links_to_resolve_final = links_to_resolve
+        
+        app.logger.info(f"Cache: {len(cached_links)} hit, {len(links_to_resolve_final)} da risolvere")
+        
+        # Risoluzione parallela solo per i link non in cache
+        if links_to_resolve_final:
+            max_workers = min(max_workers_config, len(links_to_resolve_final))
+            app.logger.info(f"Avvio {max_workers} workers paralleli")
+            
+            # Timeout ridotto per velocizzare
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="siptv_worker") as executor:
+                # Sottometti tutti i task con timeout
+                future_to_line = {executor.submit(resolve_single_link, link_data): link_data[1] for link_data in links_to_resolve_final}
+                
+                try:
+                    # Raccogli i risultati con timeout ridotto
+                    for future in as_completed(future_to_line, timeout=15):  # Timeout ridotto a 15 secondi
+                        line_index = future_to_line[future]
+                        try:
+                            result = future.result(timeout=5)  # Timeout per singolo risultato ridotto
+                            resolved_links[result[0]] = result[1]  # result[0] = line_index, result[1] = new_line
+                            if result[2]:  # result[2] = resolved
+                                resolved_count += 1
+                        except Exception as e:
+                            # In caso di errore, usa il link originale
+                            original_line = line_mapping[line_index][1]
+                            encoded_line = quote(original_line, safe='')
+                            headers_query_string = ""
+                            if line_mapping[line_index][2]:  # headers
+                                headers_query_string = "%26" + "%26".join(line_mapping[line_index][2])
+                            
+                            resolved_links[line_index] = f"http://{request.host}/proxy/m3u?url={encoded_line}{headers_query_string}"
+                except Exception as e:
+                    # Gestione timeout globale - completa i link mancanti con originali
+                    for line_index in [link_data[1] for link_data in links_to_resolve_final]:
+                        if line_index not in resolved_links:
+                            original_line = line_mapping[line_index][1]
+                            encoded_line = quote(original_line, safe='')
+                            headers_query_string = ""
+                            if line_mapping[line_index][2]:  # headers
+                                headers_query_string = "%26" + "%26".join(line_mapping[line_index][2])
+                            
+                            resolved_links[line_index] = f"http://{request.host}/proxy/m3u?url={encoded_line}{headers_query_string}"
+        else:
+            app.logger.info("Tutti i link in cache!")
+        
+        # Combina risultati cache + risoluzione
+        resolved_links.update(cached_links)
+        
+        # Ricostruisci la playlist con i link risolti
+        modified_lines = []
+        for line_index in sorted(line_mapping.keys()):
+            line_type, original_content, headers = line_mapping[line_index]
+            
+            if line_type == 'link':
+                # Usa il link risolto
+                modified_lines.append(resolved_links[line_index])
+            else:
+                # Mantieni il contenuto originale per headers e altre linee
+                modified_lines.append(original_content)
+        
+        modified_content = '\n'.join(modified_lines)
+        parsed_m3u_url = urlparse(m3u_url)
+        original_filename = os.path.basename(parsed_m3u_url.path)
+        
+        app.logger.info(f"Completato: {resolved_count}/{len(links_to_resolve)} risolti")
+        
+        return Response(
+            modified_content, 
+            content_type="application/vnd.apple.mpegurl", 
+            headers={
+                'Content-Disposition': f'attachment; filename="resolved_{original_filename}"',
+                'X-Resolved-Count': str(resolved_count),
+                'X-Total-Count': str(len(links_to_resolve)),
+                'X-Parallel-Workers': str(max_workers)
+            }
+        )
+        
+    except requests.RequestException as e:
+        return f"Errore durante il download della lista M3U: {str(e)}", 500
+    except Exception as e:
+        return f"Errore generico: {str(e)}", 500
 
 # --- Inizializzazione dell'app ---
 
