@@ -185,13 +185,13 @@ def setup_all_caches():
 # --- Configurazione Generale ---
 VERIFY_SSL = os.environ.get('VERIFY_SSL', 'false').lower() not in ('false', '0', 'no')
 if not VERIFY_SSL:
-    print("ATTENZIONE: La verifica del certificato SSL è DISABILITATA. Questo potrebbe esporre a rischi di sicurezza.")
+    app.logger.warning("ATTENZIONE: La verifica del certificato SSL è DISABILITATA. Questo potrebbe esporre a rischi di sicurezza.")
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Timeout aumentato per gestire meglio i segmenti TS di grandi dimensioni
 REQUEST_TIMEOUT = int(os.environ.get('REQUEST_TIMEOUT', 30))
-print(f"Timeout per le richieste impostato a {REQUEST_TIMEOUT} secondi.")
+app.logger.info(f"Timeout per le richieste impostato a {REQUEST_TIMEOUT} secondi.")
 
 # Configurazioni Keep-Alive
 KEEP_ALIVE_TIMEOUT = int(os.environ.get('KEEP_ALIVE_TIMEOUT', 300))  # 5 minuti
@@ -199,7 +199,7 @@ MAX_KEEP_ALIVE_REQUESTS = int(os.environ.get('MAX_KEEP_ALIVE_REQUESTS', 1000))
 POOL_CONNECTIONS = int(os.environ.get('POOL_CONNECTIONS', 20))
 POOL_MAXSIZE = int(os.environ.get('POOL_MAXSIZE', 50))
 
-print(f"Keep-Alive configurato: timeout={KEEP_ALIVE_TIMEOUT}s, max_requests={MAX_KEEP_ALIVE_REQUESTS}")
+app.logger.info(f"Keep-Alive configurato: timeout={KEEP_ALIVE_TIMEOUT}s, max_requests={MAX_KEEP_ALIVE_REQUESTS}")
 
 # --- Setup Logging System ---
 def setup_logging():
@@ -398,7 +398,6 @@ class PreBufferManager:
             
             # Cleanup di emergenza se la RAM supera la soglia
             emergency_threshold = self.pre_buffer_config['emergency_cleanup_threshold']
-            app.logger.debug(f"Controllo memoria: {memory_percent:.1f}% vs soglia {emergency_threshold}")
             if memory_percent > emergency_threshold:
                 app.logger.warning(f"RAM critica ({memory_percent:.1f}%), pulizia di emergenza del buffer")
                 self.emergency_cleanup()
@@ -406,7 +405,6 @@ class PreBufferManager:
             
             # Cleanup se il buffer usa troppa memoria
             max_memory_percent = self.pre_buffer_config['max_memory_percent']
-            app.logger.debug(f"Controllo buffer: {buffer_memory_percent:.1f}% vs limite {max_memory_percent}")
             if buffer_memory_percent > max_memory_percent:
                 app.logger.warning(f"Buffer troppo grande ({buffer_memory_percent:.1f}%), pulizia automatica")
                 self.cleanup_oldest_streams()
@@ -860,7 +858,6 @@ def get_proxy_for_url(url):
         daddy_proxies = get_daddy_proxy_list()
         if daddy_proxies:
             chosen_proxy = random.choice(daddy_proxies)
-            app.logger.debug(f"Usando proxy DaddyLive per {url}: {chosen_proxy}")
             return {'http': chosen_proxy, 'https': chosen_proxy}
     
     # Altrimenti usa i proxy generali
@@ -875,7 +872,6 @@ def get_proxy_for_url(url):
         pass
     
     chosen_proxy = random.choice(PROXY_LIST)
-    app.logger.debug(f"Usando proxy generale per {url}: {chosen_proxy}")
     return {'http': chosen_proxy, 'https': chosen_proxy}
 
 def get_proxy_with_fallback(url, max_retries=3):
@@ -1976,13 +1972,13 @@ def proxy_playlist_combiner():
     """Gestisce la combinazione di multiple playlist"""
     try:
         query_string = request.query_string.decode('utf-8')
-        app.logger.info(f"=== DEBUG PROXY COMBINER ===")
         app.logger.info(f"Query string: {query_string}")
 
         if not query_string:
             return "Query string mancante", 400
 
         playlist_definitions = query_string.split(';')
+        app.logger.info(f"Avvio proxy combiner per {len(playlist_definitions)} playlist")
 
         def generate_combined_playlist():
             first_playlist_header_handled = False # Tracks if the main #EXTM3U header context is done
